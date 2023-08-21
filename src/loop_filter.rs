@@ -1,10 +1,8 @@
 //! Does loop filtering on webp lossy images
 
-use crate::utils::clamp;
-
 #[inline]
 fn c(val: i32) -> i32 {
-    clamp(val, -128, 127)
+    num_traits::clamp(val, -128, 127)
 }
 
 //unsigned to signed

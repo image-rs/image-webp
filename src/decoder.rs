@@ -1,12 +1,9 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::convert::TryFrom;
-use std::io::{self, Cursor, Error, Read};
-use std::marker::PhantomData;
-use std::{error, fmt, mem};
+use std::io::{self, Cursor, Read};
+use thiserror::Error;
 
-use crate::error::{DecodingError, ImageError, ImageResult, ParameterError, ParameterErrorKind};
-use crate::image::{ImageDecoder, ImageFormat};
-use crate::{color, AnimationDecoder, Frames, Rgba};
+use crate::extended::ExtendedImageData;
 
 use super::lossless::{LosslessDecoder, LosslessFrame};
 use super::vp8::{Frame as VP8Frame, Vp8Decoder};
@@ -14,53 +11,93 @@ use super::vp8::{Frame as VP8Frame, Vp8Decoder};
 use super::extended::{read_extended_header, ExtendedImage};
 
 /// All errors that can occur when attempting to parse a WEBP container
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum DecoderError {
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum DecodingError {
+    /// An IO error occurred while reading the file
+    #[error("IO Error: {0}")]
+    IoError(#[from] io::Error),
+
     /// RIFF's "RIFF" signature not found or invalid
+    #[error("Invalid RIFF signature: {0:x?}")]
     RiffSignatureInvalid([u8; 4]),
+
     /// WebP's "WEBP" signature not found or invalid
+    #[error("Invalid WebP signature: {0:x?}")]
     WebpSignatureInvalid([u8; 4]),
+
     /// Chunk Header was incorrect or invalid in its usage
+    #[error("Invalid Chunk header: {0:?}")]
     ChunkHeaderInvalid([u8; 4]),
+
+    /// Some bits were invalid
+    #[error("Invalid info bits: {name} {value}")]
+    InfoBitsInvalid { name: &'static str, value: u32 },
+
+    /// Alpha chunk doesn't match the frame's size
+    #[error("Alpha chunk size mismatch")]
+    AlphaChunkSizeMismatch,
+
+    /// Image is too large, either for the platform's pointer size or generally
+    #[error("Image too large")]
+    ImageTooLarge,
+
+    /// Frame would go out of the canvas
+    #[error("Frame outside image")]
+    FrameOutsideImage,
+
+    /// Signature of 0x2f not found
+    #[error("Invalid lossless signature: {0:x?}")]
+    LosslessSignatureInvalid(u8),
+
+    /// Version Number was not zero
+    #[error("Invalid lossless version number: {0}")]
+    VersionNumberInvalid(u8),
+
+    #[error("Invalid color cache bits: {0}")]
+    InvalidColorCacheBits(u8),
+
+    #[error("Invalid Huffman code")]
+    HuffmanError,
+
+    #[error("Corrupt bitstream")]
+    BitStreamError,
+
+    #[error("Invalid transform")]
+    TransformError,
+
+    /// VP8's `[0x9D, 0x01, 0x2A]` magic not found or invalid
+    #[error("Invalid VP8 magic: {0:x?}")]
+    Vp8MagicInvalid([u8; 3]),
+
+    /// VP8 Decoder initialisation wasn't provided with enough data
+    #[error("Not enough VP8 init data")]
+    NotEnoughInitData,
+
+    /// At time of writing, only the YUV colour-space encoded as `0` is specified
+    #[error("Invalid VP8 color space: {0}")]
+    ColorSpaceInvalid(u8),
+
+    /// LUMA prediction mode was not recognised
+    #[error("Invalid VP8 luma prediction mode: {0}")]
+    LumaPredictionModeInvalid(i8),
+
+    /// Intra-prediction mode was not recognised
+    #[error("Invalid VP8 intra prediction mode: {0}")]
+    IntraPredictionModeInvalid(i8),
+
+    /// Chroma prediction mode was not recognised
+    #[error("Invalid VP8 chroma prediction mode: {0}")]
+    ChromaPredictionModeInvalid(i8),
+
+    /// The file may be valid, but this crate doesn't support decoding it.
+    #[error("Unsupported feature: {0}")]
+    UnsupportedFeature(String),
+
+    /// Invalid function call or parameter
+    #[error("Invalid parameter: {0}")]
+    InvalidParameter(String),
 }
-
-impl fmt::Display for DecoderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        struct SignatureWriter([u8; 4]);
-        impl fmt::Display for SignatureWriter {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(
-                    f,
-                    "[{:#04X?}, {:#04X?}, {:#04X?}, {:#04X?}]",
-                    self.0[0], self.0[1], self.0[2], self.0[3]
-                )
-            }
-        }
-
-        match self {
-            DecoderError::RiffSignatureInvalid(riff) => f.write_fmt(format_args!(
-                "Invalid RIFF signature: {}",
-                SignatureWriter(*riff)
-            )),
-            DecoderError::WebpSignatureInvalid(webp) => f.write_fmt(format_args!(
-                "Invalid WebP signature: {}",
-                SignatureWriter(*webp)
-            )),
-            DecoderError::ChunkHeaderInvalid(header) => f.write_fmt(format_args!(
-                "Invalid Chunk header: {}",
-                SignatureWriter(*header)
-            )),
-        }
-    }
-}
-
-impl From<DecoderError> for ImageError {
-    fn from(e: DecoderError) -> ImageError {
-        ImageError::Decoding(DecodingError::new(ImageFormat::WebP.into(), e))
-    }
-}
-
-impl error::Error for DecoderError {}
 
 /// All possible RIFF chunks in a WebP image file
 #[allow(clippy::upper_case_acronyms)]
@@ -80,7 +117,7 @@ pub(crate) enum WebPRiffChunk {
 }
 
 impl WebPRiffChunk {
-    pub(crate) fn from_fourcc(chunk_fourcc: [u8; 4]) -> ImageResult<Self> {
+    pub(crate) fn from_fourcc(chunk_fourcc: [u8; 4]) -> Result<Self, DecodingError> {
         match &chunk_fourcc {
             b"RIFF" => Ok(Self::RIFF),
             b"WEBP" => Ok(Self::WEBP),
@@ -93,7 +130,7 @@ impl WebPRiffChunk {
             b"ICCP" => Ok(Self::ICCP),
             b"EXIF" => Ok(Self::EXIF),
             b"XMP " => Ok(Self::XMP),
-            _ => Err(DecoderError::ChunkHeaderInvalid(chunk_fourcc).into()),
+            _ => Err(DecodingError::ChunkHeaderInvalid(chunk_fourcc).into()),
         }
     }
 
@@ -129,7 +166,7 @@ pub struct WebPDecoder<R> {
 impl<R: Read> WebPDecoder<R> {
     /// Create a new WebPDecoder from the Reader ```r```.
     /// This function takes ownership of the Reader.
-    pub fn new(r: R) -> ImageResult<WebPDecoder<R>> {
+    pub fn new(r: R) -> Result<WebPDecoder<R>, DecodingError> {
         let image = WebPImage::Lossy(Default::default());
 
         let mut decoder = WebPDecoder { r, image };
@@ -138,11 +175,11 @@ impl<R: Read> WebPDecoder<R> {
     }
 
     //reads the 12 bytes of the WebP file header
-    fn read_riff_header(&mut self) -> ImageResult<u32> {
+    fn read_riff_header(&mut self) -> Result<u32, DecodingError> {
         let mut riff = [0; 4];
         self.r.read_exact(&mut riff)?;
         if &riff != b"RIFF" {
-            return Err(DecoderError::RiffSignatureInvalid(riff).into());
+            return Err(DecodingError::RiffSignatureInvalid(riff).into());
         }
 
         let size = self.r.read_u32::<LittleEndian>()?;
@@ -150,76 +187,137 @@ impl<R: Read> WebPDecoder<R> {
         let mut webp = [0; 4];
         self.r.read_exact(&mut webp)?;
         if &webp != b"WEBP" {
-            return Err(DecoderError::WebpSignatureInvalid(webp).into());
+            return Err(DecodingError::WebpSignatureInvalid(webp).into());
         }
 
         Ok(size)
     }
 
-    //reads the chunk header, decodes the frame and returns the inner decoder
-    fn read_frame(&mut self) -> ImageResult<WebPImage> {
-        let chunk = read_chunk(&mut self.r)?;
+    fn read_data(&mut self) -> Result<(), DecodingError> {
+        let _size = self.read_riff_header()?;
 
-        match chunk {
+        let chunk = read_chunk(&mut self.r)?;
+        self.image = match chunk {
             Some((cursor, WebPRiffChunk::VP8)) => {
                 let mut vp8_decoder = Vp8Decoder::new(cursor);
                 let frame = vp8_decoder.decode_frame()?;
 
-                Ok(WebPImage::Lossy(frame.clone()))
+                WebPImage::Lossy(frame.clone())
             }
             Some((cursor, WebPRiffChunk::VP8L)) => {
                 let mut lossless_decoder = LosslessDecoder::new(cursor);
                 let frame = lossless_decoder.decode_frame()?;
 
-                Ok(WebPImage::Lossless(frame.clone()))
+                WebPImage::Lossless(frame.clone())
             }
             Some((mut cursor, WebPRiffChunk::VP8X)) => {
                 let info = read_extended_header(&mut cursor)?;
 
                 let image = ExtendedImage::read_extended_chunks(&mut self.r, info)?;
 
-                Ok(WebPImage::Extended(image))
+                WebPImage::Extended(image)
             }
-            None => Err(ImageError::IoError(Error::from(
-                io::ErrorKind::UnexpectedEof,
-            ))),
-            Some((_, chunk)) => Err(DecoderError::ChunkHeaderInvalid(chunk.to_fourcc()).into()),
-        }
-    }
-
-    fn read_data(&mut self) -> ImageResult<()> {
-        let _size = self.read_riff_header()?;
-
-        let image = self.read_frame()?;
-
-        self.image = image;
+            None => return Err(DecodingError::IoError(io::ErrorKind::UnexpectedEof.into())),
+            Some((_, chunk)) => {
+                return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into())
+            }
+        };
 
         Ok(())
     }
 
     /// Returns true if the image as described by the bitstream is animated.
-    pub fn has_animation(&self) -> bool {
-        match &self.image {
+    pub fn has_animation(&self) -> Result<bool, DecodingError> {
+        Ok(match &self.image {
             WebPImage::Lossy(_) => false,
             WebPImage::Lossless(_) => false,
             WebPImage::Extended(extended) => extended.has_animation(),
+        })
+    }
+
+    /// Returns whether the image has an alpha channel.
+    ///
+    /// If so, the pixel format is Rgba8 and otherwise Rgb8.
+    pub fn has_alpha(&self) -> bool {
+        match &self.image {
+            WebPImage::Lossy(_) => false,
+            WebPImage::Lossless(_) => true,
+            WebPImage::Extended(extended) => extended.has_alpha(),
         }
     }
 
     /// Sets the background color if the image is an extended and animated webp.
-    pub fn set_background_color(&mut self, color: Rgba<u8>) -> ImageResult<()> {
+    pub fn set_background_color(&mut self, color: [u8; 4]) -> Result<(), DecodingError> {
         match &mut self.image {
             WebPImage::Extended(image) => image.set_background_color(color),
-            _ => Err(ImageError::Parameter(ParameterError::from_kind(
-                ParameterErrorKind::Generic(
-                    "Background color can only be set on animated webp".to_owned(),
-                ),
-            ))),
+            _ => Err(DecodingError::InvalidParameter(
+                "Background color can only be set on animated webp".to_owned(),
+            )),
+        }
+    }
+
+    pub fn dimensions(&self) -> (u32, u32) {
+        match &self.image {
+            WebPImage::Lossy(vp8_frame) => {
+                (u32::from(vp8_frame.width), u32::from(vp8_frame.height))
+            }
+            WebPImage::Lossless(lossless_frame) => (
+                u32::from(lossless_frame.width),
+                u32::from(lossless_frame.height),
+            ),
+            WebPImage::Extended(extended) => extended.dimensions(),
+        }
+    }
+
+    pub fn read_image(self, buf: &mut [u8]) -> Result<(), DecodingError> {
+        let (width, height) = self.dimensions();
+        assert_eq!(
+            u64::try_from(buf.len()),
+            Ok(width as u64 * height as u64 * 4)
+        );
+
+        match &self.image {
+            WebPImage::Lossy(vp8_frame) => {
+                vp8_frame.fill_rgb(buf);
+            }
+            WebPImage::Lossless(lossless_frame) => {
+                lossless_frame.fill_rgba(buf);
+            }
+            WebPImage::Extended(extended) => {
+                extended.fill_buf(buf);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn icc_profile(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
+        if let WebPImage::Extended(extended) = &self.image {
+            Ok(extended.icc_profile())
+        } else {
+            Ok(None)
+        }
+    }
+
+    // pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<u32, DecodingError> {
+    //     assert!(self.has_animation());
+
+    //     match self.image {
+    //         WebPImage::Extended(extended_image) => extended_image.,
+    //         _ => unreachable!()
+    //     }
+    // }
+
+    pub fn into_frames(self) -> impl Iterator<Item = Result<Vec<u8>, DecodingError>> {
+        match self.image {
+            WebPImage::Lossy(_) | WebPImage::Lossless(_) => {
+                Box::new(std::iter::empty()) as Box<dyn Iterator<Item = _>>
+            }
+            WebPImage::Extended(extended_image) => Box::new(extended_image.into_frames()),
         }
     }
 }
 
-pub(crate) fn read_len_cursor<R>(r: &mut R) -> ImageResult<Cursor<Vec<u8>>>
+pub(crate) fn read_len_cursor<R>(r: &mut R) -> Result<Cursor<Vec<u8>>, DecodingError>
 where
     R: Read,
 {
@@ -245,7 +343,9 @@ where
 /// Reads a chunk header FourCC
 /// Returns None if and only if we hit end of file reading the four character code of the chunk
 /// The inner error is `Err` if and only if the chunk header FourCC is present but unknown
-pub(crate) fn read_fourcc<R: Read>(r: &mut R) -> ImageResult<Option<ImageResult<WebPRiffChunk>>> {
+pub(crate) fn read_fourcc<R: Read>(
+    r: &mut R,
+) -> Result<Option<Result<WebPRiffChunk, DecodingError>>, DecodingError> {
     let mut chunk_fourcc = [0; 4];
     let result = r.read_exact(&mut chunk_fourcc);
 
@@ -267,7 +367,9 @@ pub(crate) fn read_fourcc<R: Read>(r: &mut R) -> ImageResult<Option<ImageResult<
 /// Reads a chunk
 /// Returns an error if the chunk header is not a valid webp header or some other reading error
 /// Returns None if and only if we hit end of file reading the four character code of the chunk
-pub(crate) fn read_chunk<R>(r: &mut R) -> ImageResult<Option<(Cursor<Vec<u8>>, WebPRiffChunk)>>
+pub(crate) fn read_chunk<R>(
+    r: &mut R,
+) -> Result<Option<(Cursor<Vec<u8>>, WebPRiffChunk)>, DecodingError>
 where
     R: Read,
 {
@@ -277,103 +379,6 @@ where
         Ok(Some((cursor, chunk)))
     } else {
         Ok(None)
-    }
-}
-
-/// Wrapper struct around a `Cursor<Vec<u8>>`
-pub struct WebpReader<R>(Cursor<Vec<u8>>, PhantomData<R>);
-impl<R> Read for WebpReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.0.read(buf)
-    }
-    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
-        if self.0.position() == 0 && buf.is_empty() {
-            mem::swap(buf, self.0.get_mut());
-            Ok(buf.len())
-        } else {
-            self.0.read_to_end(buf)
-        }
-    }
-}
-
-impl<'a, R: 'a + Read> ImageDecoder<'a> for WebPDecoder<R> {
-    type Reader = WebpReader<R>;
-
-    fn dimensions(&self) -> (u32, u32) {
-        match &self.image {
-            WebPImage::Lossy(vp8_frame) => {
-                (u32::from(vp8_frame.width), u32::from(vp8_frame.height))
-            }
-            WebPImage::Lossless(lossless_frame) => (
-                u32::from(lossless_frame.width),
-                u32::from(lossless_frame.height),
-            ),
-            WebPImage::Extended(extended) => extended.dimensions(),
-        }
-    }
-
-    fn color_type(&self) -> color::ColorType {
-        match &self.image {
-            WebPImage::Lossy(_) => color::ColorType::Rgb8,
-            WebPImage::Lossless(_) => color::ColorType::Rgba8,
-            WebPImage::Extended(extended) => extended.color_type(),
-        }
-    }
-
-    fn into_reader(self) -> ImageResult<Self::Reader> {
-        match &self.image {
-            WebPImage::Lossy(vp8_frame) => {
-                let mut data = vec![0; vp8_frame.get_buf_size()];
-                vp8_frame.fill_rgb(data.as_mut_slice());
-                Ok(WebpReader(Cursor::new(data), PhantomData))
-            }
-            WebPImage::Lossless(lossless_frame) => {
-                let mut data = vec![0; lossless_frame.get_buf_size()];
-                lossless_frame.fill_rgba(data.as_mut_slice());
-                Ok(WebpReader(Cursor::new(data), PhantomData))
-            }
-            WebPImage::Extended(extended) => {
-                let mut data = vec![0; extended.get_buf_size()];
-                extended.fill_buf(data.as_mut_slice());
-                Ok(WebpReader(Cursor::new(data), PhantomData))
-            }
-        }
-    }
-
-    fn read_image(self, buf: &mut [u8]) -> ImageResult<()> {
-        assert_eq!(u64::try_from(buf.len()), Ok(self.total_bytes()));
-
-        match &self.image {
-            WebPImage::Lossy(vp8_frame) => {
-                vp8_frame.fill_rgb(buf);
-            }
-            WebPImage::Lossless(lossless_frame) => {
-                lossless_frame.fill_rgba(buf);
-            }
-            WebPImage::Extended(extended) => {
-                extended.fill_buf(buf);
-            }
-        }
-        Ok(())
-    }
-
-    fn icc_profile(&mut self) -> Option<Vec<u8>> {
-        if let WebPImage::Extended(extended) = &self.image {
-            extended.icc_profile()
-        } else {
-            None
-        }
-    }
-}
-
-impl<'a, R: 'a + Read> AnimationDecoder<'a> for WebPDecoder<R> {
-    fn into_frames(self) -> Frames<'a> {
-        match self.image {
-            WebPImage::Lossy(_) | WebPImage::Lossless(_) => {
-                Frames::new(Box::new(std::iter::empty()))
-            }
-            WebPImage::Extended(extended_image) => extended_image.into_frames(),
-        }
     }
 }
 

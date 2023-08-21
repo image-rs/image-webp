@@ -1,8 +1,8 @@
 use std::convert::TryInto;
 
+use crate::decoder::DecodingError;
+
 use super::lossless::BitReader;
-use super::lossless::DecoderError;
-use crate::ImageResult;
 
 /// Rudimentary utility for reading Canonical Huffman Codes.
 /// Based off https://github.com/webmproject/libwebp/blob/7f8472a610b61ec780ef0a8873cd954ac512a505/src/utils/huffman.c
@@ -40,9 +40,9 @@ impl HuffmanTree {
     }
 
     /// Init a huffman tree
-    fn init(num_leaves: usize) -> ImageResult<HuffmanTree> {
+    fn init(num_leaves: usize) -> Result<HuffmanTree, DecodingError> {
         if num_leaves == 0 {
-            return Err(DecoderError::HuffmanError.into());
+            return Err(DecodingError::HuffmanError);
         }
 
         let max_nodes = 2 * num_leaves - 1;
@@ -59,14 +59,14 @@ impl HuffmanTree {
     }
 
     /// Converts code lengths to codes
-    fn code_lengths_to_codes(code_lengths: &[u16]) -> ImageResult<Vec<Option<u16>>> {
+    fn code_lengths_to_codes(code_lengths: &[u16]) -> Result<Vec<Option<u16>>, DecodingError> {
         let max_code_length = *code_lengths
             .iter()
             .reduce(|a, b| if a >= b { a } else { b })
             .unwrap();
 
         if max_code_length > MAX_ALLOWED_CODE_LENGTH.try_into().unwrap() {
-            return Err(DecoderError::HuffmanError.into());
+            return Err(DecodingError::HuffmanError);
         }
 
         let mut code_length_hist = vec![0; MAX_ALLOWED_CODE_LENGTH + 1];
@@ -103,13 +103,13 @@ impl HuffmanTree {
     }
 
     /// Adds a symbol to a huffman tree
-    fn add_symbol(&mut self, symbol: u16, code: u16, code_length: u16) -> ImageResult<()> {
+    fn add_symbol(&mut self, symbol: u16, code: u16, code_length: u16) -> Result<(), DecodingError> {
         let mut node_index = 0;
         let code = usize::from(code);
 
         for length in (0..code_length).rev() {
             if node_index >= self.max_nodes {
-                return Err(DecoderError::HuffmanError.into());
+                return Err(DecodingError::HuffmanError.into());
             }
 
             let node = self.tree[node_index];
@@ -117,11 +117,11 @@ impl HuffmanTree {
             let offset = match node {
                 HuffmanTreeNode::Empty => {
                     if self.is_full() {
-                        return Err(DecoderError::HuffmanError.into());
+                        return Err(DecodingError::HuffmanError.into());
                     }
                     self.assign_children(node_index)
                 }
-                HuffmanTreeNode::Leaf(_) => return Err(DecoderError::HuffmanError.into()),
+                HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError.into()),
                 HuffmanTreeNode::Branch(offset) => offset,
             };
 
@@ -130,15 +130,15 @@ impl HuffmanTree {
 
         match self.tree[node_index] {
             HuffmanTreeNode::Empty => self.tree[node_index] = HuffmanTreeNode::Leaf(symbol),
-            HuffmanTreeNode::Leaf(_) => return Err(DecoderError::HuffmanError.into()),
-            HuffmanTreeNode::Branch(_offset) => return Err(DecoderError::HuffmanError.into()),
+            HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError.into()),
+            HuffmanTreeNode::Branch(_offset) => return Err(DecodingError::HuffmanError.into()),
         }
 
         Ok(())
     }
 
     /// Builds a tree implicitly, just from code lengths
-    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> ImageResult<HuffmanTree> {
+    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<HuffmanTree, DecodingError> {
         let mut num_symbols = 0;
         let mut root_symbol = 0;
 
@@ -171,7 +171,7 @@ impl HuffmanTree {
         code_lengths: Vec<u16>,
         codes: Vec<u16>,
         symbols: Vec<u16>,
-    ) -> ImageResult<HuffmanTree> {
+    ) -> Result<HuffmanTree, DecodingError> {
         let mut tree = HuffmanTree::init(symbols.len())?;
 
         for i in 0..symbols.len() {
@@ -182,7 +182,7 @@ impl HuffmanTree {
     }
 
     /// Reads a symbol using the bitstream
-    pub(crate) fn read_symbol(&self, bit_reader: &mut BitReader) -> ImageResult<u16> {
+    pub(crate) fn read_symbol(&self, bit_reader: &mut BitReader) -> Result<u16, DecodingError> {
         let mut index = 0;
         let mut node = self.tree[index];
 
@@ -193,7 +193,7 @@ impl HuffmanTree {
 
         let symbol = match node {
             HuffmanTreeNode::Branch(_) => unreachable!(),
-            HuffmanTreeNode::Empty => return Err(DecoderError::HuffmanError.into()),
+            HuffmanTreeNode::Empty => return Err(DecodingError::HuffmanError.into()),
             HuffmanTreeNode::Leaf(symbol) => symbol,
         };
 

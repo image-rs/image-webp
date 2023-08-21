@@ -13,19 +13,16 @@
 //!
 
 use byteorder::{LittleEndian, ReadBytesExt};
+use num_traits::clamp;
+use std::cmp;
 use std::convert::TryInto;
 use std::default::Default;
 use std::io::Read;
-use std::{cmp, error, fmt};
+
+use crate::decoder::DecodingError;
 
 use super::loop_filter;
 use super::transform;
-use crate::error::{
-    DecodingError, ImageError, ImageResult, UnsupportedError, UnsupportedErrorKind,
-};
-use crate::image::ImageFormat;
-
-use crate::utils::clamp;
 
 const MAX_SEGMENTS: usize = 4;
 const NUM_DCT_TOKENS: usize = 12;
@@ -667,61 +664,6 @@ static AC_QUANT: [i16; 128] = [
 
 static ZIGZAG: [u8; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 
-/// All errors that can occur when attempting to parse a VP8 codec inside WebP
-#[derive(Debug, Clone, Copy)]
-enum DecoderError {
-    /// VP8's `[0x9D, 0x01, 0x2A]` magic not found or invalid
-    Vp8MagicInvalid([u8; 3]),
-
-    /// Decoder initialisation wasn't provided with enough data
-    NotEnoughInitData,
-
-    /// At time of writing, only the YUV colour-space encoded as `0` is specified
-    ColorSpaceInvalid(u8),
-    /// LUMA prediction mode was not recognised
-    LumaPredictionModeInvalid(i8),
-    /// Intra-prediction mode was not recognised
-    IntraPredictionModeInvalid(i8),
-    /// Chroma prediction mode was not recognised
-    ChromaPredictionModeInvalid(i8),
-}
-
-impl fmt::Display for DecoderError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            DecoderError::Vp8MagicInvalid(tag) => f.write_fmt(format_args!(
-                "Invalid VP8 magic: [{:#04X?}, {:#04X?}, {:#04X?}]",
-                tag[0], tag[1], tag[2]
-            )),
-
-            DecoderError::NotEnoughInitData => {
-                f.write_str("Expected at least 2 bytes of VP8 decoder initialization data")
-            }
-
-            DecoderError::ColorSpaceInvalid(cs) => {
-                f.write_fmt(format_args!("Invalid non-YUV VP8 color space {}", cs))
-            }
-            DecoderError::LumaPredictionModeInvalid(pm) => {
-                f.write_fmt(format_args!("Invalid VP8 LUMA prediction mode {}", pm))
-            }
-            DecoderError::IntraPredictionModeInvalid(i) => {
-                f.write_fmt(format_args!("Invalid VP8 intra-prediction mode {}", i))
-            }
-            DecoderError::ChromaPredictionModeInvalid(c) => {
-                f.write_fmt(format_args!("Invalid VP8 chroma prediction mode {}", c))
-            }
-        }
-    }
-}
-
-impl From<DecoderError> for ImageError {
-    fn from(e: DecoderError) -> ImageError {
-        ImageError::Decoding(DecodingError::new(ImageFormat::WebP.into(), e))
-    }
-}
-
-impl error::Error for DecoderError {}
-
 struct BoolReader {
     buf: Vec<u8>,
     index: usize,
@@ -742,9 +684,9 @@ impl BoolReader {
         }
     }
 
-    pub(crate) fn init(&mut self, buf: Vec<u8>) -> ImageResult<()> {
+    pub(crate) fn init(&mut self, buf: Vec<u8>) -> Result<(), DecodingError> {
         if buf.len() < 2 {
-            return Err(DecoderError::NotEnoughInitData.into());
+            return Err(DecodingError::NotEnoughInitData.into());
         }
 
         self.buf = buf;
@@ -1075,7 +1017,7 @@ impl<R: Read> Vp8Decoder<R> {
         }
     }
 
-    fn init_partitions(&mut self, n: usize) -> ImageResult<()> {
+    fn init_partitions(&mut self, n: usize) -> Result<(), DecodingError> {
         if n > 1 {
             let mut sizes = vec![0; 3 * n - 3];
             self.r.read_exact(sizes.as_mut_slice())?;
@@ -1237,7 +1179,7 @@ impl<R: Read> Vp8Decoder<R> {
         }
     }
 
-    fn read_frame_header(&mut self) -> ImageResult<()> {
+    fn read_frame_header(&mut self) -> Result<(), DecodingError> {
         let tag = self.r.read_u24::<LittleEndian>()?;
 
         self.frame.keyframe = tag & 1 == 0;
@@ -1251,7 +1193,7 @@ impl<R: Read> Vp8Decoder<R> {
             self.r.read_exact(&mut tag)?;
 
             if tag != [0x9d, 0x01, 0x2a] {
-                return Err(DecoderError::Vp8MagicInvalid(tag).into());
+                return Err(DecodingError::Vp8MagicInvalid(tag).into());
             }
 
             let w = self.r.read_u16::<LittleEndian>()?;
@@ -1288,7 +1230,7 @@ impl<R: Read> Vp8Decoder<R> {
             self.frame.pixel_type = self.b.read_literal(1);
 
             if color_space != 0 {
-                return Err(DecoderError::ColorSpaceInvalid(color_space).into());
+                return Err(DecodingError::ColorSpaceInvalid(color_space).into());
             }
         }
 
@@ -1315,11 +1257,8 @@ impl<R: Read> Vp8Decoder<R> {
         if !self.frame.keyframe {
             // 9.7 refresh golden frame and altref frame
             // FIXME: support this?
-            return Err(ImageError::Unsupported(
-                UnsupportedError::from_format_and_kind(
-                    ImageFormat::WebP.into(),
-                    UnsupportedErrorKind::GenericFeature("Non-keyframe frames".to_owned()),
-                ),
+            return Err(DecodingError::UnsupportedFeature(
+                "Non-keyframe frames".to_owned(),
             ));
         } else {
             // Refresh entropy probs ?????
@@ -1340,11 +1279,8 @@ impl<R: Read> Vp8Decoder<R> {
             self.prob_intra = 0;
 
             // FIXME: support this?
-            return Err(ImageError::Unsupported(
-                UnsupportedError::from_format_and_kind(
-                    ImageFormat::WebP.into(),
-                    UnsupportedErrorKind::GenericFeature("Non-keyframe frames".to_owned()),
-                ),
+            return Err(DecodingError::UnsupportedFeature(
+                "Non-keyframe frames".to_owned(),
             ));
         } else {
             // Reset motion vectors
@@ -1353,7 +1289,7 @@ impl<R: Read> Vp8Decoder<R> {
         Ok(())
     }
 
-    fn read_macroblock_header(&mut self, mbx: usize) -> ImageResult<MacroBlock> {
+    fn read_macroblock_header(&mut self, mbx: usize) -> Result<MacroBlock, DecodingError> {
         let mut mb = MacroBlock::default();
 
         if self.segments_enabled && self.segments_update_map {
@@ -1376,11 +1312,8 @@ impl<R: Read> Vp8Decoder<R> {
         };
 
         if inter_predicted {
-            return Err(ImageError::Unsupported(
-                UnsupportedError::from_format_and_kind(
-                    ImageFormat::WebP.into(),
-                    UnsupportedErrorKind::GenericFeature("VP8 inter-prediction".to_owned()),
-                ),
+            return Err(DecodingError::UnsupportedFeature(
+                "VP8 inter-prediction".to_owned(),
             ));
         }
 
@@ -1390,7 +1323,7 @@ impl<R: Read> Vp8Decoder<R> {
                 .b
                 .read_with_tree(&KEYFRAME_YMODE_TREE, &KEYFRAME_YMODE_PROBS, 0);
             mb.luma_mode =
-                LumaMode::from_i8(luma).ok_or(DecoderError::LumaPredictionModeInvalid(luma))?;
+                LumaMode::from_i8(luma).ok_or(DecodingError::LumaPredictionModeInvalid(luma))?;
 
             match mb.luma_mode.into_intra() {
                 // `LumaMode::B` - This is predicted individually
@@ -1405,7 +1338,7 @@ impl<R: Read> Vp8Decoder<R> {
                                 0,
                             );
                             let bmode = IntraMode::from_i8(intra)
-                                .ok_or(DecoderError::IntraPredictionModeInvalid(intra))?;
+                                .ok_or(DecodingError::IntraPredictionModeInvalid(intra))?;
                             mb.bpred[x + y * 4] = bmode;
 
                             self.top[mbx].bpred[12 + x] = bmode;
@@ -1425,7 +1358,7 @@ impl<R: Read> Vp8Decoder<R> {
                 .b
                 .read_with_tree(&KEYFRAME_UV_MODE_TREE, &KEYFRAME_UV_MODE_PROBS, 0);
             mb.chroma_mode = ChromaMode::from_i8(chroma)
-                .ok_or(DecoderError::ChromaPredictionModeInvalid(chroma))?;
+                .ok_or(DecodingError::ChromaPredictionModeInvalid(chroma))?;
         }
 
         self.top[mbx].chroma_mode = mb.chroma_mode;
@@ -2057,7 +1990,7 @@ impl<R: Read> Vp8Decoder<R> {
     }
 
     /// Decodes the current frame
-    pub fn decode_frame(&mut self) -> ImageResult<&Frame> {
+    pub fn decode_frame(&mut self) -> Result<&Frame, DecodingError> {
         self.read_frame_header()?;
 
         for mby in 0..self.mbheight as usize {
