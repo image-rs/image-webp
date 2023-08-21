@@ -1,14 +1,13 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+//! Decoding and Encoding of WebP Images
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub use self::decoder::WebPDecoder;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+mod decoder;
+mod extended;
+mod huffman;
+mod loop_filter;
+mod lossless;
+mod lossless_transform;
+mod transform;
+
+pub mod vp8;
