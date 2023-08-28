@@ -12,21 +12,16 @@ use byteorder::{LittleEndian, ReadBytesExt};
 
 #[derive(Clone)]
 struct RgbImage {
-    width: u32,
-    height: u32,
+    _width: u32,
+    _height: u32,
     data: Vec<u8>,
 }
 
 #[derive(Clone)]
 struct RgbaImage {
-    width: u32,
-    height: u32,
+    _width: u32,
+    _height: u32,
     data: Vec<u8>,
-}
-
-struct Frame {
-    content: RgbaImage,
-    delay_ms: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +36,7 @@ pub(crate) struct WebPExtendedInfo {
     icc_profile: Option<Vec<u8>>,
 }
 
-pub(crate) enum ExtendedImageData {
+enum ExtendedImageData {
     Animation {
         frames: Vec<AnimatedFrame>,
         anim_info: WebPAnimatedInfo,
@@ -52,6 +47,9 @@ pub(crate) enum ExtendedImageData {
 pub(crate) struct ExtendedImage {
     info: WebPExtendedInfo,
     image: ExtendedImageData,
+
+    canvas: Option<Vec<u8>>,
+    next_frame: usize,
 }
 
 impl ExtendedImage {
@@ -74,60 +72,47 @@ impl ExtendedImage {
         }
         .has_alpha()
     }
-;
-    pub(crate) fn into_frames<'a>(self) -> impl Iterator<Item = Result<Vec<u8>, DecodingError>> + 'a {
-        struct FrameIterator {
-            image: ExtendedImage,
-            index: usize,
-            canvas: RgbaImage,
-        }
 
-        impl Iterator for FrameIterator {
-            type Item = Result<Frame, DecodingError>;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                if let ExtendedImageData::Animation { frames, anim_info } = &self.image.image {
-                    let frame = frames.get(self.index);
-                    match frame {
-                        Some(anim_image) => {
-                            self.index += 1;
-                            ExtendedImage::draw_subimage(
-                                &mut self.canvas,
-                                anim_image,
-                                anim_info.background_color,
-                            )
-                        }
-                        None => None,
+    pub(crate) fn next_frame(&mut self) -> Result<Option<(&[u8], u32)>, DecodingError> {
+        if let ExtendedImageData::Animation { frames, anim_info } = &self.image {
+            match frames.get(self.next_frame) {
+                Some(anim_image) => {
+                    if self.canvas.is_none() {
+                        self.canvas = Some(vec![
+                            0;
+                            self.info.canvas_width as usize
+                                * self.info.canvas_height as usize
+                        ]);
                     }
-                } else {
-                    None
+
+                    let dispose_previous =
+                        self.next_frame == 0 || frames[self.next_frame - 1].dispose;
+                    let bg_color = if self.info._alpha {
+                        [0; 4]
+                    } else {
+                        anim_info.background_color
+                    };
+
+                    Self::composite_frame(
+                        self.canvas.as_mut().unwrap(),
+                        self.info.canvas_width,
+                        self.info.canvas_height,
+                        dispose_previous.then_some(bg_color),
+                        anim_image,
+                    );
+
+                    self.next_frame += 1;
+                    if self.next_frame == frames.len() {
+                        self.next_frame = 0;
+                    }
+
+                    Ok(self.canvas.as_ref().map(|c| (&**c, anim_image.duration)))
                 }
+                None => Ok(None),
             }
+        } else {
+            Ok(None)
         }
-
-        let width = self.info.canvas_width;
-        let height = self.info.canvas_height;
-        let background_color =
-            if let ExtendedImageData::Animation { ref anim_info, .. } = self.image {
-                anim_info.background_color
-            } else {
-                [0, 0, 0, 0]
-            };
-
-        let frame_iter = FrameIterator {
-            image: self,
-            index: 0,
-            canvas: RgbaImage {
-                width,
-                height,
-                data: std::iter::repeat(background_color)
-                    .take(width as usize * height as usize)
-                    .flatten()
-                    .collect(),
-            },
-        };
-
-        Box::new(frame_iter)
     }
 
     pub(crate) fn read_extended_chunks<R: Read>(
@@ -206,7 +191,12 @@ impl ExtendedImage {
             return Err(DecodingError::IoError(io::ErrorKind::UnexpectedEof.into()));
         };
 
-        let image = ExtendedImage { image, info };
+        let image = ExtendedImage {
+            image,
+            info,
+            canvas: None,
+            next_frame: 0,
+        };
 
         Ok(image)
     }
@@ -228,60 +218,90 @@ impl ExtendedImage {
         Ok(info)
     }
 
-    fn draw_subimage(
-        canvas: &mut RgbaImage,
+    /// Composites a frame onto a canvas.
+    ///
+    /// Starts by filling the canvas with the background color, if provided. Then copies or blends
+    /// the frame onto the canvas.
+    fn composite_frame(
+        canvas: &mut [u8],
+        canvas_width: u32,
+        canvas_height: u32,
+        clear_color: Option<[u8; 4]>,
         anim_image: &AnimatedFrame,
-        background_color: [u8; 4],
-    ) -> Option<Result<Frame, DecodingError>> {
+    ) {
+        if anim_image.offset_x == 0
+            && anim_image.offset_y == 0
+            && anim_image.width == canvas_width
+            && anim_image.height == canvas_height
+        {
+            anim_image.image.fill_buf(canvas);
+            return;
+        }
+
         let mut buffer = vec![0; anim_image.image.get_buf_size()];
         anim_image.image.fill_buf(&mut buffer);
+
         let has_alpha = anim_image.image.has_alpha();
-        let pixel_len: u32 = if has_alpha { 4 } else { 3 };
 
-        'x: for x in 0..anim_image.width {
-            for y in 0..anim_image.height {
-                let canvas_index: (u32, u32) = (x + anim_image.offset_x, y + anim_image.offset_y);
-                // Negative offsets are not possible due to unsigned ints
-                // If we go out of bounds by height, still continue by x
-                if canvas_index.1 >= canvas.height {
-                    continue 'x;
+        if let Some(clear_color) = clear_color {
+            if has_alpha {
+                for pixel in canvas.chunks_exact_mut(4) {
+                    pixel.copy_from_slice(&clear_color);
                 }
-                // If we go out of bounds by width, it doesn't make sense to continue at all
-                if canvas_index.0 >= canvas.width {
-                    break 'x;
-                }
-                let index: usize = ((y * anim_image.width + x) * pixel_len).try_into().unwrap();
-                canvas[canvas_index] = if anim_image.use_alpha_blending && has_alpha {
-                    let buffer: [u8; 4] = buffer[index..][..4].try_into().unwrap();
-                    ExtendedImage::do_alpha_blending(buffer, canvas[canvas_index])
-                } else {
-                    [
-                        buffer[index],
-                        buffer[index + 1],
-                        buffer[index + 2],
-                        if has_alpha { buffer[index + 3] } else { 255 },
-                    ]
-                };
-            }
-        }
-
-        let frame = Frame {
-            content: canvas.clone(),
-            delay_ms: anim_image.duration,
-        };
-
-        if anim_image.dispose {
-            for x in 0..anim_image.width {
-                for y in 0..anim_image.height {
-                    let canvas_index = (x + anim_image.offset_x) + (y + anim_image.offset_y) * canvas.width;
-                    for i in 0..4 {
-                        canvas.data[canvas_index * 4 + i] = background_color[i];
-                    }
+            } else {
+                for pixel in canvas.chunks_exact_mut(3) {
+                    pixel.copy_from_slice(&clear_color[..3]);
                 }
             }
         }
 
-        Some(Ok(frame))
+        let width = anim_image
+            .width
+            .min(canvas_width.saturating_sub(anim_image.offset_x)) as usize;
+        let height = anim_image
+            .height
+            .min(canvas_height.saturating_sub(anim_image.offset_y)) as usize;
+
+        if has_alpha && anim_image.use_alpha_blending {
+            for y in 0..height {
+                for x in 0..width {
+                    let frame_index = (x + y * anim_image.width as usize) * 4;
+                    let canvas_index = ((x + anim_image.offset_x as usize)
+                        + (y + anim_image.offset_y as usize) * canvas_width as usize)
+                        * 4;
+
+                    let input = &buffer[frame_index..][..4];
+                    let output = &mut canvas[canvas_index..][..4];
+
+                    let blended = Self::do_alpha_blending(
+                        input.try_into().unwrap(),
+                        output.try_into().unwrap(),
+                    );
+                    output.copy_from_slice(&blended);
+                }
+            }
+        } else if has_alpha {
+            for y in 0..height {
+                let frame_index = (y * anim_image.width as usize) * 3;
+                let canvas_index = (y + anim_image.offset_y as usize) * canvas_width as usize * 4;
+
+                canvas[canvas_index..][..width * 4]
+                    .copy_from_slice(&buffer[frame_index..][..width * 3]);
+            }
+        } else {
+            for y in 0..height {
+                let index = (y * anim_image.width as usize) * 3;
+                let canvas_index = (y + anim_image.offset_y as usize) * canvas_width as usize * 4;
+
+                let input = &buffer[index..][..width * 3];
+                let output = &mut canvas[canvas_index..][..width * 4];
+
+                for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(4)) {
+                    output[..3].copy_from_slice(input);
+                    output[3] = 255;
+                }
+            }
+        }
     }
 
     fn do_alpha_blending(buffer: [u8; 4], canvas: [u8; 4]) -> [u8; 4] {
@@ -314,45 +334,24 @@ impl ExtendedImage {
 
     pub(crate) fn fill_buf(&self, buf: &mut [u8]) {
         match &self.image {
-            // will always have at least one frame
             ExtendedImageData::Animation { frames, anim_info } => {
-                let first_frame = &frames[0];
-                let (canvas_width, canvas_height) = self.dimensions();
-                if canvas_width == first_frame.width && canvas_height == first_frame.height {
-                    first_frame.image.fill_buf(buf);
+                let bg_color = if self.info._alpha {
+                    [0; 4]
                 } else {
-                    let bg_color = match &self.info._alpha {
-                        true => [0, 0, 0, 0],
-                        false => anim_info.background_color,
-                    };
-                    let mut canvas = RgbaImage {
-                        width: canvas_width,
-                        height: canvas_height,
-                        data: std::iter::repeat(bg_color)
-                            .take(canvas_width as usize * canvas_height as usize)
-                            .flatten()
-                            .collect(),
-                    };
-
-                    let _ = ExtendedImage::draw_subimage(&mut canvas, first_frame, bg_color)
-                        .unwrap()
-                        .unwrap();
-                    buf.copy_from_slice(&canvas.data);
-                }
+                    anim_info.background_color
+                };
+                Self::composite_frame(
+                    buf,
+                    self.info.canvas_width,
+                    self.info.canvas_height,
+                    Some(bg_color),
+                    &frames[0], // will always have at least one frame
+                );
             }
             ExtendedImageData::Static(image) => {
                 image.fill_buf(buf);
             }
         }
-    }
-
-    pub(crate) fn get_buf_size(&self) -> usize {
-        match &self.image {
-            // will always have at least one frame
-            ExtendedImageData::Animation { frames, .. } => &frames[0].image,
-            ExtendedImageData::Static(image) => image,
-        }
-        .get_buf_size()
     }
 
     pub(crate) fn set_background_color(&mut self, color: [u8; 4]) -> Result<(), DecodingError> {
@@ -414,8 +413,8 @@ impl WebPStatic {
         }
 
         Ok(WebPStatic::LossyWithAlpha(RgbaImage {
-            width: vp8_frame.width.into(),
-            height: vp8_frame.height.into(),
+            _width: vp8_frame.width.into(),
+            _height: vp8_frame.height.into(),
             data: image_vec,
         }))
     }
@@ -484,8 +483,8 @@ impl WebPStatic {
 
     pub(crate) fn from_lossy(vp8_frame: VP8Frame) -> Result<WebPStatic, DecodingError> {
         let mut image = RgbImage {
-            width: vp8_frame.width.into(),
-            height: vp8_frame.height.into(),
+            _width: vp8_frame.width.into(),
+            _height: vp8_frame.height.into(),
             data: vec![0; usize::from(vp8_frame.width) * usize::from(vp8_frame.height) * 3],
         };
 

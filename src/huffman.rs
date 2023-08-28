@@ -103,7 +103,12 @@ impl HuffmanTree {
     }
 
     /// Adds a symbol to a huffman tree
-    fn add_symbol(&mut self, symbol: u16, code: u16, code_length: u16) -> Result<(), DecodingError> {
+    fn add_symbol(
+        &mut self,
+        symbol: u16,
+        code: u16,
+        code_length: u16,
+    ) -> Result<(), DecodingError> {
         let mut node_index = 0;
         let code = usize::from(code);
 

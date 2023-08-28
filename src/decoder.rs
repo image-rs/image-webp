@@ -1,9 +1,7 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::convert::TryFrom;
-use std::io::{self, Cursor, Read};
+use std::io::{self, Cursor, Read, Seek};
 use thiserror::Error;
-
-use crate::extended::ExtendedImageData;
 
 use super::lossless::{LosslessDecoder, LosslessFrame};
 use super::vp8::{Frame as VP8Frame, Vp8Decoder};
@@ -163,7 +161,7 @@ pub struct WebPDecoder<R> {
     image: WebPImage,
 }
 
-impl<R: Read> WebPDecoder<R> {
+impl<R: Read + Seek> WebPDecoder<R> {
     /// Create a new WebPDecoder from the Reader ```r```.
     /// This function takes ownership of the Reader.
     pub fn new(r: R) -> Result<WebPDecoder<R>, DecodingError> {
@@ -256,6 +254,7 @@ impl<R: Read> WebPDecoder<R> {
         }
     }
 
+    /// Returns the (width, height) of the image in pixels.
     pub fn dimensions(&self) -> (u32, u32) {
         match &self.image {
             WebPImage::Lossy(vp8_frame) => {
@@ -269,7 +268,18 @@ impl<R: Read> WebPDecoder<R> {
         }
     }
 
-    pub fn read_image(self, buf: &mut [u8]) -> Result<(), DecodingError> {
+    pub fn icc_profile(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
+        if let WebPImage::Extended(extended) = &self.image {
+            Ok(extended.icc_profile())
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Returns the raw bytes of the image.
+    ///
+    /// For animated images, this is the first frame.
+    pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
         let (width, height) = self.dimensions();
         assert_eq!(
             u64::try_from(buf.len()),
@@ -290,29 +300,24 @@ impl<R: Read> WebPDecoder<R> {
         Ok(())
     }
 
-    pub fn icc_profile(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
-        if let WebPImage::Extended(extended) = &self.image {
-            Ok(extended.icc_profile())
-        } else {
-            Ok(None)
-        }
-    }
+    /// Reads the next frame of the animation.
+    ///
+    /// Writes the frame contents into `buf` and returns the delay of the frame in milliseconds.
+    /// If there are no more frames, the method returns `None` and `buf` is left unchanged.
+    ///
+    /// Panics if the image is not animated.
+    pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<Option<u32>, DecodingError> {
+        assert!(self.has_animation()?);
 
-    // pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<u32, DecodingError> {
-    //     assert!(self.has_animation());
-
-    //     match self.image {
-    //         WebPImage::Extended(extended_image) => extended_image.,
-    //         _ => unreachable!()
-    //     }
-    // }
-
-    pub fn into_frames(self) -> impl Iterator<Item = Result<Vec<u8>, DecodingError>> {
         match self.image {
-            WebPImage::Lossy(_) | WebPImage::Lossless(_) => {
-                Box::new(std::iter::empty()) as Box<dyn Iterator<Item = _>>
-            }
-            WebPImage::Extended(extended_image) => Box::new(extended_image.into_frames()),
+            WebPImage::Extended(ref mut extended_image) => match extended_image.next_frame()? {
+                Some((frame, delay)) => {
+                    buf.copy_from_slice(&frame);
+                    Ok(Some(delay))
+                }
+                None => Ok(None),
+            },
+            _ => unreachable!(),
         }
     }
 }
