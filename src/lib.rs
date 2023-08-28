@@ -1,5 +1,7 @@
 //! Decoding and Encoding of WebP Images
 
+#![forbid(unsafe_code)]
+
 pub use self::decoder::WebPDecoder;
 
 mod decoder;
