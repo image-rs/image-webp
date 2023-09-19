@@ -1,12 +1,15 @@
 use byteorder::{LittleEndian, ReadBytesExt};
+use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::io::{self, Cursor, Read, Seek};
+use std::io::{self, BufReader, Cursor, Read, Seek};
+use std::mem;
+use std::ops::Range;
 use thiserror::Error;
+
+use crate::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo};
 
 use super::lossless::{LosslessDecoder, LosslessFrame};
 use super::vp8::{Frame as VP8Frame, Vp8Decoder};
-
-use super::extended::{read_extended_header, ExtendedImage};
 
 /// All errors that can occur when attempting to parse a WEBP container
 #[derive(Error, Debug)]
@@ -23,6 +26,10 @@ pub enum DecodingError {
     /// WebP's "WEBP" signature not found or invalid
     #[error("Invalid WebP signature: {0:x?}")]
     WebpSignatureInvalid([u8; 4]),
+
+    /// An expected chunk was missing
+    #[error("An expected chunk was missing")]
+    ChunkMissing,
 
     /// Chunk Header was incorrect or invalid in its usage
     #[error("Invalid Chunk header: {0:?}")]
@@ -88,6 +95,10 @@ pub enum DecodingError {
     #[error("Invalid VP8 chroma prediction mode: {0}")]
     ChromaPredictionModeInvalid(i8),
 
+    /// Inconsistent image sizes
+    #[error("Inconsistent image sizes")]
+    InconsistentImageSizes,
+
     /// The file may be valid, but this crate doesn't support decoding it.
     #[error("Unsupported feature: {0}")]
     UnsupportedFeature(String),
@@ -99,7 +110,7 @@ pub enum DecodingError {
 
 /// All possible RIFF chunks in a WebP image file
 #[allow(clippy::upper_case_acronyms)]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Hash, Eq)]
 pub(crate) enum WebPRiffChunk {
     RIFF,
     WEBP,
@@ -112,23 +123,24 @@ pub(crate) enum WebPRiffChunk {
     ICCP,
     EXIF,
     XMP,
+    Unknown([u8; 4]),
 }
 
 impl WebPRiffChunk {
-    pub(crate) fn from_fourcc(chunk_fourcc: [u8; 4]) -> Result<Self, DecodingError> {
+    pub(crate) fn from_fourcc(chunk_fourcc: [u8; 4]) -> Self {
         match &chunk_fourcc {
-            b"RIFF" => Ok(Self::RIFF),
-            b"WEBP" => Ok(Self::WEBP),
-            b"VP8 " => Ok(Self::VP8),
-            b"VP8L" => Ok(Self::VP8L),
-            b"VP8X" => Ok(Self::VP8X),
-            b"ANIM" => Ok(Self::ANIM),
-            b"ANMF" => Ok(Self::ANMF),
-            b"ALPH" => Ok(Self::ALPH),
-            b"ICCP" => Ok(Self::ICCP),
-            b"EXIF" => Ok(Self::EXIF),
-            b"XMP " => Ok(Self::XMP),
-            _ => Err(DecodingError::ChunkHeaderInvalid(chunk_fourcc).into()),
+            b"RIFF" => Self::RIFF,
+            b"WEBP" => Self::WEBP,
+            b"VP8 " => Self::VP8,
+            b"VP8L" => Self::VP8L,
+            b"VP8X" => Self::VP8X,
+            b"ANIM" => Self::ANIM,
+            b"ANMF" => Self::ANMF,
+            b"ALPH" => Self::ALPH,
+            b"ICCP" => Self::ICCP,
+            b"EXIF" => Self::EXIF,
+            b"XMP " => Self::XMP,
+            _ => Self::Unknown(chunk_fourcc),
         }
     }
 
@@ -145,158 +157,343 @@ impl WebPRiffChunk {
             Self::ICCP => *b"ICCP",
             Self::EXIF => *b"EXIF",
             Self::XMP => *b"XMP ",
+            Self::Unknown(fourcc) => *fourcc,
         }
+    }
+
+    pub(crate) fn is_unknown(&self) -> bool {
+        matches!(self, Self::Unknown(_))
     }
 }
 
-enum WebPImage {
-    Lossy(VP8Frame),
-    Lossless(LosslessFrame),
-    Extended(ExtendedImage),
+// enum WebPImage {
+//     Lossy(VP8Frame),
+//     Lossless(LosslessFrame),
+//     Extended(ExtendedImage),
+// }
+
+enum ImageKind {
+    Lossy,
+    Lossless,
+    Extended(WebPExtendedInfo),
+}
+
+struct AnimationState {
+    next_frame: usize,
+    loops_before_done: Option<u16>,
+    next_frame_start: u64,
+    dispose_next_frame: bool,
+    canvas: Option<Vec<u8>>,
+}
+impl Default for AnimationState {
+    fn default() -> Self {
+        Self {
+            next_frame: 0,
+            loops_before_done: None,
+            next_frame_start: 0,
+            dispose_next_frame: true,
+            canvas: None,
+        }
+    }
 }
 
 /// WebP Image format decoder. Currently only supports lossy RGB images or lossless RGBA images.
 pub struct WebPDecoder<R> {
     r: R,
-    image: WebPImage,
+
+    width: u32,
+    height: u32,
+
+    num_frames: usize,
+    animation: AnimationState,
+
+    kind: ImageKind,
+
+    chunks: HashMap<WebPRiffChunk, Range<u64>>,
 }
 
 impl<R: Read + Seek> WebPDecoder<R> {
     /// Create a new WebPDecoder from the Reader ```r```.
     /// This function takes ownership of the Reader.
     pub fn new(r: R) -> Result<WebPDecoder<R>, DecodingError> {
-        let image = WebPImage::Lossy(Default::default());
-
-        let mut decoder = WebPDecoder { r, image };
+        let mut decoder = WebPDecoder {
+            r,
+            width: 0,
+            height: 0,
+            num_frames: 0,
+            kind: ImageKind::Lossy,
+            chunks: HashMap::new(),
+            animation: Default::default(),
+        };
         decoder.read_data()?;
         Ok(decoder)
     }
 
-    //reads the 12 bytes of the WebP file header
-    fn read_riff_header(&mut self) -> Result<u32, DecodingError> {
-        let mut riff = [0; 4];
-        self.r.read_exact(&mut riff)?;
-        if &riff != b"RIFF" {
-            return Err(DecodingError::RiffSignatureInvalid(riff).into());
-        }
-
-        let size = self.r.read_u32::<LittleEndian>()?;
-
-        let mut webp = [0; 4];
-        self.r.read_exact(&mut webp)?;
-        if &webp != b"WEBP" {
-            return Err(DecodingError::WebpSignatureInvalid(webp).into());
-        }
-
-        Ok(size)
-    }
-
     fn read_data(&mut self) -> Result<(), DecodingError> {
-        let _size = self.read_riff_header()?;
+        let (WebPRiffChunk::RIFF, riff_size, _) = read_chunk_header(&mut self.r)? else {
+            return Err(DecodingError::ChunkHeaderInvalid(*b"RIFF"));
+        };
 
-        let chunk = read_chunk(&mut self.r)?;
-        self.image = match chunk {
-            Some((cursor, WebPRiffChunk::VP8)) => {
-                let mut vp8_decoder = Vp8Decoder::new(cursor);
-                let frame = vp8_decoder.decode_frame()?;
+        match &read_fourcc(&mut self.r)? {
+            WebPRiffChunk::WEBP => {}
+            fourcc => return Err(DecodingError::WebpSignatureInvalid(fourcc.to_fourcc()).into()),
+        }
 
-                WebPImage::Lossy(frame.clone())
+        let (chunk, chunk_size, chunk_size_rounded) = read_chunk_header(&mut self.r)?;
+        let start = self.r.stream_position()?;
+
+        match chunk {
+            WebPRiffChunk::VP8 => {
+                let tag = self.r.read_u24::<LittleEndian>()?;
+
+                let keyframe = tag & 1 == 0;
+                if !keyframe {
+                    return Err(DecodingError::UnsupportedFeature(
+                        "Non-keyframe frames".to_owned(),
+                    ));
+                }
+
+                let mut tag = [0u8; 3];
+                self.r.read_exact(&mut tag)?;
+                if tag != [0x9d, 0x01, 0x2a] {
+                    return Err(DecodingError::Vp8MagicInvalid(tag).into());
+                }
+
+                let w = self.r.read_u16::<LittleEndian>()?;
+                let h = self.r.read_u16::<LittleEndian>()?;
+
+                self.width = (w & 0x3FFF) as u32;
+                self.height = (h & 0x3FFF) as u32;
+                self.chunks
+                    .insert(WebPRiffChunk::VP8, start..start + chunk_size as u64);
+                self.kind = ImageKind::Lossy;
             }
-            Some((cursor, WebPRiffChunk::VP8L)) => {
-                let mut lossless_decoder = LosslessDecoder::new(cursor);
-                let frame = lossless_decoder.decode_frame()?;
+            WebPRiffChunk::VP8L => {
+                let signature = self.r.read_u8()?;
+                if signature != 0x2f {
+                    return Err(DecodingError::LosslessSignatureInvalid(signature));
+                }
 
-                WebPImage::Lossless(frame.clone())
-            }
-            Some((mut cursor, WebPRiffChunk::VP8X)) => {
-                let info = read_extended_header(&mut cursor)?;
+                let header = self.r.read_u24::<LittleEndian>()?;
+                let version = header >> 29;
+                if version != 0 {
+                    return Err(DecodingError::VersionNumberInvalid(version as u8));
+                }
 
-                let image = ExtendedImage::read_extended_chunks(&mut self.r, info)?;
+                self.width = 1 + (header >> 6) & 0x3FFF;
+                self.height = 1 + (header << 8) & 0x3FFF;
+                self.chunks
+                    .insert(WebPRiffChunk::VP8L, start..start + chunk_size as u64);
+                self.kind = ImageKind::Lossless;
+            }
+            WebPRiffChunk::VP8X => {
+                let mut info = extended::read_extended_header(&mut self.r)?;
+                self.width = info.canvas_width;
+                self.height = info.canvas_height;
 
-                WebPImage::Extended(image)
+                let next_chunk = if info.icc_profile {
+                    WebPRiffChunk::ICCP
+                } else if info.animation {
+                    WebPRiffChunk::ANIM
+                } else {
+                    WebPRiffChunk::VP8
+                };
+
+                let mut position = start + chunk_size_rounded as u64;
+                let max_position = position + riff_size.saturating_sub(12) as u64;
+                self.r.seek(io::SeekFrom::Start(position))?;
+
+                // Resist denial of service attacks by using a BufReader. In most images there
+                // should be a very small number of chunks. However, nothing prevents a malicious
+                // image from having an extremely large number of "unknown" chunks. Issuing
+                // millions of reads and seeks against the underlying reader might be very
+                // expensive.
+                let mut reader = BufReader::with_capacity(64 << 10, &mut self.r);
+
+                while position < max_position {
+                    match read_chunk_header(&mut reader) {
+                        Ok((chunk, chunk_size, chunk_size_rounded)) => {
+                            if !chunk.is_unknown() {
+                                let range = position..position + chunk_size as u64;
+                                self.chunks.entry(chunk).or_insert(range);
+                                if let WebPRiffChunk::ANMF = chunk {
+                                    self.num_frames += 1;
+                                }
+                            }
+
+                            reader.seek_relative(chunk_size_rounded as i64)?;
+                            position += chunk_size_rounded as u64;
+                        }
+                        Err(DecodingError::IoError(e))
+                            if e.kind() == io::ErrorKind::UnexpectedEof =>
+                        {
+                            break;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+
+                if info.animation && !self.chunks.contains_key(&WebPRiffChunk::ANIM)
+                    || info.animation && !self.chunks.contains_key(&WebPRiffChunk::ANMF)
+                    || info.icc_profile && !self.chunks.contains_key(&WebPRiffChunk::ICCP)
+                    || info.exif_metadata && !self.chunks.contains_key(&WebPRiffChunk::EXIF)
+                    || info.xmp_metadata && !self.chunks.contains_key(&WebPRiffChunk::XMP)
+                    || self.chunks.contains_key(&WebPRiffChunk::VP8)
+                        == self.chunks.contains_key(&WebPRiffChunk::VP8L)
+                {
+                    return Err(DecodingError::ChunkMissing);
+                }
+
+                if let Some(chunk) = self.read_chunk(WebPRiffChunk::ANIM)? {
+                    let mut cursor = Cursor::new(chunk);
+                    cursor.read_exact(&mut info.background_color)?;
+                    match cursor.read_u16::<LittleEndian>()? {
+                        0 => self.animation.loops_before_done = None,
+                        n => self.animation.loops_before_done = Some(n),
+                    }
+                    self.animation.next_frame_start =
+                        self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start;
+                }
+
+                self.kind = ImageKind::Extended(info);
             }
-            None => return Err(DecodingError::IoError(io::ErrorKind::UnexpectedEof.into())),
-            Some((_, chunk)) => {
-                return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into())
-            }
+            _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into()),
         };
 
         Ok(())
     }
 
     /// Returns true if the image as described by the bitstream is animated.
-    pub fn has_animation(&self) -> Result<bool, DecodingError> {
-        Ok(match &self.image {
-            WebPImage::Lossy(_) => false,
-            WebPImage::Lossless(_) => false,
-            WebPImage::Extended(extended) => extended.has_animation(),
-        })
+    pub fn has_animation(&self) -> bool {
+        match &self.kind {
+            ImageKind::Lossy | ImageKind::Lossless => false,
+            ImageKind::Extended(extended) => extended.animation,
+        }
     }
 
     /// Returns whether the image has an alpha channel.
     ///
     /// If so, the pixel format is Rgba8 and otherwise Rgb8.
     pub fn has_alpha(&self) -> bool {
-        match &self.image {
-            WebPImage::Lossy(_) => false,
-            WebPImage::Lossless(_) => true,
-            WebPImage::Extended(extended) => extended.has_alpha(),
+        match &self.kind {
+            ImageKind::Lossy => false,
+            ImageKind::Lossless => true,
+            ImageKind::Extended(extended) => extended.alpha,
         }
     }
 
     /// Sets the background color if the image is an extended and animated webp.
     pub fn set_background_color(&mut self, color: [u8; 4]) -> Result<(), DecodingError> {
-        match &mut self.image {
-            WebPImage::Extended(image) => image.set_background_color(color),
-            _ => Err(DecodingError::InvalidParameter(
+        if let ImageKind::Extended(info) = &mut self.kind {
+            info.background_color = color;
+            Ok(())
+        } else {
+            Err(DecodingError::InvalidParameter(
                 "Background color can only be set on animated webp".to_owned(),
-            )),
+            ))
         }
     }
 
     /// Returns the (width, height) of the image in pixels.
     pub fn dimensions(&self) -> (u32, u32) {
-        match &self.image {
-            WebPImage::Lossy(vp8_frame) => {
-                (u32::from(vp8_frame.width), u32::from(vp8_frame.height))
+        (self.width, self.height)
+    }
+
+    fn read_chunk(&mut self, chunk: WebPRiffChunk) -> Result<Option<Vec<u8>>, DecodingError> {
+        match self.chunks.get(&chunk) {
+            Some(range) => {
+                self.r.seek(io::SeekFrom::Start(range.start))?;
+                let mut data = vec![0; (range.end - range.start) as usize];
+                self.r.read_exact(&mut data)?;
+                Ok(Some(data))
             }
-            WebPImage::Lossless(lossless_frame) => (
-                u32::from(lossless_frame.width),
-                u32::from(lossless_frame.height),
-            ),
-            WebPImage::Extended(extended) => extended.dimensions(),
+            None => Ok(None),
         }
     }
 
     pub fn icc_profile(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
-        if let WebPImage::Extended(extended) = &self.image {
-            Ok(extended.icc_profile())
-        } else {
-            Ok(None)
-        }
+        self.read_chunk(WebPRiffChunk::ICCP)
+    }
+
+    pub fn exif_metadata(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
+        self.read_chunk(WebPRiffChunk::EXIF)
+    }
+
+    pub fn xmp_metadata(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
+        self.read_chunk(WebPRiffChunk::XMP)
     }
 
     /// Returns the raw bytes of the image.
     ///
     /// For animated images, this is the first frame.
     pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
-        let (width, height) = self.dimensions();
         assert_eq!(
             u64::try_from(buf.len()),
-            Ok(width as u64 * height as u64 * 4)
+            Ok(self.width as u64 * self.height as u64 * 4)
         );
 
-        match &self.image {
-            WebPImage::Lossy(vp8_frame) => {
-                vp8_frame.fill_rgb(buf);
+        if self.has_animation() {
+            let state = mem::take(&mut self.animation);
+            self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start;
+            self.read_frame(buf)?;
+            self.animation = state;
+        } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
+            let mut frame = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
+            let frame = frame.decode_frame()?;
+            if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
+                return Err(DecodingError::InconsistentImageSizes);
             }
-            WebPImage::Lossless(lossless_frame) => {
-                lossless_frame.fill_rgba(buf);
+
+            frame.fill_rgba(buf);
+        } else {
+            let range = self
+                .chunks
+                .get(&WebPRiffChunk::VP8)
+                .ok_or(DecodingError::ChunkMissing)?;
+            // TODO: avoid cloning frame
+            let frame = Vp8Decoder::new(range_reader(&mut self.r, range.clone())?)
+                .decode_frame()?
+                .clone();
+            if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
+                return Err(DecodingError::InconsistentImageSizes);
             }
-            WebPImage::Extended(extended) => {
-                extended.fill_buf(buf);
+
+            if self.has_alpha() {
+                frame.fill_rgba(buf);
+
+                let range = self
+                    .chunks
+                    .get(&WebPRiffChunk::ALPH)
+                    .ok_or(DecodingError::ChunkMissing)?
+                    .clone();
+                let alpha_chunk = read_alpha_chunk(
+                    &mut range_reader(&mut self.r, range.clone())?,
+                    self.width,
+                    self.height,
+                )?;
+
+                for y in 0..frame.height {
+                    for x in 0..frame.width {
+                        let predictor: u8 = get_alpha_predictor(
+                            x.into(),
+                            y.into(),
+                            frame.width.into(),
+                            alpha_chunk.filtering_method,
+                            &buf,
+                        );
+
+                        let alpha_index =
+                            usize::from(y) * usize::from(frame.width) + usize::from(x);
+                        let buffer_index = alpha_index * 4 + 3;
+
+                        buf[buffer_index] = predictor.wrapping_add(alpha_chunk.data[alpha_index]);
+                    }
+                }
+            } else {
+                frame.fill_rgb(buf);
             }
         }
+
         Ok(())
     }
 
@@ -307,84 +504,166 @@ impl<R: Read + Seek> WebPDecoder<R> {
     ///
     /// Panics if the image is not animated.
     pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<Option<u32>, DecodingError> {
-        assert!(self.has_animation()?);
+        assert!(self.has_animation());
 
-        match self.image {
-            WebPImage::Extended(ref mut extended_image) => match extended_image.next_frame()? {
-                Some((frame, delay)) => {
-                    buf.copy_from_slice(&frame);
-                    Ok(Some(delay))
-                }
-                None => Ok(None),
-            },
-            _ => unreachable!(),
+        if self.animation.loops_before_done == Some(0) {
+            return Ok(None);
         }
-    }
-}
 
-pub(crate) fn read_len_cursor<R>(r: &mut R) -> Result<Cursor<Vec<u8>>, DecodingError>
-where
-    R: Read,
-{
-    let unpadded_len = u64::from(r.read_u32::<LittleEndian>()?);
+        let ImageKind::Extended(info) = &self.kind else {
+            unreachable!()
+        };
 
-    // RIFF chunks containing an uneven number of bytes append
-    // an extra 0x00 at the end of the chunk
-    //
-    // The addition cannot overflow since we have a u64 that was created from a u32
-    let len = unpadded_len + (unpadded_len % 2);
+        self.r
+            .seek(io::SeekFrom::Start(self.animation.next_frame_start))?;
 
-    let mut framedata = Vec::new();
-    r.by_ref().take(len).read_to_end(&mut framedata)?;
+        let anmf_size = match read_chunk_header(&mut self.r)? {
+            (WebPRiffChunk::ANMF, size, _) if size >= 32 => size,
+            _ => return Err(DecodingError::ChunkHeaderInvalid(*b"ANMF")),
+        };
 
-    //remove padding byte
-    if unpadded_len % 2 == 1 {
-        framedata.pop();
-    }
-
-    Ok(io::Cursor::new(framedata))
-}
-
-/// Reads a chunk header FourCC
-/// Returns None if and only if we hit end of file reading the four character code of the chunk
-/// The inner error is `Err` if and only if the chunk header FourCC is present but unknown
-pub(crate) fn read_fourcc<R: Read>(
-    r: &mut R,
-) -> Result<Option<Result<WebPRiffChunk, DecodingError>>, DecodingError> {
-    let mut chunk_fourcc = [0; 4];
-    let result = r.read_exact(&mut chunk_fourcc);
-
-    match result {
-        Ok(()) => {}
-        Err(err) => {
-            if err.kind() == io::ErrorKind::UnexpectedEof {
-                return Ok(None);
-            } else {
-                return Err(err.into());
+        // Read ANMF chunk
+        let frame_x = extended::read_3_bytes(&mut self.r)? * 2;
+        let frame_y = extended::read_3_bytes(&mut self.r)? * 2;
+        let frame_width = extended::read_3_bytes(&mut self.r)? + 1;
+        let frame_height = extended::read_3_bytes(&mut self.r)? + 1;
+        if frame_x + frame_width > self.width || frame_y + frame_height > self.height {
+            return Err(DecodingError::FrameOutsideImage.into());
+        }
+        let duration = extended::read_3_bytes(&mut self.r)?;
+        let frame_info = self.r.read_u8()?;
+        let reserved = frame_info & 0b11111100;
+        if reserved != 0 {
+            return Err(DecodingError::InfoBitsInvalid {
+                name: "reserved",
+                value: reserved.into(),
             }
+            .into());
         }
-    }
+        let use_alpha_blending = frame_info & 0b00000010 == 0;
+        let dispose = frame_info & 0b00000001 != 0;
 
-    let chunk = WebPRiffChunk::from_fourcc(chunk_fourcc);
-    Ok(Some(chunk))
+        let clear_color = if self.animation.dispose_next_frame {
+            Some(info.background_color)
+        } else {
+            None
+        };
+
+        //read normal bitstream now
+        let (chunk, chunk_size, chunk_size_rounded) = read_chunk_header(&mut self.r)?;
+        if chunk_size_rounded + 32 < anmf_size {
+            return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into());
+        }
+
+        let (frame, frame_has_alpha): (Vec<u8>, bool) = match chunk {
+            WebPRiffChunk::VP8 => {
+                let reader = (&mut self.r).take(chunk_size as u64);
+                let mut vp8_decoder = Vp8Decoder::new(reader);
+                let raw_frame = vp8_decoder.decode_frame()?;
+                if raw_frame.width as u32 != frame_width || raw_frame.height as u32 != frame_height
+                {
+                    return Err(DecodingError::InconsistentImageSizes);
+                }
+                let mut rgb_frame = vec![0; frame_width as usize * frame_height as usize * 3];
+                raw_frame.fill_rgb(&mut rgb_frame);
+                (rgb_frame, false)
+            }
+            WebPRiffChunk::VP8L => {
+                let reader = (&mut self.r).take(chunk_size as u64);
+                let mut lossless_decoder = LosslessDecoder::new(reader);
+                let frame = lossless_decoder.decode_frame()?;
+                if frame.width as u32 != frame_width || frame.height as u32 != frame_height {
+                    return Err(DecodingError::InconsistentImageSizes);
+                }
+                let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                frame.fill_rgba(&mut rgba_frame);
+                (rgba_frame, true)
+            }
+            WebPRiffChunk::ALPH => {
+                if chunk_size_rounded + 40 < anmf_size {
+                    return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into());
+                }
+
+                // read alpha
+                let next_chunk_start = self.r.stream_position()? + chunk_size_rounded as u64;
+                let mut reader = (&mut self.r).take(chunk_size as u64);
+                let alpha_chunk = read_alpha_chunk(&mut reader, frame_width, frame_height)?;
+
+                // read opaque
+                self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
+                let (next_chunk, next_chunk_size, _) = read_chunk_header(&mut self.r)?;
+                if chunk_size + next_chunk_size + 40 > anmf_size {
+                    return Err(DecodingError::ChunkHeaderInvalid(next_chunk.to_fourcc()).into());
+                }
+
+                let mut vp8_decoder = Vp8Decoder::new((&mut self.r).take(chunk_size as u64));
+                let frame = vp8_decoder.decode_frame()?;
+
+                let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                frame.fill_rgba(&mut rgba_frame);
+
+                todo!("apply alpha");
+
+                (rgba_frame, true)
+            }
+            _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into()),
+        };
+
+        if self.animation.canvas.is_none() {
+            self.animation.canvas = Some(vec![0; (self.width * self.height * 4) as usize]);
+        }
+        extended::composite_frame(
+            self.animation.canvas.as_mut().unwrap(),
+            self.width,
+            self.height,
+            clear_color,
+            &frame,
+            frame_x,
+            frame_y,
+            frame_width,
+            frame_height,
+            frame_has_alpha,
+            use_alpha_blending,
+        );
+
+        self.animation.dispose_next_frame = dispose;
+        self.animation.next_frame_start += anmf_size as u64 + 8;
+        self.animation.next_frame += 1;
+
+        if self.animation.next_frame >= self.num_frames {
+            self.animation.next_frame = 0;
+            if self.animation.loops_before_done.is_some() {
+                *self.animation.loops_before_done.as_mut().unwrap() -= 1;
+            }
+            self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start;
+            self.animation.dispose_next_frame = true;
+        }
+
+        Ok(Some(duration))
+    }
 }
 
-/// Reads a chunk
-/// Returns an error if the chunk header is not a valid webp header or some other reading error
-/// Returns None if and only if we hit end of file reading the four character code of the chunk
-pub(crate) fn read_chunk<R>(
-    r: &mut R,
-) -> Result<Option<(Cursor<Vec<u8>>, WebPRiffChunk)>, DecodingError>
-where
-    R: Read,
-{
-    if let Some(chunk) = read_fourcc(r)? {
-        let chunk = chunk?;
-        let cursor = read_len_cursor(r)?;
-        Ok(Some((cursor, chunk)))
-    } else {
-        Ok(None)
-    }
+pub(crate) fn range_reader<R: Read + Seek>(
+    mut r: R,
+    range: Range<u64>,
+) -> Result<impl Read, DecodingError> {
+    r.seek(io::SeekFrom::Start(range.start))?;
+    Ok(r.take(range.end - range.start))
+}
+
+pub(crate) fn read_fourcc<R: Read>(mut r: R) -> Result<WebPRiffChunk, DecodingError> {
+    let mut chunk_fourcc = [0; 4];
+    r.read_exact(&mut chunk_fourcc)?;
+    Ok(WebPRiffChunk::from_fourcc(chunk_fourcc))
+}
+
+pub(crate) fn read_chunk_header<R: Read>(
+    mut r: R,
+) -> Result<(WebPRiffChunk, u32, u32), DecodingError> {
+    let chunk = read_fourcc(&mut r)?;
+    let chunk_size = r.read_u32::<LittleEndian>()?;
+    let chunk_size_rounded = chunk_size.saturating_add(chunk_size & 1);
+    Ok((chunk, chunk_size, chunk_size_rounded))
 }
 
 #[cfg(test)]
