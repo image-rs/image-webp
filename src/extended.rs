@@ -708,7 +708,8 @@ pub(crate) fn read_alpha_chunk<R: Read>(
         let cursor = io::Cursor::new(framedata);
 
         let mut decoder = LosslessDecoder::new(cursor);
-        //this is a potential problem for large images; would require rewriting lossless decoder to use u32 for width and height
+        //this is a potential problem for large images; would require rewriting lossless decoder to
+        //use u32 for width and height
         let width: u16 = width.try_into().map_err(|_| DecodingError::ImageTooLarge)?;
         let height: u16 = height
             .try_into()

@@ -865,25 +865,43 @@ impl Frame {
         }
     }
 
-    /// Conversion values from https://docs.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#converting-8-bit-yuv-to-rgb888
     fn fill_single(y: u8, u: u8, v: u8, rgb: &mut [u8]) {
-        let c: i32 = i32::from(y) - 16;
-        let d: i32 = i32::from(u) - 128;
-        let e: i32 = i32::from(v) - 128;
+        // // Conversion values from https://docs.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#converting-8-bit-yuv-to-rgb888
+        // let c: i32 = i32::from(y) - 16;
+        // let d: i32 = i32::from(u) - 128;
+        // let e: i32 = i32::from(v) - 128;
+        // let r: u8 = clamp((298 * c + 409 * e + 128) >> 8, 0, 255)
+        //     .try_into()
+        //     .unwrap();
+        // let g: u8 = clamp((298 * c - 100 * d - 208 * e + 128) >> 8, 0, 255)
+        //     .try_into()
+        //     .unwrap();
+        // let b: u8 = clamp((298 * c + 516 * d + 128) >> 8, 0, 255)
+        //     .try_into()
+        //     .unwrap();
 
-        let r: u8 = clamp((298 * c + 409 * e + 128) >> 8, 0, 255)
-            .try_into()
-            .unwrap();
-        let g: u8 = clamp((298 * c - 100 * d - 208 * e + 128) >> 8, 0, 255)
-            .try_into()
-            .unwrap();
-        let b: u8 = clamp((298 * c + 516 * d + 128) >> 8, 0, 255)
-            .try_into()
-            .unwrap();
+        // Based on [src/dsp/yuv.h](https://github.com/webmproject/libwebp/blob/8534f53960befac04c9631e6e50d21dcb42dfeaf/src/dsp/yuv.h#L79)
+        // from the libwebp source.
+        const YUV_FIX2: i32 = 6;
+        const YUV_MASK2: i32 = (256 << YUV_FIX2) - 1;
 
-        rgb[0] = r;
-        rgb[1] = g;
-        rgb[2] = b;
+        /// _mm_mulhi_epu16 emulation
+        fn mulhi(v: u8, coeff: u16) -> i32 {
+            return ((u32::from(v) * u32::from(coeff)) >> 8) as i32;
+        }
+        fn clip(v: i32) -> u8 {
+            if (v & !YUV_MASK2) == 0 {
+                (v >> YUV_FIX2) as u8
+            } else if v < 0 {
+                0
+            } else {
+                255
+            }
+        }
+
+        rgb[0] = clip(mulhi(y, 19077) + mulhi(v, 26149) - 14234);
+        rgb[1] = clip(mulhi(y, 19077) - mulhi(u, 6419) - mulhi(v, 13320) + 8708);
+        rgb[2] = clip(mulhi(y, 19077) + mulhi(u, 33050) - 17685);
     }
 
     /// Gets the buffer size

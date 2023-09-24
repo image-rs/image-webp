@@ -274,14 +274,14 @@ impl<R: Read + Seek> WebPDecoder<R> {
                     return Err(DecodingError::LosslessSignatureInvalid(signature));
                 }
 
-                let header = self.r.read_u24::<LittleEndian>()?;
+                let header = self.r.read_u32::<LittleEndian>()?;
                 let version = header >> 29;
                 if version != 0 {
                     return Err(DecodingError::VersionNumberInvalid(version as u8));
                 }
 
-                self.width = 1 + (header >> 6) & 0x3FFF;
-                self.height = 1 + (header << 8) & 0x3FFF;
+                self.width = 1 + header & 0x3FFF;
+                self.height = 1 + (header >> 14) & 0x3FFF;
                 self.chunks
                     .insert(WebPRiffChunk::VP8L, start..start + chunk_size as u64);
                 self.kind = ImageKind::Lossless;
@@ -291,16 +291,16 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 self.width = info.canvas_width;
                 self.height = info.canvas_height;
 
-                let next_chunk = if info.icc_profile {
-                    WebPRiffChunk::ICCP
-                } else if info.animation {
-                    WebPRiffChunk::ANIM
-                } else {
-                    WebPRiffChunk::VP8
-                };
+                // let next_chunk = if info.icc_profile {
+                //     WebPRiffChunk::ICCP
+                // } else if info.animation {
+                //     WebPRiffChunk::ANIM
+                // } else {
+                //     WebPRiffChunk::VP8
+                // };
 
-                let mut position = start + chunk_size_rounded as u64;
-                let max_position = position + riff_size.saturating_sub(12) as u64;
+                let mut position = start + u64::from(chunk_size_rounded);
+                let max_position = position + u64::from(riff_size.saturating_sub(12));
                 self.r.seek(io::SeekFrom::Start(position))?;
 
                 // Resist denial of service attacks by using a BufReader. In most images there
@@ -313,16 +313,18 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 while position < max_position {
                     match read_chunk_header(&mut reader) {
                         Ok((chunk, chunk_size, chunk_size_rounded)) => {
-                            if !chunk.is_unknown() {
-                                let range = position..position + chunk_size as u64;
-                                self.chunks.entry(chunk).or_insert(range);
-                                if let WebPRiffChunk::ANMF = chunk {
-                                    self.num_frames += 1;
-                                }
+                            if chunk.is_unknown() {
+                                break;
                             }
 
-                            reader.seek_relative(chunk_size_rounded as i64)?;
-                            position += chunk_size_rounded as u64;
+                            let range = position + 8..position + 8 + u64::from(chunk_size);
+                            self.chunks.entry(chunk).or_insert(range);
+                            if let WebPRiffChunk::ANMF = chunk {
+                                self.num_frames += 1;
+                            }
+
+                            reader.seek_relative(i64::from(chunk_size_rounded))?;
+                            position += 8 + u64::from(chunk_size_rounded);
                         }
                         Err(DecodingError::IoError(e))
                             if e.kind() == io::ErrorKind::UnexpectedEof =>
@@ -411,6 +413,11 @@ impl<R: Read + Seek> WebPDecoder<R> {
         }
     }
 
+    // /// Returns whether the image is lossy.
+    // pub fn is_lossy(&mut self) -> Result<bool, DecodingError> {
+    //     matches!(self.kind, ImageKind::Lossless)
+    // }
+
     pub fn icc_profile(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
         self.read_chunk(WebPRiffChunk::ICCP)
     }
@@ -423,14 +430,17 @@ impl<R: Read + Seek> WebPDecoder<R> {
         self.read_chunk(WebPRiffChunk::XMP)
     }
 
+    /// Returns the number of bytes required to store the image or a single frame.
+    pub fn output_buffer_size(&self) -> usize {
+        let bytes_per_pixel = if self.has_alpha() { 4 } else { 3 };
+        self.width as usize * self.height as usize * bytes_per_pixel
+    }
+
     /// Returns the raw bytes of the image.
     ///
     /// For animated images, this is the first frame.
     pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
-        assert_eq!(
-            u64::try_from(buf.len()),
-            Ok(self.width as u64 * self.height as u64 * 4)
-        );
+        assert_eq!(buf.len(), self.output_buffer_size());
 
         if self.has_animation() {
             let state = mem::take(&mut self.animation);
@@ -451,7 +461,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 .get(&WebPRiffChunk::VP8)
                 .ok_or(DecodingError::ChunkMissing)?;
             // TODO: avoid cloning frame
-            let frame = Vp8Decoder::new(range_reader(&mut self.r, range.clone())?)
+            let frame = Vp8Decoder::new(range_reader(&mut self.r, range.start..range.end)?)
                 .decode_frame()?
                 .clone();
             if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
@@ -467,10 +477,11 @@ impl<R: Read + Seek> WebPDecoder<R> {
                     .ok_or(DecodingError::ChunkMissing)?
                     .clone();
                 let alpha_chunk = read_alpha_chunk(
-                    &mut range_reader(&mut self.r, range.clone())?,
+                    &mut range_reader(&mut self.r, range.start..range.end)?,
                     self.width,
                     self.height,
-                )?;
+                )
+                .expect("REMOVE");
 
                 for y in 0..frame.height {
                     for x in 0..frame.width {
