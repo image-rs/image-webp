@@ -838,33 +838,51 @@ impl Frame {
 
     /// Fills an rgb buffer with the image
     pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
-        for (index, rgb_chunk) in (0..self.ybuf.len()).zip(buf.chunks_exact_mut(3)) {
-            let y = index / self.width as usize;
-            let x = index % self.width as usize;
-            let chroma_index = self.chroma_width() as usize * (y / 2) + x / 2;
+        let mut index = 0_usize;
 
-            Frame::fill_single(
-                self.ybuf[index],
-                self.ubuf[chroma_index],
-                self.vbuf[chroma_index],
-                rgb_chunk,
-            );
+        for (y, row) in buf
+            .chunks_exact_mut(usize::from(self.width) * 3)
+            .enumerate()
+        {
+            let chroma_index_row = usize::from(self.chroma_width()) * (y / 2);
+
+            for (x, rgb_chunk) in row.chunks_exact_mut(3).enumerate() {
+                let chroma_index = chroma_index_row + x / 2;
+
+                Frame::fill_single(
+                    self.ybuf[index],
+                    self.ubuf[chroma_index],
+                    self.vbuf[chroma_index],
+                    rgb_chunk,
+                );
+
+                index += 1;
+            }
         }
     }
 
     /// Fills an rgba buffer by skipping the alpha values
     pub(crate) fn fill_rgba(&self, buf: &mut [u8]) {
-        for (index, rgba_chunk) in (0..self.ybuf.len()).zip(buf.chunks_exact_mut(4)) {
-            let y = index / self.width as usize;
-            let x = index % self.width as usize;
-            let chroma_index = self.chroma_width() as usize * (y / 2) + x / 2;
+        let mut index = 0_usize;
 
-            Frame::fill_single(
-                self.ybuf[index],
-                self.ubuf[chroma_index],
-                self.vbuf[chroma_index],
-                rgba_chunk,
-            );
+        for (y, row) in buf
+            .chunks_exact_mut(usize::from(self.width) * 4)
+            .enumerate()
+        {
+            let chroma_index_row = usize::from(self.chroma_width()) * (y / 2);
+
+            for (x, rgb_chunk) in row.chunks_exact_mut(4).enumerate() {
+                let chroma_index = chroma_index_row + x / 2;
+
+                Frame::fill_single(
+                    self.ybuf[index],
+                    self.ubuf[chroma_index],
+                    self.vbuf[chroma_index],
+                    rgb_chunk,
+                );
+
+                index += 1;
+            }
         }
     }
 
