@@ -1,563 +1,200 @@
-use std::convert::TryInto;
-use std::io::{self, Cursor, Error, Read};
-
+use super::lossless::LosslessDecoder;
 use crate::decoder::DecodingError;
-
-use super::decoder::{
-    read_chunk, read_fourcc, read_len_cursor, DecodingError::ChunkHeaderInvalid, WebPRiffChunk,
-};
-use super::lossless::{LosslessDecoder, LosslessFrame};
-use super::vp8::{Frame as VP8Frame, Vp8Decoder};
-use byteorder::{LittleEndian, ReadBytesExt};
-
-#[derive(Clone)]
-struct RgbImage {
-    _width: u32,
-    _height: u32,
-    data: Vec<u8>,
-}
-
-#[derive(Clone)]
-struct RgbaImage {
-    _width: u32,
-    _height: u32,
-    data: Vec<u8>,
-}
+use byteorder::ReadBytesExt;
+use std::convert::TryInto;
+use std::io::{self, Read};
 
 #[derive(Debug, Clone)]
 pub(crate) struct WebPExtendedInfo {
-    _icc_profile: bool,
-    _alpha: bool,
-    _exif_metadata: bool,
-    _xmp_metadata: bool,
-    _animation: bool,
+    pub(crate) alpha: bool,
+
+    pub(crate) canvas_width: u32,
+    pub(crate) canvas_height: u32,
+
+    pub(crate) icc_profile: bool,
+    pub(crate) exif_metadata: bool,
+    pub(crate) xmp_metadata: bool,
+    pub(crate) animation: bool,
+
+    pub(crate) background_color: [u8; 4],
+}
+
+/// Composites a frame onto a canvas.
+///
+/// Starts by filling the canvas with the background color, if provided. Then copies or blends the
+/// frame onto the canvas.
+pub(crate) fn composite_frame(
+    canvas: &mut [u8],
     canvas_width: u32,
     canvas_height: u32,
-    icc_profile: Option<Vec<u8>>,
-}
-
-enum ExtendedImageData {
-    Animation {
-        frames: Vec<AnimatedFrame>,
-        anim_info: WebPAnimatedInfo,
-    },
-    Static(WebPStatic),
-}
-
-pub(crate) struct ExtendedImage {
-    info: WebPExtendedInfo,
-    image: ExtendedImageData,
-
-    canvas: Option<Vec<u8>>,
-    next_frame: usize,
-}
-
-impl ExtendedImage {
-    pub(crate) fn dimensions(&self) -> (u32, u32) {
-        (self.info.canvas_width, self.info.canvas_height)
-    }
-
-    pub(crate) fn has_animation(&self) -> bool {
-        self.info._animation
-    }
-
-    pub(crate) fn icc_profile(&self) -> Option<Vec<u8>> {
-        self.info.icc_profile.clone()
-    }
-
-    pub(crate) fn has_alpha(&self) -> bool {
-        match &self.image {
-            ExtendedImageData::Animation { frames, .. } => &frames[0].image,
-            ExtendedImageData::Static(image) => image,
+    clear_color: Option<[u8; 4]>,
+    frame: &[u8],
+    frame_offset_x: u32,
+    frame_offset_y: u32,
+    frame_width: u32,
+    frame_height: u32,
+    frame_has_alpha: bool,
+    frame_use_alpha_blending: bool,
+) {
+    if frame_offset_x == 0
+        && frame_offset_y == 0
+        && frame_width == canvas_width
+        && frame_height == canvas_height
+        && !frame_use_alpha_blending
+    {
+        if frame_has_alpha {
+            canvas.copy_from_slice(frame);
+        } else {
+            for (input, output) in frame.chunks_exact(3).zip(canvas.chunks_exact_mut(4)) {
+                output[..3].copy_from_slice(input);
+                output[3] = 255;
+            }
         }
-        .has_alpha()
+        return;
     }
 
-    pub(crate) fn next_frame(&mut self) -> Result<Option<(&[u8], u32)>, DecodingError> {
-        if let ExtendedImageData::Animation { frames, anim_info } = &self.image {
-            match frames.get(self.next_frame) {
-                Some(anim_image) => {
-                    if self.canvas.is_none() {
-                        self.canvas = Some(vec![
-                            0;
-                            self.info.canvas_width as usize
-                                * self.info.canvas_height as usize
-                        ]);
-                    }
-
-                    let dispose_previous =
-                        self.next_frame == 0 || frames[self.next_frame - 1].dispose;
-                    let bg_color = if self.info._alpha {
-                        [0; 4]
-                    } else {
-                        anim_info.background_color
-                    };
-
-                    Self::composite_frame(
-                        self.canvas.as_mut().unwrap(),
-                        self.info.canvas_width,
-                        self.info.canvas_height,
-                        dispose_previous.then_some(bg_color),
-                        anim_image,
-                    );
-
-                    self.next_frame += 1;
-                    if self.next_frame == frames.len() {
-                        self.next_frame = 0;
-                    }
-
-                    Ok(self.canvas.as_ref().map(|c| (&**c, anim_image.duration)))
-                }
-                None => Ok(None),
+    if let Some(clear_color) = clear_color {
+        if frame_has_alpha {
+            for pixel in canvas.chunks_exact_mut(4) {
+                pixel.copy_from_slice(&clear_color);
             }
         } else {
-            Ok(None)
+            for pixel in canvas.chunks_exact_mut(3) {
+                pixel.copy_from_slice(&clear_color[..3]);
+            }
         }
     }
 
-    pub(crate) fn read_extended_chunks<R: Read>(
-        reader: &mut R,
-        mut info: WebPExtendedInfo,
-    ) -> Result<ExtendedImage, DecodingError> {
-        let mut anim_info: Option<WebPAnimatedInfo> = None;
-        let mut anim_frames: Vec<AnimatedFrame> = Vec::new();
-        let mut static_frame: Option<WebPStatic> = None;
-        //go until end of file and while chunk headers are valid
-        while let Some((mut cursor, chunk)) = read_extended_chunk(reader)? {
-            match chunk {
-                WebPRiffChunk::EXIF | WebPRiffChunk::XMP => {
-                    //ignore these chunks
-                }
-                WebPRiffChunk::ANIM => {
-                    if anim_info.is_none() {
-                        anim_info = Some(Self::read_anim_info(&mut cursor)?);
-                    }
-                }
-                WebPRiffChunk::ANMF => {
-                    let frame = read_anim_frame(cursor, info.canvas_width, info.canvas_height)?;
-                    anim_frames.push(frame);
-                }
-                WebPRiffChunk::ALPH => {
-                    if static_frame.is_none() {
-                        let alpha_chunk =
-                            read_alpha_chunk(&mut cursor, info.canvas_width, info.canvas_height)?;
+    let width = frame_width.min(canvas_width.saturating_sub(frame_offset_x)) as usize;
+    let height = frame_height.min(canvas_height.saturating_sub(frame_offset_y)) as usize;
 
-                        let vp8_frame = read_lossy_with_chunk(reader)?;
+    if frame_has_alpha && frame_use_alpha_blending {
+        for y in 0..height {
+            for x in 0..width {
+                let frame_index = (x + y * frame_width as usize) * 4;
+                let canvas_index = ((x + frame_offset_x as usize)
+                    + (y + frame_offset_y as usize) * canvas_width as usize)
+                    * 4;
 
-                        let img = WebPStatic::from_alpha_lossy(alpha_chunk, vp8_frame)?;
+                let input = &frame[frame_index..][..4];
+                let output = &mut canvas[canvas_index..][..4];
 
-                        static_frame = Some(img);
-                    }
-                }
-                WebPRiffChunk::ICCP => {
-                    let mut icc_profile = Vec::new();
-                    cursor.read_to_end(&mut icc_profile)?;
-                    info.icc_profile = Some(icc_profile);
-                }
-                WebPRiffChunk::VP8 => {
-                    if static_frame.is_none() {
-                        let vp8_frame = read_lossy(cursor)?;
-
-                        let img = WebPStatic::from_lossy(vp8_frame)?;
-
-                        static_frame = Some(img);
-                    }
-                }
-                WebPRiffChunk::VP8L => {
-                    if static_frame.is_none() {
-                        let mut lossless_decoder = LosslessDecoder::new(cursor);
-                        let frame = lossless_decoder.decode_frame()?;
-                        let image = WebPStatic::Lossless(frame.clone());
-
-                        static_frame = Some(image);
-                    }
-                }
-                _ => return Err(ChunkHeaderInvalid(chunk.to_fourcc()).into()),
+                let blended =
+                    do_alpha_blending(input.try_into().unwrap(), output.try_into().unwrap());
+                output.copy_from_slice(&blended);
             }
         }
+    } else if frame_has_alpha {
+        for y in 0..height {
+            let frame_index = (y * frame_width as usize) * 3;
+            let canvas_index = (y + frame_offset_y as usize) * canvas_width as usize * 4;
 
-        let image = if let Some(info) = anim_info {
-            if anim_frames.is_empty() {
-                return Err(DecodingError::IoError(io::ErrorKind::UnexpectedEof.into()));
+            canvas[canvas_index..][..width * 4].copy_from_slice(&frame[frame_index..][..width * 3]);
+        }
+    } else {
+        for y in 0..height {
+            let index = (y * frame_width as usize) * 3;
+            let canvas_index = (y + frame_offset_y as usize) * canvas_width as usize * 4;
+
+            let input = &frame[index..][..width * 3];
+            let output = &mut canvas[canvas_index..][..width * 4];
+
+            for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(4)) {
+                output[..3].copy_from_slice(input);
+                output[3] = 255;
             }
-            ExtendedImageData::Animation {
-                frames: anim_frames,
-                anim_info: info,
-            }
-        } else if let Some(frame) = static_frame {
-            ExtendedImageData::Static(frame)
-        } else {
-            //reached end of file too early before image data was reached
-            return Err(DecodingError::IoError(io::ErrorKind::UnexpectedEof.into()));
-        };
-
-        let image = ExtendedImage {
-            image,
-            info,
-            canvas: None,
-            next_frame: 0,
-        };
-
-        Ok(image)
+        }
     }
+}
 
-    fn read_anim_info<R: Read>(reader: &mut R) -> Result<WebPAnimatedInfo, DecodingError> {
-        let mut colors: [u8; 4] = [0; 4];
-        reader.read_exact(&mut colors)?;
+fn do_alpha_blending(buffer: [u8; 4], canvas: [u8; 4]) -> [u8; 4] {
+    let canvas_alpha = f64::from(canvas[3]);
+    let buffer_alpha = f64::from(buffer[3]);
+    let blend_alpha_f64 = buffer_alpha + canvas_alpha * (1.0 - buffer_alpha / 255.0);
+    //value should be between 0 and 255, this truncates the fractional part
+    let blend_alpha: u8 = blend_alpha_f64 as u8;
 
-        //background color is [blue, green, red, alpha]
-        let background_color = [colors[2], colors[1], colors[0], colors[3]];
+    let blend_rgb: [u8; 3] = if blend_alpha == 0 {
+        [0, 0, 0]
+    } else {
+        let mut rgb = [0u8; 3];
+        for i in 0..3 {
+            let canvas_f64 = f64::from(canvas[i]);
+            let buffer_f64 = f64::from(buffer[i]);
 
-        let loop_count = reader.read_u16::<LittleEndian>()?;
-
-        let info = WebPAnimatedInfo {
-            background_color,
-            _loop_count: loop_count,
-        };
-
-        Ok(info)
-    }
-
-    /// Composites a frame onto a canvas.
-    ///
-    /// Starts by filling the canvas with the background color, if provided. Then copies or blends
-    /// the frame onto the canvas.
-    fn composite_frame(
-        canvas: &mut [u8],
-        canvas_width: u32,
-        canvas_height: u32,
-        clear_color: Option<[u8; 4]>,
-        anim_image: &AnimatedFrame,
-    ) {
-        if anim_image.offset_x == 0
-            && anim_image.offset_y == 0
-            && anim_image.width == canvas_width
-            && anim_image.height == canvas_height
-        {
-            anim_image.image.fill_buf(canvas);
-            return;
+            let val = (buffer_f64 * buffer_alpha
+                + canvas_f64 * canvas_alpha * (1.0 - buffer_alpha / 255.0))
+                / blend_alpha_f64;
+            //value should be between 0 and 255, this truncates the fractional part
+            rgb[i] = val as u8;
         }
 
-        let mut buffer = vec![0; anim_image.image.get_buf_size()];
-        anim_image.image.fill_buf(&mut buffer);
+        rgb
+    };
 
-        let has_alpha = anim_image.image.has_alpha();
+    [blend_rgb[0], blend_rgb[1], blend_rgb[2], blend_alpha]
+}
 
-        if let Some(clear_color) = clear_color {
-            if has_alpha {
-                for pixel in canvas.chunks_exact_mut(4) {
-                    pixel.copy_from_slice(&clear_color);
-                }
+pub(crate) fn get_alpha_predictor(
+    x: usize,
+    y: usize,
+    width: usize,
+    filtering_method: FilteringMethod,
+    image_slice: &[u8],
+) -> u8 {
+    match filtering_method {
+        FilteringMethod::None => 0,
+        FilteringMethod::Horizontal => {
+            if x == 0 && y == 0 {
+                0
+            } else if x == 0 {
+                let index = (y - 1) * width + x;
+                image_slice[index * 4 + 3]
             } else {
-                for pixel in canvas.chunks_exact_mut(3) {
-                    pixel.copy_from_slice(&clear_color[..3]);
+                let index = y * width + x - 1;
+                image_slice[index * 4 + 3]
+            }
+        }
+        FilteringMethod::Vertical => {
+            if x == 0 && y == 0 {
+                0
+            } else if y == 0 {
+                let index = y * width + x - 1;
+                image_slice[index * 4 + 3]
+            } else {
+                let index = (y - 1) * width + x;
+                image_slice[index * 4 + 3]
+            }
+        }
+        FilteringMethod::Gradient => {
+            let (left, top, top_left) = match (x, y) {
+                (0, 0) => (0, 0, 0),
+                (0, y) => {
+                    let above_index = (y - 1) * width + x;
+                    let val = image_slice[above_index * 4 + 3];
+                    (val, val, val)
                 }
-            }
-        }
-
-        let width = anim_image
-            .width
-            .min(canvas_width.saturating_sub(anim_image.offset_x)) as usize;
-        let height = anim_image
-            .height
-            .min(canvas_height.saturating_sub(anim_image.offset_y)) as usize;
-
-        if has_alpha && anim_image.use_alpha_blending {
-            for y in 0..height {
-                for x in 0..width {
-                    let frame_index = (x + y * anim_image.width as usize) * 4;
-                    let canvas_index = ((x + anim_image.offset_x as usize)
-                        + (y + anim_image.offset_y as usize) * canvas_width as usize)
-                        * 4;
-
-                    let input = &buffer[frame_index..][..4];
-                    let output = &mut canvas[canvas_index..][..4];
-
-                    let blended = Self::do_alpha_blending(
-                        input.try_into().unwrap(),
-                        output.try_into().unwrap(),
-                    );
-                    output.copy_from_slice(&blended);
+                (x, 0) => {
+                    let before_index = y * width + x - 1;
+                    let val = image_slice[before_index * 4 + 3];
+                    (val, val, val)
                 }
-            }
-        } else if has_alpha {
-            for y in 0..height {
-                let frame_index = (y * anim_image.width as usize) * 3;
-                let canvas_index = (y + anim_image.offset_y as usize) * canvas_width as usize * 4;
+                (x, y) => {
+                    let left_index = y * width + x - 1;
+                    let left = image_slice[left_index * 4 + 3];
+                    let top_index = (y - 1) * width + x;
+                    let top = image_slice[top_index * 4 + 3];
+                    let top_left_index = (y - 1) * width + x - 1;
+                    let top_left = image_slice[top_left_index * 4 + 3];
 
-                canvas[canvas_index..][..width * 4]
-                    .copy_from_slice(&buffer[frame_index..][..width * 3]);
-            }
-        } else {
-            for y in 0..height {
-                let index = (y * anim_image.width as usize) * 3;
-                let canvas_index = (y + anim_image.offset_y as usize) * canvas_width as usize * 4;
-
-                let input = &buffer[index..][..width * 3];
-                let output = &mut canvas[canvas_index..][..width * 4];
-
-                for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(4)) {
-                    output[..3].copy_from_slice(input);
-                    output[3] = 255;
+                    (left, top, top_left)
                 }
-            }
+            };
+
+            let combination = i16::from(left) + i16::from(top) - i16::from(top_left);
+            i16::clamp(combination, 0, 255).try_into().unwrap()
         }
     }
-
-    fn do_alpha_blending(buffer: [u8; 4], canvas: [u8; 4]) -> [u8; 4] {
-        let canvas_alpha = f64::from(canvas[3]);
-        let buffer_alpha = f64::from(buffer[3]);
-        let blend_alpha_f64 = buffer_alpha + canvas_alpha * (1.0 - buffer_alpha / 255.0);
-        //value should be between 0 and 255, this truncates the fractional part
-        let blend_alpha: u8 = blend_alpha_f64 as u8;
-
-        let blend_rgb: [u8; 3] = if blend_alpha == 0 {
-            [0, 0, 0]
-        } else {
-            let mut rgb = [0u8; 3];
-            for i in 0..3 {
-                let canvas_f64 = f64::from(canvas[i]);
-                let buffer_f64 = f64::from(buffer[i]);
-
-                let val = (buffer_f64 * buffer_alpha
-                    + canvas_f64 * canvas_alpha * (1.0 - buffer_alpha / 255.0))
-                    / blend_alpha_f64;
-                //value should be between 0 and 255, this truncates the fractional part
-                rgb[i] = val as u8;
-            }
-
-            rgb
-        };
-
-        [blend_rgb[0], blend_rgb[1], blend_rgb[2], blend_alpha]
-    }
-
-    pub(crate) fn fill_buf(&self, buf: &mut [u8]) {
-        match &self.image {
-            ExtendedImageData::Animation { frames, anim_info } => {
-                let bg_color = if self.info._alpha {
-                    [0; 4]
-                } else {
-                    anim_info.background_color
-                };
-                Self::composite_frame(
-                    buf,
-                    self.info.canvas_width,
-                    self.info.canvas_height,
-                    Some(bg_color),
-                    &frames[0], // will always have at least one frame
-                );
-            }
-            ExtendedImageData::Static(image) => {
-                image.fill_buf(buf);
-            }
-        }
-    }
-
-    pub(crate) fn set_background_color(&mut self, color: [u8; 4]) -> Result<(), DecodingError> {
-        match &mut self.image {
-            ExtendedImageData::Animation { anim_info, .. } => {
-                anim_info.background_color = color;
-                Ok(())
-            }
-            _ => Err(DecodingError::InvalidParameter(
-                "Background color can only be set on animated webp".to_owned(),
-            )),
-        }
-    }
-}
-
-enum WebPStatic {
-    LossyWithAlpha(RgbaImage),
-    LossyWithoutAlpha(RgbImage),
-    Lossless(LosslessFrame),
-}
-
-impl WebPStatic {
-    pub(crate) fn from_alpha_lossy(
-        alpha: AlphaChunk,
-        vp8_frame: VP8Frame,
-    ) -> Result<WebPStatic, DecodingError> {
-        if alpha.data.len() != usize::from(vp8_frame.width) * usize::from(vp8_frame.height) {
-            return Err(DecodingError::AlphaChunkSizeMismatch.into());
-        }
-
-        let size = usize::from(vp8_frame.width).checked_mul(usize::from(vp8_frame.height) * 4);
-        let mut image_vec = match size {
-            Some(size) => vec![0u8; size],
-            None => return Err(DecodingError::ImageTooLarge.into()),
-        };
-
-        vp8_frame.fill_rgba(&mut image_vec);
-
-        for y in 0..vp8_frame.height {
-            for x in 0..vp8_frame.width {
-                let predictor: u8 = WebPStatic::get_predictor(
-                    x.into(),
-                    y.into(),
-                    vp8_frame.width.into(),
-                    alpha.filtering_method,
-                    &image_vec,
-                );
-                let predictor = u16::from(predictor);
-
-                let alpha_index = usize::from(y) * usize::from(vp8_frame.width) + usize::from(x);
-                let alpha_val = alpha.data[alpha_index];
-                let alpha: u8 = ((predictor + u16::from(alpha_val)) % 256)
-                    .try_into()
-                    .unwrap();
-
-                let alpha_index = alpha_index * 4 + 3;
-                image_vec[alpha_index] = alpha;
-            }
-        }
-
-        Ok(WebPStatic::LossyWithAlpha(RgbaImage {
-            _width: vp8_frame.width.into(),
-            _height: vp8_frame.height.into(),
-            data: image_vec,
-        }))
-    }
-
-    fn get_predictor(
-        x: usize,
-        y: usize,
-        width: usize,
-        filtering_method: FilteringMethod,
-        image_slice: &[u8],
-    ) -> u8 {
-        match filtering_method {
-            FilteringMethod::None => 0,
-            FilteringMethod::Horizontal => {
-                if x == 0 && y == 0 {
-                    0
-                } else if x == 0 {
-                    let index = (y - 1) * width + x;
-                    image_slice[index * 4 + 3]
-                } else {
-                    let index = y * width + x - 1;
-                    image_slice[index * 4 + 3]
-                }
-            }
-            FilteringMethod::Vertical => {
-                if x == 0 && y == 0 {
-                    0
-                } else if y == 0 {
-                    let index = y * width + x - 1;
-                    image_slice[index * 4 + 3]
-                } else {
-                    let index = (y - 1) * width + x;
-                    image_slice[index * 4 + 3]
-                }
-            }
-            FilteringMethod::Gradient => {
-                let (left, top, top_left) = match (x, y) {
-                    (0, 0) => (0, 0, 0),
-                    (0, y) => {
-                        let above_index = (y - 1) * width + x;
-                        let val = image_slice[above_index * 4 + 3];
-                        (val, val, val)
-                    }
-                    (x, 0) => {
-                        let before_index = y * width + x - 1;
-                        let val = image_slice[before_index * 4 + 3];
-                        (val, val, val)
-                    }
-                    (x, y) => {
-                        let left_index = y * width + x - 1;
-                        let left = image_slice[left_index * 4 + 3];
-                        let top_index = (y - 1) * width + x;
-                        let top = image_slice[top_index * 4 + 3];
-                        let top_left_index = (y - 1) * width + x - 1;
-                        let top_left = image_slice[top_left_index * 4 + 3];
-
-                        (left, top, top_left)
-                    }
-                };
-
-                let combination = i16::from(left) + i16::from(top) - i16::from(top_left);
-                i16::clamp(combination, 0, 255).try_into().unwrap()
-            }
-        }
-    }
-
-    pub(crate) fn from_lossy(vp8_frame: VP8Frame) -> Result<WebPStatic, DecodingError> {
-        let mut image = RgbImage {
-            _width: vp8_frame.width.into(),
-            _height: vp8_frame.height.into(),
-            data: vec![0; usize::from(vp8_frame.width) * usize::from(vp8_frame.height) * 3],
-        };
-
-        vp8_frame.fill_rgb(&mut image.data);
-
-        Ok(WebPStatic::LossyWithoutAlpha(image))
-    }
-
-    pub(crate) fn fill_buf(&self, buf: &mut [u8]) {
-        match self {
-            WebPStatic::LossyWithAlpha(image) => {
-                buf.copy_from_slice(&image.data);
-            }
-            WebPStatic::LossyWithoutAlpha(image) => {
-                buf.copy_from_slice(&image.data);
-            }
-            WebPStatic::Lossless(lossless) => {
-                lossless.fill_rgba(buf);
-            }
-        }
-    }
-
-    pub(crate) fn get_buf_size(&self) -> usize {
-        match self {
-            WebPStatic::LossyWithAlpha(rgb_image) => rgb_image.data.len(),
-            WebPStatic::LossyWithoutAlpha(rgba_image) => rgba_image.data.len(),
-            WebPStatic::Lossless(lossless) => lossless.get_buf_size(),
-        }
-    }
-
-    pub(crate) fn has_alpha(&self) -> bool {
-        match self {
-            Self::LossyWithAlpha(..) | Self::Lossless(..) => true,
-            Self::LossyWithoutAlpha(..) => false,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct WebPAnimatedInfo {
-    background_color: [u8; 4],
-    _loop_count: u16,
-}
-
-struct AnimatedFrame {
-    offset_x: u32,
-    offset_y: u32,
-    width: u32,
-    height: u32,
-    duration: u32,
-    use_alpha_blending: bool,
-    dispose: bool,
-    image: WebPStatic,
-}
-
-/// Reads a chunk, but silently ignores unknown chunks at the end of a file
-fn read_extended_chunk<R>(
-    r: &mut R,
-) -> Result<Option<(Cursor<Vec<u8>>, WebPRiffChunk)>, DecodingError>
-where
-    R: Read,
-{
-    let mut unknown_chunk = Ok(());
-
-    while let Some(chunk) = read_fourcc(r)? {
-        let cursor = read_len_cursor(r)?;
-        match chunk {
-            Ok(chunk) => return unknown_chunk.and(Ok(Some((cursor, chunk)))),
-            Err(err) => unknown_chunk = unknown_chunk.and(Err(err)),
-        }
-    }
-
-    Ok(None)
 }
 
 pub(crate) fn read_extended_header<R: Read>(
@@ -599,67 +236,20 @@ pub(crate) fn read_extended_header<R: Read>(
     }
 
     let info = WebPExtendedInfo {
-        _icc_profile: icc_profile,
-        _alpha: alpha,
-        _exif_metadata: exif_metadata,
-        _xmp_metadata: xmp_metadata,
-        _animation: animation,
+        icc_profile,
+        alpha,
+        exif_metadata,
+        xmp_metadata,
+        animation,
         canvas_width,
         canvas_height,
-        icc_profile: None,
+        background_color: [0; 4],
     };
 
     Ok(info)
 }
 
-fn read_anim_frame<R: Read>(
-    mut reader: R,
-    canvas_width: u32,
-    canvas_height: u32,
-) -> Result<AnimatedFrame, DecodingError> {
-    //offsets for the frames are twice the values
-    let frame_x = read_3_bytes(&mut reader)? * 2;
-    let frame_y = read_3_bytes(&mut reader)? * 2;
-
-    let frame_width = read_3_bytes(&mut reader)? + 1;
-    let frame_height = read_3_bytes(&mut reader)? + 1;
-
-    if frame_x + frame_width > canvas_width || frame_y + frame_height > canvas_height {
-        return Err(DecodingError::FrameOutsideImage.into());
-    }
-
-    let duration = read_3_bytes(&mut reader)?;
-
-    let frame_info = reader.read_u8()?;
-    let reserved = frame_info & 0b11111100;
-    if reserved != 0 {
-        return Err(DecodingError::InfoBitsInvalid {
-            name: "reserved",
-            value: reserved.into(),
-        }
-        .into());
-    }
-    let use_alpha_blending = frame_info & 0b00000010 == 0;
-    let dispose = frame_info & 0b00000001 != 0;
-
-    //read normal bitstream now
-    let static_image = read_image(&mut reader, frame_width, frame_height)?;
-
-    let frame = AnimatedFrame {
-        offset_x: frame_x,
-        offset_y: frame_y,
-        width: frame_width,
-        height: frame_height,
-        duration,
-        use_alpha_blending,
-        dispose,
-        image: static_image,
-    };
-
-    Ok(frame)
-}
-
-fn read_3_bytes<R: Read>(reader: &mut R) -> Result<u32, DecodingError> {
+pub(crate) fn read_3_bytes<R: Read>(reader: &mut R) -> Result<u32, DecodingError> {
     let mut buffer: [u8; 3] = [0; 3];
     reader.read_exact(&mut buffer)?;
     let value: u32 =
@@ -667,78 +257,22 @@ fn read_3_bytes<R: Read>(reader: &mut R) -> Result<u32, DecodingError> {
     Ok(value)
 }
 
-fn read_lossy_with_chunk<R: Read>(reader: &mut R) -> Result<VP8Frame, DecodingError> {
-    let (cursor, chunk) =
-        read_chunk(reader)?.ok_or_else(|| Error::from(io::ErrorKind::UnexpectedEof))?;
-
-    if chunk != WebPRiffChunk::VP8 {
-        return Err(ChunkHeaderInvalid(chunk.to_fourcc()).into());
-    }
-
-    read_lossy(cursor)
-}
-
-fn read_lossy(cursor: Cursor<Vec<u8>>) -> Result<VP8Frame, DecodingError> {
-    let mut vp8_decoder = Vp8Decoder::new(cursor);
-    let frame = vp8_decoder.decode_frame()?;
-
-    Ok(frame.clone())
-}
-
-fn read_image<R: Read>(
-    reader: &mut R,
-    width: u32,
-    height: u32,
-) -> Result<WebPStatic, DecodingError> {
-    let chunk = read_chunk(reader)?;
-
-    match chunk {
-        Some((cursor, WebPRiffChunk::VP8)) => {
-            let mut vp8_decoder = Vp8Decoder::new(cursor);
-            let frame = vp8_decoder.decode_frame()?;
-
-            let img = WebPStatic::from_lossy(frame.clone())?;
-
-            Ok(img)
-        }
-        Some((cursor, WebPRiffChunk::VP8L)) => {
-            let mut lossless_decoder = LosslessDecoder::new(cursor);
-            let frame = lossless_decoder.decode_frame()?;
-
-            let img = WebPStatic::Lossless(frame.clone());
-
-            Ok(img)
-        }
-        Some((mut cursor, WebPRiffChunk::ALPH)) => {
-            let alpha_chunk = read_alpha_chunk(&mut cursor, width, height)?;
-
-            let vp8_frame = read_lossy_with_chunk(reader)?;
-
-            let img = WebPStatic::from_alpha_lossy(alpha_chunk, vp8_frame)?;
-
-            Ok(img)
-        }
-        None => Err(DecodingError::IoError(io::ErrorKind::UnexpectedEof.into())),
-        Some((_, chunk)) => Err(ChunkHeaderInvalid(chunk.to_fourcc()).into()),
-    }
-}
-
 #[derive(Debug)]
-struct AlphaChunk {
+pub(crate) struct AlphaChunk {
     _preprocessing: bool,
-    filtering_method: FilteringMethod,
-    data: Vec<u8>,
+    pub(crate) filtering_method: FilteringMethod,
+    pub(crate) data: Vec<u8>,
 }
 
 #[derive(Debug, Copy, Clone)]
-enum FilteringMethod {
+pub(crate) enum FilteringMethod {
     None,
     Horizontal,
     Vertical,
     Gradient,
 }
 
-fn read_alpha_chunk<R: Read>(
+pub(crate) fn read_alpha_chunk<R: Read>(
     reader: &mut R,
     width: u32,
     height: u32,
@@ -797,7 +331,8 @@ fn read_alpha_chunk<R: Read>(
         let cursor = io::Cursor::new(framedata);
 
         let mut decoder = LosslessDecoder::new(cursor);
-        //this is a potential problem for large images; would require rewriting lossless decoder to use u32 for width and height
+        //this is a potential problem for large images; would require rewriting lossless decoder to
+        //use u32 for width and height
         let width: u16 = width.try_into().map_err(|_| DecodingError::ImageTooLarge)?;
         let height: u16 = height
             .try_into()

@@ -1,5 +1,5 @@
 [package]
-name = "image-webp"
+name = "webp"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -9,3 +9,7 @@ publish = false
 byteorder = "1.4.3"
 num-traits = "0.2.16"
 thiserror = "1.0.47"
+
+[dev-dependencies]
+paste = "1.0.14"
+png = "0.17.10"

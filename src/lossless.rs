@@ -685,11 +685,6 @@ impl LosslessFrame {
         }
     }
 
-    /// Get buffer size from the image
-    pub(crate) fn get_buf_size(&self) -> usize {
-        usize::from(self.width) * usize::from(self.height) * 4
-    }
-
     /// Fills a buffer with just the green values from the lossless decoding
     /// Used in extended alpha decoding
     pub(crate) fn fill_green(&self, buf: &mut [u8]) {
