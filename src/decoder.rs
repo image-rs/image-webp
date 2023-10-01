@@ -498,7 +498,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
         self.read_chunk(WebPRiffChunk::EXIF, self.memory_limit)
     }
 
-    // Returns the raw bytes of the XMP metadata, or None if there is no XMP metadata.
+    /// Returns the raw bytes of the XMP metadata, or None if there is no XMP metadata.
     pub fn xmp_metadata(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
         self.read_chunk(WebPRiffChunk::XMP, self.memory_limit)
     }
