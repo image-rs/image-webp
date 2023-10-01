@@ -1,4 +1,4 @@
-use std::io::{Cursor, Write};
+use std::io::Cursor;
 
 fn refence_test(file: &str) {
     // Decode reference PNG
@@ -30,22 +30,39 @@ fn refence_test(file: &str) {
     let mut data = vec![0; width as usize * height as usize * bytes_per_pixel];
     decoder.read_image(&mut data).unwrap();
 
-    // Compare pixels
-    if data != reference_data {
-        println!("Pixel mismatch");
+    // // Save mismatching images
+    // if data != reference_data {
+    //     let mut f = std::fs::File::create(format!("tests/out/{file}.png")).unwrap();
+    //     let mut encoder = png::Encoder::new(&mut f, width, height);
+    //     encoder.set_color(png::ColorType::Rgba);
+    //     encoder
+    //         .write_header()
+    //         .unwrap()
+    //         .write_image_data(&data)
+    //         .unwrap();
+    //     f.flush().unwrap();
+    // }
 
-        let mut f = std::fs::File::create(format!("tests/out/{file}.png")).unwrap();
-        let mut encoder = png::Encoder::new(&mut f, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder
-            .write_header()
-            .unwrap()
-            .write_image_data(&data)
-            .unwrap();
-        f.flush().unwrap();
-        //panic!();
+    // Compare pixels
+    if !decoder.is_lossy() {
+        if data != reference_data {
+            panic!("Pixel mismatch")
+        }
+    } else {
+        // NOTE: WebP lossy images are stored in YUV format. The conversion to RGB is not precisely
+        // defined, but we currently attempt to match the dwebp's "-nofancy" conversion option.
+        //
+        // TODO: Investigate why we don't get bit exact output for all pixels.
+        let num_bytes_different = data
+            .iter()
+            .zip(reference_data.iter())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            100 * num_bytes_different / data.len() < 10,
+            "More than 10% of pixels differ"
+        );
     }
-    println!("OK")
 }
 
 macro_rules! reftest {
