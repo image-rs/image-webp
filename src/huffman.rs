@@ -69,7 +69,7 @@ impl HuffmanTree {
             return Err(DecodingError::HuffmanError);
         }
 
-        let mut code_length_hist = vec![0; MAX_ALLOWED_CODE_LENGTH + 1];
+        let mut code_length_hist = [0; MAX_ALLOWED_CODE_LENGTH + 1];
 
         for &length in code_lengths.iter() {
             code_length_hist[usize::from(length)] += 1;
@@ -78,7 +78,7 @@ impl HuffmanTree {
         code_length_hist[0] = 0;
 
         let mut curr_code = 0;
-        let mut next_codes = vec![None; MAX_ALLOWED_CODE_LENGTH + 1];
+        let mut next_codes = [None; MAX_ALLOWED_CODE_LENGTH + 1];
 
         for code_len in 1..=usize::from(max_code_length) {
             curr_code = (curr_code + code_length_hist[code_len - 1]) << 1;
@@ -114,7 +114,7 @@ impl HuffmanTree {
 
         for length in (0..code_length).rev() {
             if node_index >= self.max_nodes {
-                return Err(DecodingError::HuffmanError.into());
+                return Err(DecodingError::HuffmanError);
             }
 
             let node = self.tree[node_index];
@@ -122,11 +122,11 @@ impl HuffmanTree {
             let offset = match node {
                 HuffmanTreeNode::Empty => {
                     if self.is_full() {
-                        return Err(DecodingError::HuffmanError.into());
+                        return Err(DecodingError::HuffmanError);
                     }
                     self.assign_children(node_index)
                 }
-                HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError.into()),
+                HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
                 HuffmanTreeNode::Branch(offset) => offset,
             };
 
@@ -135,8 +135,8 @@ impl HuffmanTree {
 
         match self.tree[node_index] {
             HuffmanTreeNode::Empty => self.tree[node_index] = HuffmanTreeNode::Leaf(symbol),
-            HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError.into()),
-            HuffmanTreeNode::Branch(_offset) => return Err(DecodingError::HuffmanError.into()),
+            HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
+            HuffmanTreeNode::Branch(_offset) => return Err(DecodingError::HuffmanError),
         }
 
         Ok(())
@@ -198,7 +198,7 @@ impl HuffmanTree {
 
         let symbol = match node {
             HuffmanTreeNode::Branch(_) => unreachable!(),
-            HuffmanTreeNode::Empty => return Err(DecodingError::HuffmanError.into()),
+            HuffmanTreeNode::Empty => return Err(DecodingError::HuffmanError),
             HuffmanTreeNode::Leaf(symbol) => symbol,
         };
 

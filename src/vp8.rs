@@ -47,9 +47,10 @@ const B_HU_PRED: i8 = 9;
 
 // Prediction mode enum
 #[repr(i8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum LumaMode {
     /// Predict DC using row above and column to the left.
+    #[default]
     DC = DC_PRED,
 
     /// Predict rows using row above.
@@ -66,9 +67,10 @@ enum LumaMode {
 }
 
 #[repr(i8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum ChromaMode {
     /// Predict DC using row above and column to the left.
+    #[default]
     DC = DC_PRED,
 
     /// Predict rows using row above.
@@ -82,8 +84,9 @@ enum ChromaMode {
 }
 
 #[repr(i8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum IntraMode {
+    #[default]
     DC = B_DC_PRED,
     TM = B_TM_PRED,
     VE = B_VE_PRED,
@@ -686,7 +689,7 @@ impl BoolReader {
 
     pub(crate) fn init(&mut self, buf: Vec<u8>) -> Result<(), DecodingError> {
         if buf.len() < 2 {
-            return Err(DecodingError::NotEnoughInitData.into());
+            return Err(DecodingError::NotEnoughInitData);
         }
 
         self.buf = buf;
@@ -887,7 +890,7 @@ impl Frame {
 
         /// _mm_mulhi_epu16 emulation
         fn mulhi(v: u8, coeff: u16) -> i32 {
-            return ((u32::from(v) * u32::from(coeff)) >> 8) as i32;
+            ((u32::from(v) * u32::from(coeff)) >> 8) as i32
         }
         fn clip(v: i32) -> u8 {
             if (v & !YUV_MASK2) == 0 {
@@ -1211,7 +1214,7 @@ impl<R: Read> Vp8Decoder<R> {
             self.r.read_exact(&mut tag)?;
 
             if tag != [0x9d, 0x01, 0x2a] {
-                return Err(DecodingError::Vp8MagicInvalid(tag).into());
+                return Err(DecodingError::Vp8MagicInvalid(tag));
             }
 
             let w = self.r.read_u16::<LittleEndian>()?;
@@ -1248,7 +1251,7 @@ impl<R: Read> Vp8Decoder<R> {
             self.frame.pixel_type = self.b.read_literal(1);
 
             if color_space != 0 {
-                return Err(DecodingError::ColorSpaceInvalid(color_space).into());
+                return Err(DecodingError::ColorSpaceInvalid(color_space));
             }
         }
 
@@ -2077,12 +2080,6 @@ impl LumaMode {
     }
 }
 
-impl Default for LumaMode {
-    fn default() -> Self {
-        LumaMode::DC
-    }
-}
-
 impl ChromaMode {
     fn from_i8(val: i8) -> Option<Self> {
         Some(match val {
@@ -2092,12 +2089,6 @@ impl ChromaMode {
             TM_PRED => ChromaMode::TM,
             _ => return None,
         })
-    }
-}
-
-impl Default for ChromaMode {
-    fn default() -> Self {
-        ChromaMode::DC
     }
 }
 
@@ -2116,12 +2107,6 @@ impl IntraMode {
             B_HU_PRED => IntraMode::HU,
             _ => return None,
         })
-    }
-}
-
-impl Default for IntraMode {
-    fn default() -> Self {
-        IntraMode::DC
     }
 }
 

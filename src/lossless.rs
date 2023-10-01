@@ -187,7 +187,7 @@ impl<R: Read> LosslessDecoder<R> {
 
             if self.transforms[usize::from(transform_type_val)].is_some() {
                 //can only have one of each transform, error
-                return Err(DecodingError::TransformError.into());
+                return Err(DecodingError::TransformError);
             }
 
             self.transform_order.push(transform_type_val);
@@ -415,18 +415,18 @@ impl<R: Read> LosslessDecoder<R> {
                     0 => 2,
                     1 => 3,
                     2 => 7,
-                    _ => return Err(DecodingError::BitStreamError.into()),
+                    _ => return Err(DecodingError::BitStreamError),
                 };
                 let repeat_offset = match slot {
                     0 | 1 => 3,
                     2 => 11,
-                    _ => return Err(DecodingError::BitStreamError.into()),
+                    _ => return Err(DecodingError::BitStreamError),
                 };
 
                 let mut repeat = self.bit_reader.read_bits::<u16>(extra_bits)? + repeat_offset;
 
                 if symbol + repeat > num_symbols {
-                    return Err(DecodingError::BitStreamError.into());
+                    return Err(DecodingError::BitStreamError);
                 } else {
                     let length = if use_prev { prev_code_len } else { 0 };
                     while repeat > 0 {
@@ -493,7 +493,7 @@ impl<R: Read> LosslessDecoder<R> {
                 let dist = Self::plane_code_to_distance(width, dist_code);
 
                 if index < dist || num_values - index < length {
-                    return Err(DecodingError::BitStreamError.into());
+                    return Err(DecodingError::BitStreamError);
                 }
 
                 for i in 0..length {
@@ -521,7 +521,7 @@ impl<R: Read> LosslessDecoder<R> {
                     }
                     data[index] = color_cache.lookup(key.into())?;
                 } else {
-                    return Err(DecodingError::BitStreamError.into());
+                    return Err(DecodingError::BitStreamError);
                 }
                 index += 1;
                 x += 1;
@@ -541,7 +541,7 @@ impl<R: Read> LosslessDecoder<R> {
             let code_bits = self.bit_reader.read_bits::<u8>(4)?;
 
             if !(1..=11).contains(&code_bits) {
-                return Err(DecodingError::InvalidColorCacheBits(code_bits).into());
+                return Err(DecodingError::InvalidColorCacheBits(code_bits));
             }
 
             Ok(Some(code_bits))
@@ -617,7 +617,7 @@ impl ColorCache {
     fn lookup(&self, index: usize) -> Result<u32, DecodingError> {
         match self.color_cache.get(index) {
             Some(&value) => Ok(value),
-            None => Err(DecodingError::BitStreamError.into()),
+            None => Err(DecodingError::BitStreamError),
         }
     }
 }
@@ -650,7 +650,7 @@ impl BitReader {
 
         for i in 0..num {
             if self.buf.len() <= self.index {
-                return Err(DecodingError::BitStreamError.into());
+                return Err(DecodingError::BitStreamError);
             }
             let bit_true = self.buf[self.index] & (1 << self.bit_count) != 0;
             value += T::from(bit_true) << i;
