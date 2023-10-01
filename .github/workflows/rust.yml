@@ -16,7 +16,7 @@ jobs:
       matrix:
         rust: ["1.67.1", nightly, beta, stable]
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: ${{ matrix.rust }}
@@ -41,7 +41,7 @@ jobs:
     # we are using the cross project for cross compilation to mips:
     # https://github.com/cross-rs/cross
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Install or use cached cross-rs/cross
         uses: baptiste0928/cargo-install@v1
@@ -75,7 +75,7 @@ jobs:
     steps:
     - name: install-dependencies
       run: sudo apt update && sudo apt install ninja-build meson nasm
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
@@ -86,7 +86,7 @@ jobs:
   build_benchmarks:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@nightly
     - name: build
       run: cargo build -v --benches
@@ -94,7 +94,7 @@ jobs:
   rustfmt:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt
@@ -104,7 +104,7 @@ jobs:
   verify_msrv:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Install or use cached `cargo-msrv`
       uses: baptiste0928/cargo-install@v1
       with:
