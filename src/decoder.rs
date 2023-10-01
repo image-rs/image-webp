@@ -1,15 +1,17 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
-use std::convert::TryFrom;
+
 use std::io::{self, BufReader, Cursor, Read, Seek};
-use std::mem;
+
 use std::ops::Range;
 use thiserror::Error;
 
-use crate::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo};
+use crate::extended::{
+    self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo,
+};
 
-use super::lossless::{LosslessDecoder, LosslessFrame};
-use super::vp8::{Frame as VP8Frame, Vp8Decoder};
+use super::lossless::{LosslessDecoder};
+use super::vp8::{Vp8Decoder};
 
 /// All errors that can occur when attempting to parse a WEBP container
 #[derive(Error, Debug)]
@@ -506,12 +508,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
     pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
         assert_eq!(buf.len(), self.output_buffer_size());
 
-        if self.has_animation() {
-            let state = mem::take(&mut self.animation);
-            self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start;
-            self.read_frame(buf)?;
-            self.animation = state;
-        } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
+        if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
             let mut frame = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
             let frame = frame.decode_frame()?;
             if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
@@ -544,8 +541,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                     &mut range_reader(&mut self.r, range.start..range.end)?,
                     self.width,
                     self.height,
-                )
-                .expect("REMOVE");
+                )?;
 
                 for y in 0..frame.height {
                     for x in 0..frame.width {
@@ -677,7 +673,24 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
                 frame.fill_rgba(&mut rgba_frame);
 
-                todo!("apply alpha");
+                for y in 0..frame.height {
+                    for x in 0..frame.width {
+                        let predictor: u8 = get_alpha_predictor(
+                            x.into(),
+                            y.into(),
+                            frame.width.into(),
+                            alpha_chunk.filtering_method,
+                            &rgba_frame,
+                        );
+
+                        let alpha_index =
+                            usize::from(y) * usize::from(frame.width) + usize::from(x);
+                        let buffer_index = alpha_index * 4 + 3;
+
+                        rgba_frame[buffer_index] =
+                            predictor.wrapping_add(alpha_chunk.data[alpha_index]);
+                    }
+                }
 
                 (rgba_frame, true)
             }
@@ -713,6 +726,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
             self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start;
             self.animation.dispose_next_frame = true;
         }
+
+        buf.copy_from_slice(&self.animation.canvas.as_ref().unwrap());
 
         Ok(Some(duration))
     }
