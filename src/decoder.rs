@@ -152,7 +152,7 @@ impl WebPRiffChunk {
         }
     }
 
-    pub(crate) fn to_fourcc(&self) -> [u8; 4] {
+    pub(crate) fn to_fourcc(self) -> [u8; 4] {
         match self {
             Self::RIFF => *b"RIFF",
             Self::WEBP => *b"WEBP",
@@ -165,7 +165,7 @@ impl WebPRiffChunk {
             Self::ICCP => *b"ICCP",
             Self::EXIF => *b"EXIF",
             Self::XMP => *b"XMP ",
-            Self::Unknown(fourcc) => *fourcc,
+            Self::Unknown(fourcc) => fourcc,
         }
     }
 
@@ -248,7 +248,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
 
         match &read_fourcc(&mut self.r)? {
             WebPRiffChunk::WEBP => {}
-            fourcc => return Err(DecodingError::WebpSignatureInvalid(fourcc.to_fourcc()).into()),
+            fourcc => return Err(DecodingError::WebpSignatureInvalid(fourcc.to_fourcc())),
         }
 
         let (chunk, chunk_size, chunk_size_rounded) = read_chunk_header(&mut self.r)?;
@@ -268,7 +268,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 let mut tag = [0u8; 3];
                 self.r.read_exact(&mut tag)?;
                 if tag != [0x9d, 0x01, 0x2a] {
-                    return Err(DecodingError::Vp8MagicInvalid(tag).into());
+                    return Err(DecodingError::Vp8MagicInvalid(tag));
                 }
 
                 let w = self.r.read_u16::<LittleEndian>()?;
@@ -293,8 +293,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
                     return Err(DecodingError::VersionNumberInvalid(version as u8));
                 }
 
-                self.width = 1 + header & 0x3FFF;
-                self.height = 1 + (header >> 14) & 0x3FFF;
+                self.width = (1 + header) & 0x3FFF;
+                self.height = (1 + (header >> 14)) & 0x3FFF;
                 self.chunks
                     .insert(WebPRiffChunk::VP8L, start..start + chunk_size as u64);
                 self.kind = ImageKind::Lossless;
@@ -356,8 +356,9 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 }
                 self.is_lossy = self.is_lossy || self.chunks.contains_key(&WebPRiffChunk::VP8);
 
-                if info.animation && !self.chunks.contains_key(&WebPRiffChunk::ANIM)
-                    || info.animation && !self.chunks.contains_key(&WebPRiffChunk::ANMF)
+                if info.animation
+                    && (!self.chunks.contains_key(&WebPRiffChunk::ANIM)
+                        || !self.chunks.contains_key(&WebPRiffChunk::ANMF))
                     || info.icc_profile && !self.chunks.contains_key(&WebPRiffChunk::ICCP)
                     || info.exif_metadata && !self.chunks.contains_key(&WebPRiffChunk::EXIF)
                     || info.xmp_metadata && !self.chunks.contains_key(&WebPRiffChunk::XMP)
@@ -411,7 +412,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
 
                 self.kind = ImageKind::Extended(info);
             }
-            _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into()),
+            _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc())),
         };
 
         Ok(())
@@ -548,7 +549,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                             y.into(),
                             frame.width.into(),
                             alpha_chunk.filtering_method,
-                            &buf,
+                            buf,
                         );
 
                         let alpha_index =
@@ -597,7 +598,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
         let frame_width = extended::read_3_bytes(&mut self.r)? + 1;
         let frame_height = extended::read_3_bytes(&mut self.r)? + 1;
         if frame_x + frame_width > self.width || frame_y + frame_height > self.height {
-            return Err(DecodingError::FrameOutsideImage.into());
+            return Err(DecodingError::FrameOutsideImage);
         }
         let duration = extended::read_3_bytes(&mut self.r)?;
         let frame_info = self.r.read_u8()?;
@@ -606,8 +607,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             return Err(DecodingError::InfoBitsInvalid {
                 name: "reserved",
                 value: reserved.into(),
-            }
-            .into());
+            });
         }
         let use_alpha_blending = frame_info & 0b00000010 == 0;
         let dispose = frame_info & 0b00000001 != 0;
@@ -621,7 +621,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
         //read normal bitstream now
         let (chunk, chunk_size, chunk_size_rounded) = read_chunk_header(&mut self.r)?;
         if chunk_size_rounded + 32 < anmf_size {
-            return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into());
+            return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()));
         }
 
         let (frame, frame_has_alpha): (Vec<u8>, bool) = match chunk {
@@ -650,7 +650,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             }
             WebPRiffChunk::ALPH => {
                 if chunk_size_rounded + 40 < anmf_size {
-                    return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into());
+                    return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()));
                 }
 
                 // read alpha
@@ -662,7 +662,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
                 let (next_chunk, next_chunk_size, _) = read_chunk_header(&mut self.r)?;
                 if chunk_size + next_chunk_size + 40 > anmf_size {
-                    return Err(DecodingError::ChunkHeaderInvalid(next_chunk.to_fourcc()).into());
+                    return Err(DecodingError::ChunkHeaderInvalid(next_chunk.to_fourcc()));
                 }
 
                 let mut vp8_decoder = Vp8Decoder::new((&mut self.r).take(chunk_size as u64));
@@ -692,7 +692,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
 
                 (rgba_frame, true)
             }
-            _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()).into()),
+            _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc())),
         };
 
         if self.animation.canvas.is_none() {
@@ -725,7 +725,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             self.animation.dispose_next_frame = true;
         }
 
-        buf.copy_from_slice(&self.animation.canvas.as_ref().unwrap());
+        buf.copy_from_slice(self.animation.canvas.as_ref().unwrap());
 
         Ok(Some(duration))
     }

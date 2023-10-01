@@ -23,6 +23,7 @@ pub(crate) struct WebPExtendedInfo {
 ///
 /// Starts by filling the canvas with the background color, if provided. Then copies or blends the
 /// frame onto the canvas.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn composite_frame(
     canvas: &mut [u8],
     canvas_width: u32,
@@ -223,8 +224,7 @@ pub(crate) fn read_extended_header<R: Read>(
         return Err(DecodingError::InfoBitsInvalid {
             name: "reserved",
             value,
-        }
-        .into());
+        });
     }
 
     let canvas_width = read_3_bytes(reader)? + 1;
@@ -232,7 +232,7 @@ pub(crate) fn read_extended_header<R: Read>(
 
     //product of canvas dimensions cannot be larger than u32 max
     if u32::checked_mul(canvas_width, canvas_height).is_none() {
-        return Err(DecodingError::ImageTooLarge.into());
+        return Err(DecodingError::ImageTooLarge);
     }
 
     let info = WebPExtendedInfo {
@@ -288,8 +288,7 @@ pub(crate) fn read_alpha_chunk<R: Read>(
         return Err(DecodingError::InfoBitsInvalid {
             name: "reserved",
             value: reserved.into(),
-        }
-        .into());
+        });
     }
 
     let preprocessing = match preprocessing {
@@ -299,8 +298,7 @@ pub(crate) fn read_alpha_chunk<R: Read>(
             return Err(DecodingError::InfoBitsInvalid {
                 name: "reserved",
                 value: preprocessing.into(),
-            }
-            .into())
+            })
         }
     };
 
@@ -319,8 +317,7 @@ pub(crate) fn read_alpha_chunk<R: Read>(
             return Err(DecodingError::InfoBitsInvalid {
                 name: "lossless compression",
                 value: compression.into(),
-            }
-            .into())
+            })
         }
     };
 
