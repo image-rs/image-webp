@@ -6,12 +6,10 @@ use std::io::{self, BufReader, Cursor, Read, Seek};
 use std::ops::Range;
 use thiserror::Error;
 
-use crate::extended::{
-    self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo,
-};
+use crate::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo};
 
-use super::lossless::{LosslessDecoder};
-use super::vp8::{Vp8Decoder};
+use super::lossless::LosslessDecoder;
+use super::vp8::Vp8Decoder;
 
 /// All errors that can occur when attempting to parse a WEBP container
 #[derive(Error, Debug)]

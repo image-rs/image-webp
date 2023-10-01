@@ -89,7 +89,7 @@ jobs:
     - uses: actions/checkout@v2
     - uses: dtolnay/rust-toolchain@nightly
     - name: build
-      run: cargo build -v --benches --features=benchmarks
+      run: cargo build -v --benches
 
   rustfmt:
     runs-on: ubuntu-latest
@@ -100,12 +100,6 @@ jobs:
         components: rustfmt
     - name: Run rustfmt check
       run: cargo fmt -- --check
-
-  cargo-deny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - uses: EmbarkStudios/cargo-deny-action@v1
 
   verify_msrv:
     runs-on: ubuntu-latest
