@@ -11,7 +11,7 @@ use crate::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedI
 use super::lossless::LosslessDecoder;
 use super::vp8::Vp8Decoder;
 
-/// All errors that can occur when attempting to parse a WEBP container
+/// Errors that can occur when attempting to decode a WebP image
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum DecodingError {
@@ -62,12 +62,15 @@ pub enum DecodingError {
     #[error("Invalid color cache bits: {0}")]
     InvalidColorCacheBits(u8),
 
+    /// An invalid Huffman code was encountered
     #[error("Invalid Huffman code")]
     HuffmanError,
 
+    /// The bitstream was somehow corrupt
     #[error("Corrupt bitstream")]
     BitStreamError,
 
+    /// The transforms specified were invalid
     #[error("Invalid transform")]
     TransformError,
 
@@ -205,7 +208,7 @@ impl Default for AnimationState {
     }
 }
 
-/// WebP Image format decoder. Currently only supports lossy RGB images or lossless RGBA images.
+/// WebP image format decoder.
 pub struct WebPDecoder<R> {
     r: R,
     memory_limit: usize,
@@ -223,8 +226,8 @@ pub struct WebPDecoder<R> {
 }
 
 impl<R: Read + Seek> WebPDecoder<R> {
-    /// Create a new WebPDecoder from the Reader ```r```.
-    /// This function takes ownership of the Reader.
+    /// Create a new WebPDecoder from the reader `r`. The decoder performs many small reads, so the
+    /// reader should be buffered.
     pub fn new(r: R) -> Result<WebPDecoder<R>, DecodingError> {
         let mut decoder = WebPDecoder {
             r,
@@ -418,11 +421,14 @@ impl<R: Read + Seek> WebPDecoder<R> {
         Ok(())
     }
 
+    /// Sets the maximum amount of memory that the decoder is allowed to allocate at once.
+    ///
+    /// TODO: Some allocations currently ignore this limit.
     pub fn set_memory_limit(&mut self, limit: usize) {
         self.memory_limit = limit;
     }
 
-    /// Returns true if the image as described by the bitstream is animated.
+    /// Returns true if the image is animated.
     pub fn has_animation(&self) -> bool {
         match &self.kind {
             ImageKind::Lossy | ImageKind::Lossless => false,
@@ -430,9 +436,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
         }
     }
 
-    /// Returns whether the image has an alpha channel.
-    ///
-    /// If so, the pixel format is Rgba8 and otherwise Rgb8.
+    /// Returns whether the image has an alpha channel. If so, the pixel format is Rgba8 and
+    /// otherwise Rgb8.
     pub fn has_alpha(&self) -> bool {
         match &self.kind {
             ImageKind::Lossy => false,
@@ -483,14 +488,17 @@ impl<R: Read + Seek> WebPDecoder<R> {
         }
     }
 
+    /// Returns the raw bytes of the ICC profile, or None if there is no ICC profile.
     pub fn icc_profile(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
         self.read_chunk(WebPRiffChunk::ICCP, self.memory_limit)
     }
 
+    /// Returns the raw bytes of the EXIF metadata, or None if there is no EXIF metadata.
     pub fn exif_metadata(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
         self.read_chunk(WebPRiffChunk::EXIF, self.memory_limit)
     }
 
+    // Returns the raw bytes of the XMP metadata, or None if there is no XMP metadata.
     pub fn xmp_metadata(&mut self) -> Result<Option<Vec<u8>>, DecodingError> {
         self.read_chunk(WebPRiffChunk::XMP, self.memory_limit)
     }
@@ -501,9 +509,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
         self.width as usize * self.height as usize * bytes_per_pixel
     }
 
-    /// Returns the raw bytes of the image.
-    ///
-    /// For animated images, this is the first frame.
+    /// Returns the raw bytes of the image. For animated images, this is the first frame.
     pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
         assert_eq!(buf.len(), self.output_buffer_size());
 
@@ -569,8 +575,9 @@ impl<R: Read + Seek> WebPDecoder<R> {
 
     /// Reads the next frame of the animation.
     ///
-    /// Writes the frame contents into `buf` and returns the delay of the frame in milliseconds.
-    /// If there are no more frames, the method returns `None` and `buf` is left unchanged.
+    /// The frame contents are written into `buf` and the method returns the delay of the frame in
+    /// milliseconds. If there are no more frames, the method returns `None` and `buf` is left
+    /// unchanged.
     ///
     /// Panics if the image is not animated.
     pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<Option<u32>, DecodingError> {

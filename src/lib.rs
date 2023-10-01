@@ -2,7 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-pub use self::decoder::WebPDecoder;
+pub use self::decoder::{DecodingError, WebPDecoder};
 
 mod decoder;
 mod extended;
