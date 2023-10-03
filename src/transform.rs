@@ -7,6 +7,9 @@ pub(crate) fn idct4x4(block: &mut [i32]) {
         i64::from(block[idx])
     }
 
+    // Perform one lenght check up front to avoid subsequent bounds checks in this function
+    assert!(block.len() >= 16);
+
     for i in 0usize..4 {
         let a1 = fetch(block, i) + fetch(block, 8 + i);
         let b1 = fetch(block, i) - fetch(block, 8 + i);
@@ -46,6 +49,9 @@ pub(crate) fn idct4x4(block: &mut [i32]) {
 
 // 14.3
 pub(crate) fn iwht4x4(block: &mut [i32]) {
+    // Perform one lenght check up front to avoid subsequent bounds checks in this function
+    assert!(block.len() >= 16);
+
     for i in 0usize..4 {
         let a1 = block[i] + block[12 + i];
         let b1 = block[4 + i] + block[8 + i];
