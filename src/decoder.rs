@@ -505,6 +505,9 @@ impl<R: Read + Seek> WebPDecoder<R> {
 
     /// Returns the number of bytes required to store the image or a single frame.
     pub fn output_buffer_size(&self) -> usize {
+        // We do not need to handle the possiblity of overflow here because
+        // WebP images are specified to never exceed the size of 16383 x 16383 pixels,
+        // which is 28 bits. When multiplied by 4 that's 30 bits, which is less than 32 bits.
         let bytes_per_pixel = if self.has_alpha() { 4 } else { 3 };
         self.width as usize * self.height as usize * bytes_per_pixel
     }
