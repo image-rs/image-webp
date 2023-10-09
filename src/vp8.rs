@@ -838,25 +838,84 @@ impl Frame {
 
     /// Fills an rgb buffer with the image
     pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
+        const BPP: usize = 3;
+
         let mut index = 0_usize;
 
         for (y, row) in buf
-            .chunks_exact_mut(usize::from(self.width) * 3)
+            .chunks_exact_mut(usize::from(self.width) * BPP)
             .enumerate()
         {
-            let chroma_index_row = usize::from(self.chroma_width()) * (y / 2);
+            let chroma_index = usize::from(self.chroma_width()) * (y / 2);
 
-            for (x, rgb_chunk) in row.chunks_exact_mut(3).enumerate() {
-                let chroma_index = chroma_index_row + x / 2;
+            let next_index = index + usize::from(self.width);
+            Frame::fill_rgb_row(
+                &self.ybuf[index..next_index],
+                &self.ubuf[chroma_index..],
+                &self.vbuf[chroma_index..],
+                row,
+            );
 
-                Frame::fill_single(
-                    self.ybuf[index],
-                    self.ubuf[chroma_index],
-                    self.vbuf[chroma_index],
-                    rgb_chunk,
-                );
+            index = next_index;
+        }
+    }
 
-                index += 1;
+    fn fill_rgb_row(y_vec: &[u8], u_vec: &[u8], v_vec: &[u8], rgb: &mut [u8]) {
+        const YUV_FIX2: i32 = 6;
+
+        /// _mm_mulhi_epu16 emulation
+        fn mulhi(v: u8, coeff: u16) -> i32 {
+            ((u32::from(v) * u32::from(coeff)) >> 8) as i32
+        }
+
+        fn clip(v: i32) -> u8 {
+            (v.max(0) >> YUV_FIX2).min(255) as u8
+        }
+
+        // Fill 2 pixels per iteration: these pixels share `u` and `v` components
+        let mut rgb_chunks = rgb.chunks_exact_mut(6);
+        let mut y_chunks = y_vec.chunks_exact(2);
+        let mut u_iter = u_vec.iter();
+        let mut v_iter = v_vec.iter();
+
+        for (((rgb, y), &u), &v) in (&mut rgb_chunks)
+            .zip(&mut y_chunks)
+            .zip(&mut u_iter)
+            .zip(&mut v_iter)
+        {
+            let coeffs = [
+                mulhi(v, 26149),
+                mulhi(u, 6419),
+                mulhi(v, 13320),
+                mulhi(u, 33050),
+            ];
+
+            rgb[0] = clip(mulhi(y[0], 19077) + coeffs[0] - 14234);
+            rgb[1] = clip(mulhi(y[0], 19077) - coeffs[1] - coeffs[2] + 8708);
+            rgb[2] = clip(mulhi(y[0], 19077) + coeffs[3] - 17685);
+
+            rgb[3] = clip(mulhi(y[1], 19077) + coeffs[0] - 14234);
+            rgb[4] = clip(mulhi(y[1], 19077) - coeffs[1] - coeffs[2] + 8708);
+            rgb[5] = clip(mulhi(y[1], 19077) + coeffs[3] - 17685);
+        }
+
+        let remainder = rgb_chunks.into_remainder();
+        if remainder.len() >= 3 {
+            if let (Some(&y), Some(&u), Some(&v)) = (
+                y_chunks.remainder().iter().next(),
+                u_iter.next(),
+                v_iter.next(),
+            ) {
+                let coeffs = [
+                    mulhi(v, 26149),
+                    mulhi(u, 6419),
+                    mulhi(v, 13320),
+                    mulhi(u, 33050),
+                ];
+
+                remainder[0] = clip(mulhi(y, 19077) + coeffs[0] - 14234);
+                remainder[1] = clip(mulhi(y, 19077) - coeffs[1] - coeffs[2] + 8708);
+                remainder[2] = clip(mulhi(y, 19077) + coeffs[3] - 17685);
             }
         }
     }
