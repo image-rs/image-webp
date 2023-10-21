@@ -49,7 +49,7 @@ pub(crate) fn idct4x4(block: &mut [i32]) {
 
 // 14.3
 pub(crate) fn iwht4x4(block: &mut [i32]) {
-    // Perform one lenght check up front to avoid subsequent bounds checks in this function
+    // Perform one length check up front to avoid subsequent bounds checks in this function
     assert!(block.len() >= 16);
 
     for i in 0usize..4 {
