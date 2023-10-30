@@ -503,15 +503,18 @@ impl<R: Read + Seek> WebPDecoder<R> {
         self.read_chunk(WebPRiffChunk::XMP, self.memory_limit)
     }
 
-    /// Returns the number of bytes required to store the image or a single frame.
-    pub fn output_buffer_size(&self) -> usize {
+    /// Returns the number of bytes required to store the image or a single frame, or None if that
+    /// would take more than usize::MAX bytes.
+    pub fn output_buffer_size(&self) -> Option<usize> {
         let bytes_per_pixel = if self.has_alpha() { 4 } else { 3 };
-        self.width as usize * self.height as usize * bytes_per_pixel
+        (self.width as usize)
+            .checked_mul(self.height as usize)?
+            .checked_mul(bytes_per_pixel)
     }
 
     /// Returns the raw bytes of the image. For animated images, this is the first frame.
     pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
-        assert_eq!(buf.len(), self.output_buffer_size());
+        assert_eq!(Some(buf.len()), self.output_buffer_size());
 
         if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
             let mut frame = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
@@ -582,6 +585,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
     /// Panics if the image is not animated.
     pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<Option<u32>, DecodingError> {
         assert!(self.has_animation());
+        assert_eq!(Some(buf.len()), self.output_buffer_size());
 
         if self.animation.loops_before_done == Some(0) {
             return Ok(None);
