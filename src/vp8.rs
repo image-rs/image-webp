@@ -1496,9 +1496,15 @@ impl<R: Read> Vp8Decoder<R> {
 
         self.left_border[0] = ws[16];
 
-        for i in 0usize..16 {
-            self.top_border[mbx * 16 + i] = ws[16 * stride + 1 + i];
-            self.left_border[i + 1] = ws[(i + 1) * stride + 16];
+        for (i, left) in self.left_border[1..][..16].iter_mut().enumerate() {
+            *left = ws[(i + 1) * stride + 16];
+        }
+
+        for (top, &w) in self.top_border[mbx * 16..][..16]
+            .iter_mut()
+            .zip(&ws[16 * stride + 1..][..16])
+        {
+            *top = w;
         }
 
         // Length is the remainder to the border, but maximally the current chunk.
@@ -1506,8 +1512,11 @@ impl<R: Read> Vp8Decoder<R> {
         let xlength = cmp::min(self.frame.width as usize - mbx * 16, 16);
 
         for y in 0usize..ylength {
-            for x in 0usize..xlength {
-                self.frame.ybuf[(mby * 16 + y) * w + mbx * 16 + x] = ws[(1 + y) * stride + 1 + x];
+            for (ybuf, &ws) in self.frame.ybuf[(mby * 16 + y) * w + mbx * 16..][..xlength]
+                .iter_mut()
+                .zip(ws[(1 + y) * stride + 1..][..xlength].iter())
+            {
+                *ybuf = ws;
             }
         }
     }
@@ -1601,9 +1610,17 @@ impl<R: Read> Vp8Decoder<R> {
         }
 
         for y in 0usize..ylength {
-            for x in 0usize..xlength {
-                self.frame.ubuf[(mby * 8 + y) * w + mbx * 8 + x] = uws[(1 + y) * stride + 1 + x];
-                self.frame.vbuf[(mby * 8 + y) * w + mbx * 8 + x] = vws[(1 + y) * stride + 1 + x];
+            let uv_buf_index = (mby * 8 + y) * w + mbx * 8;
+            let ws_index = (1 + y) * stride + 1;
+
+            for (((ub, vb), &uw), &vw) in self.frame.ubuf[uv_buf_index..][..xlength]
+                .iter_mut()
+                .zip(self.frame.vbuf[uv_buf_index..][..xlength].iter_mut())
+                .zip(uws[ws_index..][..xlength].iter())
+                .zip(vws[ws_index..][..xlength].iter())
+            {
+                *ub = uw;
+                *vb = vw;
             }
         }
     }
@@ -2355,14 +2372,35 @@ fn predict_dcpred(a: &mut [u8], size: usize, stride: usize, above: bool, left: b
 }
 
 fn predict_tmpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
-    for y in 0usize..size {
-        for x in 0usize..size {
-            let pred = i32::from(a[(y0 + y) * stride + x0 - 1])
-                + i32::from(a[(y0 - 1) * stride + x0 + x])
-                - i32::from(a[(y0 - 1) * stride + x0 - 1]);
+    // The formula for tmpred is:
+    // X_ij = L_i + A_j - P (i, j=0, 1, 2, 3)
+    //
+    // |-----|-----|-----|-----|-----|
+    // | P   | A0  | A1  | A2  | A3  |
+    // |-----|-----|-----|-----|-----|
+    // | L0  | X00 | X01 | X02 | X03 |
+    // |-----|-----|-----|-----|-----|
+    // | L1  | X10 | X11 | X12 | X13 |
+    // |-----|-----|-----|-----|-----|
+    // | L2  | X20 | X21 | X22 | X23 |
+    // |-----|-----|-----|-----|-----|
+    // | L3  | X30 | X31 | X32 | X33 |
+    // |-----|-----|-----|-----|-----|
+    // Diagram from p. 52 of RFC 6386
 
-            a[(x + x0) + stride * (y + y0)] = clamp(pred, 0, 255) as u8;
-        }
+    // Split at L0
+    let (above, x_block) = a.split_at_mut(y0 * stride + (x0 - 1));
+    let p = i32::from(above[(y0 - 1) * stride + x0 - 1]);
+    let above_slice = &above[(y0 - 1) * stride + x0..];
+
+    for y in 0usize..size {
+        let left_minus_p = i32::from(x_block[y * stride]) - p;
+
+        // Add 1 to skip over L0 byte
+        x_block[y * stride + 1..][..size]
+            .iter_mut()
+            .zip(above_slice)
+            .for_each(|(cur, &abv)| *cur = (left_minus_p + i32::from(abv)).max(0).min(255) as u8);
     }
 }
 
