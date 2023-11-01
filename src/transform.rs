@@ -64,20 +64,20 @@ pub(crate) fn iwht4x4(block: &mut [i32]) {
         block[12 + i] = d1 - c1;
     }
 
-    for i in 0usize..4 {
-        let a1 = block[4 * i] + block[4 * i + 3];
-        let b1 = block[4 * i + 1] + block[4 * i + 2];
-        let c1 = block[4 * i + 1] - block[4 * i + 2];
-        let d1 = block[4 * i] - block[4 * i + 3];
+    for block in block.chunks_exact_mut(4) {
+        let a1 = block[0] + block[3];
+        let b1 = block[1] + block[2];
+        let c1 = block[1] - block[2];
+        let d1 = block[0] - block[3];
 
         let a2 = a1 + b1;
         let b2 = c1 + d1;
         let c2 = a1 - b1;
         let d2 = d1 - c1;
 
-        block[4 * i] = (a2 + 3) >> 3;
-        block[4 * i + 1] = (b2 + 3) >> 3;
-        block[4 * i + 2] = (c2 + 3) >> 3;
-        block[4 * i + 3] = (d2 + 3) >> 3;
+        block[0] = (a2 + 3) >> 3;
+        block[1] = (b2 + 3) >> 3;
+        block[2] = (c2 + 3) >> 3;
+        block[3] = (d2 + 3) >> 3;
     }
 }

@@ -2306,18 +2306,22 @@ fn predict_4x4(ws: &mut [u8], stride: usize, modes: &[IntraMode], resdata: &[i32
 }
 
 fn predict_vpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
-    for y in 0usize..size {
-        for x in 0usize..size {
-            a[(x + x0) + stride * (y + y0)] = a[(x + x0) + stride * (y0 + y - 1)];
+    // This pass copies the top row to the rows below it.
+    let (above, curr) = a.split_at_mut(stride * y0);
+    let above_slice = &above[x0..];
+
+    for curr_chunk in curr.chunks_exact_mut(stride).take(size) {
+        for (curr, &above) in curr_chunk[1..].iter_mut().zip(above_slice) {
+            *curr = above;
         }
     }
 }
 
 fn predict_hpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
-    for y in 0usize..size {
-        for x in 0usize..size {
-            a[(x + x0) + stride * (y + y0)] = a[(x + x0 - 1) + stride * (y0 + y)];
-        }
+    // This pass copies the first value of a row to the values right of it.
+    for chunk in a.chunks_exact_mut(stride).skip(y0).take(size) {
+        let left = chunk[x0 - 1];
+        chunk[x0..].iter_mut().for_each(|a| *a = left);
     }
 }
 
@@ -2368,14 +2372,19 @@ fn predict_tmpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize
 
 fn predict_bdcpred(a: &mut [u8], x0: usize, y0: usize, stride: usize) {
     let mut v = 4;
+
+    a[(y0 - 1) * stride + x0..][..4]
+        .iter()
+        .for_each(|&a| v += u32::from(a));
+
     for i in 0usize..4 {
-        v += u32::from(a[(y0 + i) * stride + x0 - 1]) + u32::from(a[(y0 - 1) * stride + x0 + i]);
+        v += u32::from(a[(y0 + i) * stride + x0 - 1]);
     }
 
     v >>= 3;
-    for y in 0usize..4 {
-        for x in 0usize..4 {
-            a[x + x0 + stride * (y + y0)] = v as u8;
+    for chunk in a.chunks_exact_mut(stride).skip(y0).take(4) {
+        for ch in chunk[x0..][..4].iter_mut() {
+            *ch = v as u8;
         }
     }
 }
