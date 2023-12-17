@@ -715,18 +715,24 @@ impl BoolReader {
             false
         };
 
-        while self.range < 128 {
-            self.value <<= 1;
-            self.range <<= 1;
-            self.bit_count += 1;
+        if self.range < 128 {
+            // Compute shift required to satisfy `self.range >= 128`.
+            // Apply that shift to `self.range`, `self.value`, and `self.bitcount`.
+            //
+            // Subtract 24 because we only care about leading zeros in the
+            // lowest byte of `self.range` which is a `u32`.
+            let shift = self.range.leading_zeros() - 24;
+            self.value <<= shift;
+            self.range <<= shift;
+            self.bit_count += shift as u8;
 
-            if self.bit_count == 8 {
-                self.bit_count = 0;
+            if self.bit_count >= 8 {
+                self.bit_count %= 8;
 
                 // If no more bits are available, just don't do anything.
                 // This strategy is suggested in the reference implementation of RFC6386 (p.135)
                 if self.index < self.buf.len() {
-                    self.value |= u32::from(self.buf[self.index]);
+                    self.value |= u32::from(self.buf[self.index]) << self.bit_count;
                     self.index += 1;
                 }
             }
