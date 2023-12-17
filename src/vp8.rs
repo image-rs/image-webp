@@ -2212,17 +2212,17 @@ fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8
                 *above = 127;
             }
         } else {
-            for i in 0usize..16 {
-                above[i] = top[mbx * 16 + i];
+            for (above, &top) in above[..16].iter_mut().zip(&top[mbx * 16..]) {
+                *above = top;
             }
 
             if mbx == mbw - 1 {
-                for above in above.iter_mut().skip(16) {
+                for above in above[16..].iter_mut() {
                     *above = top[mbx * 16 + 15];
                 }
             } else {
-                for i in 16usize..above.len() {
-                    above[i] = top[mbx * 16 + i];
+                for (above, &top) in above[16..].iter_mut().zip(&top[mbx * 16 + 16..]) {
+                    *above = top;
                 }
             }
         }
@@ -2240,8 +2240,8 @@ fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8
             ws[(i + 1) * stride] = 129;
         }
     } else {
-        for i in 0usize..16 {
-            ws[(i + 1) * stride] = left[i + 1];
+        for (i, &left) in (0usize..16).zip(&left[1..]) {
+            ws[(i + 1) * stride] = left;
         }
     }
 
@@ -2272,8 +2272,8 @@ fn avg2(this: u8, right: u8) -> u8 {
 fn add_residue(pblock: &mut [u8], rblock: &[i32; 16], y0: usize, x0: usize, stride: usize) {
     let mut pos = y0 * stride + x0;
     for row in rblock.chunks(4) {
-        for (p, &a) in pblock[pos..pos + 4].iter_mut().zip(row.iter()) {
-            *p = clamp(a + i32::from(*p), 0, 255) as u8;
+        for (p, &a) in pblock[pos..][..4].iter_mut().zip(row.iter()) {
+            *p = (a + i32::from(*p)).max(0).min(255) as u8;
         }
         pos += stride;
     }
@@ -2334,9 +2334,7 @@ fn predict_dcpred(a: &mut [u8], size: usize, stride: usize, above: bool, left: b
     }
 
     if above {
-        for x in 0usize..size {
-            sum += u32::from(a[x + 1]);
-        }
+        sum += a[1..=size].iter().fold(0, |acc, &x| acc + u32::from(x));
 
         shf += 1;
     }
@@ -2348,9 +2346,9 @@ fn predict_dcpred(a: &mut [u8], size: usize, stride: usize, above: bool, left: b
     };
 
     for y in 0usize..size {
-        for x in 0usize..size {
-            a[(x + 1) + stride * (y + 1)] = dcval as u8;
-        }
+        a[1 + stride * (y + 1)..][..size]
+            .iter_mut()
+            .for_each(|a| *a = dcval as u8);
     }
 }
 
