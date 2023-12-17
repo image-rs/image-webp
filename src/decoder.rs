@@ -521,7 +521,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
         assert_eq!(Some(buf.len()), self.output_buffer_size());
 
         if self.has_animation() {
-            let saved = std::mem::replace(&mut self.animation, Default::default());
+            let saved = std::mem::take(&mut self.animation);
             self.animation.next_frame_start =
                 self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
             let result = self.read_frame(buf);
