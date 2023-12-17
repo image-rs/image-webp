@@ -338,11 +338,16 @@ impl<R: Read + Seek> WebPDecoder<R> {
                                 // and the spec says that lossless images SHOULD NOT contain ALPH
                                 // chunks, so we treat both as indicators of lossy images.
                                 if !self.is_lossy {
+                                    if chunk_size < 24 {
+                                        return Err(DecodingError::InvalidChunkSize);
+                                    }
+
+                                    reader.seek_relative(16)?;
                                     let (subchunk, ..) = read_chunk_header(&mut reader)?;
                                     if let WebPRiffChunk::VP8 | WebPRiffChunk::ALPH = subchunk {
                                         self.is_lossy = true;
                                     }
-                                    reader.seek_relative(i64::from(chunk_size_rounded) - 8)?;
+                                    reader.seek_relative(i64::from(chunk_size_rounded) - 24)?;
                                     continue;
                                 }
                             }
@@ -383,7 +388,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                                 n => self.animation.loops_before_done = Some(n),
                             }
                             self.animation.next_frame_start =
-                                self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start;
+                                self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
                         }
                         Ok(None) => return Err(DecodingError::ChunkMissing),
                         Err(DecodingError::MemoryLimitExceeded) => {
@@ -397,9 +402,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 // store the ALPH, VP8, and VP8L chunks (as applicable) of the first frame in the
                 // hashmap so that we can read them later.
                 if let Some(range) = self.chunks.get(&WebPRiffChunk::ANMF).cloned() {
-                    self.r.seek(io::SeekFrom::Start(range.start))?;
-                    let mut position = range.start;
-
+                    let mut position = range.start + 16;
+                    self.r.seek(io::SeekFrom::Start(position))?;
                     for _ in 0..2 {
                         let (subchunk, subchunk_size, subchunk_size_rounded) =
                             read_chunk_header(&mut self.r)?;
@@ -516,7 +520,14 @@ impl<R: Read + Seek> WebPDecoder<R> {
     pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
         assert_eq!(Some(buf.len()), self.output_buffer_size());
 
-        if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
+        if self.has_animation() {
+            let saved = std::mem::take(&mut self.animation);
+            self.animation.next_frame_start =
+                self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
+            let result = self.read_frame(buf);
+            self.animation = saved;
+            result?;
+        } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
             let mut frame = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
             let frame = frame.decode_frame()?;
             if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
@@ -732,11 +743,21 @@ impl<R: Read + Seek> WebPDecoder<R> {
             if self.animation.loops_before_done.is_some() {
                 *self.animation.loops_before_done.as_mut().unwrap() -= 1;
             }
-            self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start;
+            self.animation.next_frame_start =
+                self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
             self.animation.dispose_next_frame = true;
         }
 
-        buf.copy_from_slice(self.animation.canvas.as_ref().unwrap());
+        if self.has_alpha() {
+            buf.copy_from_slice(self.animation.canvas.as_ref().unwrap());
+        } else {
+            for (b, c) in buf
+                .chunks_exact_mut(3)
+                .zip(self.animation.canvas.as_ref().unwrap().chunks_exact(4))
+            {
+                b.copy_from_slice(&c[..3]);
+            }
+        }
 
         Ok(Some(duration))
     }
