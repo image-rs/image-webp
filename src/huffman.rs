@@ -186,22 +186,21 @@ impl HuffmanTree {
         Ok(tree)
     }
 
+    pub(crate) fn is_single_node(&self) -> bool {
+        self.num_nodes == 1
+    }
+
     /// Reads a symbol using the bitstream
     pub(crate) fn read_symbol(&self, bit_reader: &mut BitReader) -> Result<u16, DecodingError> {
         let mut index = 0;
-        let mut node = self.tree[index];
-
-        while let HuffmanTreeNode::Branch(children_offset) = node {
-            index += children_offset + bit_reader.read_bits::<usize>(1)?;
-            node = self.tree[index];
+        loop {
+            match &self.tree[index] {
+                HuffmanTreeNode::Branch(children_offset) => {
+                    index += children_offset + bit_reader.read_bits::<usize>(1)?;
+                }
+                HuffmanTreeNode::Leaf(symbol) => return Ok(*symbol),
+                HuffmanTreeNode::Empty => return Err(DecodingError::HuffmanError),
+            }
         }
-
-        let symbol = match node {
-            HuffmanTreeNode::Branch(_) => unreachable!(),
-            HuffmanTreeNode::Empty => return Err(DecodingError::HuffmanError),
-            HuffmanTreeNode::Leaf(symbol) => symbol,
-        };
-
-        Ok(symbol)
     }
 }

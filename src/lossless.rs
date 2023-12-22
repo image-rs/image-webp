@@ -4,7 +4,6 @@
 //!
 
 use std::{
-    convert::TryFrom,
     convert::TryInto,
     io::Read,
     ops::{AddAssign, Shl},
@@ -455,12 +454,45 @@ impl<R: Read> LosslessDecoder<R> {
         let mut tree = &huffman_info.huffman_code_groups[huff_index];
         let mut last_cached = 0;
         let mut index = 0;
-        let mut x = 0;
-        let mut y = 0;
+
+        let mut next_block_start = 0;
         while index < num_values {
-            if (x & huffman_info.mask) == 0 {
-                let index = huffman_info.get_huff_index(x, y);
-                tree = &huffman_info.huffman_code_groups[index];
+            if index >= next_block_start {
+                let x = index % usize::from(width);
+                let y = index / usize::from(width);
+                next_block_start = (x | usize::from(huffman_info.mask)).min(usize::from(width - 1))
+                    + y * usize::from(width)
+                    + 1;
+
+                let huff_index = huffman_info.get_huff_index(x as u16, y as u16);
+                tree = &huffman_info.huffman_code_groups[huff_index];
+
+                // Fast path: If all the codes each contain only a single
+                // symbol, then the pixel data isn't written to the bitstream
+                // and we can just fill the output buffer with the symbol
+                // directly.
+                if tree[..4].iter().all(|t| t.is_single_node()) {
+                    let code = tree[GREEN].read_symbol(&mut self.bit_reader)?;
+                    if code < 256 {
+                        let n = if huffman_info.bits == 0 {
+                            num_values
+                        } else {
+                            next_block_start - index
+                        };
+
+                        let red = tree[RED].read_symbol(&mut self.bit_reader)?;
+                        let blue = tree[BLUE].read_symbol(&mut self.bit_reader)?;
+                        let alpha = tree[ALPHA].read_symbol(&mut self.bit_reader)?;
+                        let value = (u32::from(alpha) << 24)
+                            + (u32::from(red) << 16)
+                            + (u32::from(code) << 8)
+                            + u32::from(blue);
+
+                        data[index..][..n].fill(value);
+                        index += n;
+                        continue;
+                    }
+                }
             }
 
             let code = tree[GREEN].read_symbol(&mut self.bit_reader)?;
@@ -478,11 +510,6 @@ impl<R: Read> LosslessDecoder<R> {
                     + u32::from(blue);
 
                 index += 1;
-                x += 1;
-                if x >= width {
-                    x = 0;
-                    y += 1;
-                }
             } else if code < 256 + 24 {
                 //backward reference, so go back and use that to add image data
                 let length_symbol = code - 256;
@@ -500,15 +527,6 @@ impl<R: Read> LosslessDecoder<R> {
                     data[index + i] = data[index + i - dist];
                 }
                 index += length;
-                x += u16::try_from(length).unwrap();
-                while x >= width {
-                    x -= width;
-                    y += 1;
-                }
-                if index < num_values {
-                    let index = huffman_info.get_huff_index(x, y);
-                    tree = &huffman_info.huffman_code_groups[index];
-                }
             } else {
                 //color cache, so use previously stored pixels to get this pixel
                 let key = code - 256 - 24;
@@ -524,11 +542,6 @@ impl<R: Read> LosslessDecoder<R> {
                     return Err(DecodingError::BitStreamError);
                 }
                 index += 1;
-                x += 1;
-                if x >= width {
-                    x = 0;
-                    y += 1;
-                }
             }
         }
 
