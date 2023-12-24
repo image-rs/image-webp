@@ -221,6 +221,7 @@ pub struct WebPDecoder<R> {
 
     kind: ImageKind,
     is_lossy: bool,
+    has_alpha: bool,
 
     chunks: HashMap<WebPRiffChunk, Range<u64>>,
 }
@@ -239,6 +240,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             animation: Default::default(),
             memory_limit: usize::MAX,
             is_lossy: false,
+            has_alpha: false,
         };
         decoder.read_data()?;
         Ok(decoder)
@@ -301,6 +303,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 self.chunks
                     .insert(WebPRiffChunk::VP8L, start..start + chunk_size as u64);
                 self.kind = ImageKind::Lossless;
+                self.has_alpha = (header >> 28) & 1 != 0;
             }
             WebPRiffChunk::VP8X => {
                 let mut info = extended::read_extended_header(&mut self.r)?;
@@ -417,6 +420,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                     }
                 }
 
+                self.has_alpha = info.alpha;
                 self.kind = ImageKind::Extended(info);
             }
             _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc())),
@@ -443,11 +447,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
     /// Returns whether the image has an alpha channel. If so, the pixel format is Rgba8 and
     /// otherwise Rgb8.
     pub fn has_alpha(&self) -> bool {
-        match &self.kind {
-            ImageKind::Lossy => false,
-            ImageKind::Lossless => true,
-            ImageKind::Extended(extended) => extended.alpha,
-        }
+        self.has_alpha
     }
 
     /// Returns whether the image is lossy. For animated images, this is true if any frame is lossy.
@@ -534,7 +534,11 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 return Err(DecodingError::InconsistentImageSizes);
             }
 
-            frame.fill_rgba(buf);
+            if self.has_alpha {
+                frame.fill_rgba(buf);
+            } else {
+                frame.fill_rgb(buf);
+            }
         } else {
             let range = self
                 .chunks

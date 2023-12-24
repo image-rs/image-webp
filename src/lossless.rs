@@ -698,6 +698,14 @@ impl LosslessFrame {
         }
     }
 
+    pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
+        for (&argb_val, chunk) in self.buf.iter().zip(buf.chunks_exact_mut(3)) {
+            chunk[0] = ((argb_val >> 16) & 0xff).try_into().unwrap();
+            chunk[1] = ((argb_val >> 8) & 0xff).try_into().unwrap();
+            chunk[2] = (argb_val & 0xff).try_into().unwrap();
+        }
+    }
+
     /// Fills a buffer with just the green values from the lossless decoding
     /// Used in extended alpha decoding
     pub(crate) fn fill_green(&self, buf: &mut [u8]) {
