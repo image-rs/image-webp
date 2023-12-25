@@ -357,6 +357,10 @@ impl<R: Read> LosslessDecoder<R> {
                 codes.push(1);
             }
 
+            if symbols.iter().any(|&s| s > alphabet_size) {
+                return Err(DecodingError::BitStreamError);
+            }
+
             HuffmanTree::build_explicit(code_lengths, codes, symbols)
         } else {
             let mut code_length_code_lengths = vec![0; CODE_LENGTH_CODES];
@@ -384,7 +388,11 @@ impl<R: Read> LosslessDecoder<R> {
 
         let mut max_symbol = if self.bit_reader.read_bits::<u8>(1)? == 1 {
             let length_nbits = 2 + 2 * self.bit_reader.read_bits::<u8>(3)?;
-            2 + self.bit_reader.read_bits::<u16>(length_nbits)?
+            let max_minus_two = self.bit_reader.read_bits::<u16>(length_nbits)?;
+            if max_minus_two > num_symbols - 2 {
+                return Err(DecodingError::BitStreamError);
+            }
+            2 + max_minus_two
         } else {
             num_symbols
         };
@@ -609,7 +617,8 @@ impl HuffmanInfo {
         if self.bits == 0 {
             return 0;
         }
-        let position = usize::from((y >> self.bits) * self.xsize + (x >> self.bits));
+        let position =
+            usize::from(y >> self.bits) * usize::from(self.xsize) + usize::from(x >> self.bits);
         let meta_huff_code: usize = self.image[position].try_into().unwrap();
         meta_huff_code
     }
