@@ -334,7 +334,7 @@ pub(crate) fn read_alpha_chunk<R: Read>(
         let height: u16 = height
             .try_into()
             .map_err(|_| DecodingError::ImageTooLarge)?;
-        let frame = decoder.decode_frame_implicit_dims(width, height)?;
+        let frame = decoder.decode_frame(Some((width, height)))?;
 
         let mut data = vec![0u8; usize::from(width) * usize::from(height)];
 

@@ -9,8 +9,6 @@ use std::{
     ops::{AddAssign, Shl},
 };
 
-use byteorder::ReadBytesExt;
-
 use crate::decoder::DecodingError;
 
 use super::huffman::HuffmanTree;
@@ -83,59 +81,51 @@ impl<R: Read> LosslessDecoder<R> {
         }
     }
 
-    /// Reads the frame
-    pub(crate) fn decode_frame(&mut self) -> Result<&LosslessFrame, DecodingError> {
-        let signature = self.r.read_u8()?;
-
-        if signature != 0x2f {
-            return Err(DecodingError::LosslessSignatureInvalid(signature));
-        }
-
-        let mut buf = Vec::new();
-        self.r.read_to_end(&mut buf)?;
-        self.bit_reader.init(buf);
-
-        self.frame.width = self.bit_reader.read_bits::<u16>(14)? + 1;
-        self.frame.height = self.bit_reader.read_bits::<u16>(14)? + 1;
-
-        let _alpha_used = self.bit_reader.read_bits::<u8>(1)?;
-
-        let version_num = self.bit_reader.read_bits::<u8>(3)?;
-
-        if version_num != 0 {
-            return Err(DecodingError::VersionNumberInvalid(version_num));
-        }
-
-        let mut data = self.decode_image_stream(self.frame.width, self.frame.height, true)?;
-
-        for &trans_index in self.transform_order.iter().rev() {
-            let trans = self.transforms[usize::from(trans_index)].as_ref().unwrap();
-            trans.apply_transform(&mut data, self.frame.width, self.frame.height)?;
-        }
-
-        self.frame.buf = data;
-        Ok(&self.frame)
-    }
-
-    //used for alpha data in extended decoding
-    pub(crate) fn decode_frame_implicit_dims(
+    /// Decodes a frame.
+    ///
+    /// In an alpha chunk the width and height are not included in the header, so they should be
+    /// provided by setting the `implicit_dimensions` argument. Otherwise that argument should be
+    /// `None` and the frame dimensions will be determined by reading the VP8L header.
+    pub(crate) fn decode_frame(
         &mut self,
-        width: u16,
-        height: u16,
+        implicit_dimensions: Option<(u16, u16)>,
     ) -> Result<&LosslessFrame, DecodingError> {
         let mut buf = Vec::new();
         self.r.read_to_end(&mut buf)?;
         self.bit_reader.init(buf);
 
-        self.frame.width = width;
-        self.frame.height = height;
+        match implicit_dimensions {
+            Some((width, height)) => {
+                self.frame.width = width;
+                self.frame.height = height;
+            }
+            None => {
+                let signature = self.bit_reader.read_bits::<u8>(8)?;
+                if signature != 0x2f {
+                    return Err(DecodingError::LosslessSignatureInvalid(signature));
+                }
 
-        let mut data = self.decode_image_stream(self.frame.width, self.frame.height, true)?;
+                self.frame.width = self.bit_reader.read_bits::<u16>(14)? + 1;
+                self.frame.height = self.bit_reader.read_bits::<u16>(14)? + 1;
 
-        //transform_order is vector of indices(0-3) into transforms in order decoded
+                let _alpha_used = self.bit_reader.read_bits::<u8>(1)?;
+                let version_num = self.bit_reader.read_bits::<u8>(3)?;
+                if version_num != 0 {
+                    return Err(DecodingError::VersionNumberInvalid(version_num));
+                }
+            }
+        }
+
+        let transformed_width = self.read_transforms()?;
+        let mut data = self.decode_image_stream(transformed_width, self.frame.height, true)?;
+
+        let mut width = transformed_width;
         for &trans_index in self.transform_order.iter().rev() {
-            let trans = self.transforms[usize::from(trans_index)].as_ref().unwrap();
-            trans.apply_transform(&mut data, self.frame.width, self.frame.height)?;
+            let transform = self.transforms[usize::from(trans_index)].as_ref().unwrap();
+            if let TransformType::ColorIndexingTransform { .. } = transform {
+                width = self.frame.width;
+            }
+            transform.apply_transform(&mut data, width, self.frame.height)?;
         }
 
         self.frame.buf = data;
@@ -143,23 +133,17 @@ impl<R: Read> LosslessDecoder<R> {
     }
 
     /// Reads Image data from the bitstream
-    /// Can be in any of the 5 roles described in the Specification
-    /// ARGB Image role has different behaviour to the other 4
-    /// xsize and ysize describe the size of the blocks where each block has its own entropy code
+    ///
+    /// Can be in any of the 5 roles described in the Specification. ARGB Image role has different
+    /// behaviour to the other 4. xsize and ysize describe the size of the blocks where each block
+    /// has its own entropy code
     fn decode_image_stream(
         &mut self,
         xsize: u16,
         ysize: u16,
         is_argb_img: bool,
     ) -> Result<Vec<u32>, DecodingError> {
-        let trans_xsize = if is_argb_img {
-            self.read_transforms()?
-        } else {
-            xsize
-        };
-
         let color_cache_bits = self.read_color_cache()?;
-
         let color_cache = color_cache_bits.map(|bits| {
             let size = 1 << bits;
             let cache = vec![0u32; size];
@@ -169,12 +153,8 @@ impl<R: Read> LosslessDecoder<R> {
             }
         });
 
-        let huffman_info = self.read_huffman_codes(is_argb_img, trans_xsize, ysize, color_cache)?;
-
-        //decode data
-        let data = self.decode_image_data(trans_xsize, ysize, huffman_info)?;
-
-        Ok(data)
+        let huffman_info = self.read_huffman_codes(is_argb_img, xsize, ysize, color_cache)?;
+        self.decode_image_data(xsize, ysize, huffman_info)
     }
 
     /// Reads transforms and their data from the bitstream
