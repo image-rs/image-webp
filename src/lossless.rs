@@ -3,11 +3,7 @@
 //! [Lossless spec](https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification)
 //!
 
-use std::{
-    convert::TryInto,
-    io::Read,
-    ops::{AddAssign, Shl},
-};
+use std::{convert::TryInto, io::Read, mem};
 
 use crate::decoder::DecodingError;
 
@@ -644,18 +640,18 @@ impl BitReader {
         self.buf = buf;
     }
 
-    pub(crate) fn read_bits<T>(&mut self, num: u8) -> Result<T, DecodingError>
-    where
-        T: num_traits::Unsigned + Shl<u8, Output = T> + AddAssign<T> + From<bool>,
-    {
-        let mut value: T = T::zero();
+    pub(crate) fn read_bits<T: TryFrom<u16>>(&mut self, num: u8) -> Result<T, DecodingError> {
+        debug_assert!(num as usize <= 8 * mem::size_of::<T>());
+        debug_assert!(num <= 16);
+
+        let mut value = 0;
 
         for i in 0..num {
             if self.buf.len() <= self.index {
                 return Err(DecodingError::BitStreamError);
             }
             let bit_true = self.buf[self.index] & (1 << self.bit_count) != 0;
-            value += T::from(bit_true) << i;
+            value += u16::from(bit_true) << i;
             self.bit_count = if self.bit_count == 7 {
                 self.index += 1;
                 0
@@ -664,7 +660,10 @@ impl BitReader {
             };
         }
 
-        Ok(value)
+        match value.try_into() {
+            Ok(value) => Ok(value),
+            Err(_) => unreachable!("Value too large to fit in type"),
+        }
     }
 }
 
