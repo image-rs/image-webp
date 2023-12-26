@@ -26,6 +26,10 @@ random2.webp:
 convert -delay 15 -size 99x87 xc: xc: xc: xc: +noise Random -define webp:lossless=false random_lossy.webp
 ```
 
+## images/regression
+
+color_index.webp: Manually constructed to reproduce decoding error.
+
 # Reference images
 
 These files are all PNGs with contents that should exactly match the associated WebP file in the _images_ directory.
@@ -47,3 +51,7 @@ random-lossy-N.png:
 ```
 for i in {1..4}; do webpmux -get frame ${i} ../../images/animated/random_lossy.webp -o random_lossy-${i}.png && dwebp random_lossy-${i}.png -nofancy -o random_lossy-${i}.png; done
 ```
+
+## reference/regression
+
+color_index.png: Converted with dwebp.
