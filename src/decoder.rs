@@ -529,7 +529,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             result?;
         } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
             let mut frame = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
-            let frame = frame.decode_frame()?;
+            let frame = frame.decode_frame(None)?;
             if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
                 return Err(DecodingError::InconsistentImageSizes);
             }
@@ -666,7 +666,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             WebPRiffChunk::VP8L => {
                 let reader = (&mut self.r).take(chunk_size as u64);
                 let mut lossless_decoder = LosslessDecoder::new(reader);
-                let frame = lossless_decoder.decode_frame()?;
+                let frame = lossless_decoder.decode_frame(None)?;
                 if frame.width as u32 != frame_width || frame.height as u32 != frame_height {
                     return Err(DecodingError::InconsistentImageSizes);
                 }
