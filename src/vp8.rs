@@ -13,7 +13,6 @@
 //!
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use num_traits::clamp;
 use std::cmp;
 use std::convert::TryInto;
 use std::default::Default;
@@ -1147,11 +1146,11 @@ impl<R: Read> Vp8Decoder<R> {
 
     fn read_quantization_indices(&mut self) {
         fn dc_quant(index: i32) -> i16 {
-            DC_QUANT[clamp(index, 0, 127) as usize]
+            DC_QUANT[index.max(0).min(127) as usize]
         }
 
         fn ac_quant(index: i32) -> i16 {
-            AC_QUANT[clamp(index, 0, 127) as usize]
+            AC_QUANT[index.max(0).min(127) as usize]
         }
 
         let yac_abs = self.b.read_literal(7);
@@ -2064,13 +2063,13 @@ impl<R: Read> Vp8Decoder<R> {
             }
         }
 
-        filter_level = clamp(filter_level, 0, 63);
+        filter_level = filter_level.max(0).min(63);
 
         if macroblock.luma_mode == LumaMode::B {
             filter_level += self.mode_delta[0];
         }
 
-        let filter_level = clamp(filter_level, 0, 63) as u8;
+        let filter_level = filter_level.max(0).min(63) as u8;
 
         //interior limit
         let mut interior_limit = filter_level;

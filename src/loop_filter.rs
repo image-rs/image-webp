@@ -2,7 +2,7 @@
 
 #[inline]
 fn c(val: i32) -> i32 {
-    num_traits::clamp(val, -128, 127)
+    val.max(-128).min(127)
 }
 
 //unsigned to signed
