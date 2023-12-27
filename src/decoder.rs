@@ -281,6 +281,10 @@ impl<R: Read + Seek> WebPDecoder<R> {
 
                 self.width = (w & 0x3FFF) as u32;
                 self.height = (h & 0x3FFF) as u32;
+                if self.width == 0 || self.height == 0 {
+                    return Err(DecodingError::InconsistentImageSizes);
+                }
+
                 self.chunks
                     .insert(WebPRiffChunk::VP8, start..start + chunk_size as u64);
                 self.kind = ImageKind::Lossy;
