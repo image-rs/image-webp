@@ -1,6 +1,7 @@
 //! Decoding and Encoding of WebP Images
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 pub use self::decoder::{DecodingError, WebPDecoder};
 
