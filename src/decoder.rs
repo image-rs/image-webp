@@ -36,8 +36,12 @@ pub enum DecodingError {
     ChunkHeaderInvalid([u8; 4]),
 
     /// Some bits were invalid
-    #[error("Invalid info bits: {name} {value}")]
-    InfoBitsInvalid { name: &'static str, value: u32 },
+    #[error("Reserved bits set")]
+    ReservedBitSet,
+
+    /// Invalid compression method
+    #[error("Invalid compression method")]
+    InvalidCompressionMethod,
 
     /// Alpha chunk doesn't match the frame's size
     #[error("Alpha chunk size mismatch")]
@@ -59,6 +63,7 @@ pub enum DecodingError {
     #[error("Invalid lossless version number: {0}")]
     VersionNumberInvalid(u8),
 
+    /// Invalid color cache bits
     #[error("Invalid color cache bits: {0}")]
     InvalidColorCacheBits(u8),
 
@@ -634,10 +639,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
         let frame_info = self.r.read_u8()?;
         let reserved = frame_info & 0b11111100;
         if reserved != 0 {
-            return Err(DecodingError::InfoBitsInvalid {
-                name: "reserved",
-                value: reserved.into(),
-            });
+            return Err(DecodingError::ReservedBitSet);
         }
         let use_alpha_blending = frame_info & 0b00000010 == 0;
         let dispose = frame_info & 0b00000001 != 0;

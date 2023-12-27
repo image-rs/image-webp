@@ -214,17 +214,7 @@ pub(crate) fn read_extended_header<R: Read>(
     let reserved_third = read_3_bytes(reader)?;
 
     if reserved_first != 0 || reserved_second != 0 || reserved_third != 0 {
-        let value: u32 = if reserved_first != 0 {
-            reserved_first.into()
-        } else if reserved_second != 0 {
-            reserved_second.into()
-        } else {
-            reserved_third
-        };
-        return Err(DecodingError::InfoBitsInvalid {
-            name: "reserved",
-            value,
-        });
+        return Err(DecodingError::ReservedBitSet);
     }
 
     let canvas_width = read_3_bytes(reader)? + 1;
@@ -285,21 +275,13 @@ pub(crate) fn read_alpha_chunk<R: Read>(
     let compression = info_byte & 0b00000011;
 
     if reserved != 0 {
-        return Err(DecodingError::InfoBitsInvalid {
-            name: "reserved",
-            value: reserved.into(),
-        });
+        return Err(DecodingError::ReservedBitSet);
     }
 
     let preprocessing = match preprocessing {
         0 => false,
         1 => true,
-        _ => {
-            return Err(DecodingError::InfoBitsInvalid {
-                name: "reserved",
-                value: preprocessing.into(),
-            })
-        }
+        _ => return Err(DecodingError::ReservedBitSet),
     };
 
     let filtering_method = match filtering {
@@ -313,12 +295,7 @@ pub(crate) fn read_alpha_chunk<R: Read>(
     let lossless_compression = match compression {
         0 => false,
         1 => true,
-        _ => {
-            return Err(DecodingError::InfoBitsInvalid {
-                name: "lossless compression",
-                value: compression.into(),
-            })
-        }
+        _ => return Err(DecodingError::InvalidCompressionMethod),
     };
 
     let mut framedata = Vec::new();
