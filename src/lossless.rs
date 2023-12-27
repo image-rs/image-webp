@@ -640,9 +640,9 @@ impl BitReader {
         self.buf = buf;
     }
 
-    pub(crate) fn read_bits<T: TryFrom<u16>>(&mut self, num: u8) -> Result<T, DecodingError> {
+    pub(crate) fn read_bits<T: TryFrom<u32>>(&mut self, num: u8) -> Result<T, DecodingError> {
         debug_assert!(num as usize <= 8 * mem::size_of::<T>());
-        debug_assert!(num <= 16);
+        debug_assert!(num <= 32);
 
         let mut value = 0;
 
@@ -651,7 +651,7 @@ impl BitReader {
                 return Err(DecodingError::BitStreamError);
             }
             let bit_true = self.buf[self.index] & (1 << self.bit_count) != 0;
-            value += u16::from(bit_true) << i;
+            value += u32::from(bit_true) << i;
             self.bit_count = if self.bit_count == 7 {
                 self.index += 1;
                 0
