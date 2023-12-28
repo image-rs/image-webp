@@ -25,3 +25,10 @@ name = "decode_still"
 path = "fuzz_targets/decode_still.rs"
 test = false
 doc = false
+
+
+[[bin]]
+name = "decode_animated"
+path = "fuzz_targets/decode_animated.rs"
+test = false
+doc = false
