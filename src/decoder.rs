@@ -195,8 +195,7 @@ enum ImageKind {
 }
 
 struct AnimationState {
-    next_frame: usize,
-    loops_before_done: Option<u16>,
+    next_frame: u32,
     next_frame_start: u64,
     dispose_next_frame: bool,
     canvas: Option<Vec<u8>>,
@@ -205,7 +204,6 @@ impl Default for AnimationState {
     fn default() -> Self {
         Self {
             next_frame: 0,
-            loops_before_done: None,
             next_frame_start: 0,
             dispose_next_frame: true,
             canvas: None,
@@ -221,12 +219,14 @@ pub struct WebPDecoder<R> {
     width: u32,
     height: u32,
 
-    num_frames: usize,
+    kind: ImageKind,
     animation: AnimationState,
 
-    kind: ImageKind,
     is_lossy: bool,
     has_alpha: bool,
+    num_frames: u32,
+    loop_count: u16,
+    loop_duration: u64,
 
     chunks: HashMap<WebPRiffChunk, Range<u64>>,
 }
@@ -246,6 +246,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
             memory_limit: usize::MAX,
             is_lossy: false,
             has_alpha: false,
+            loop_count: 1,
+            loop_duration: 0,
         };
         decoder.read_data()?;
         Ok(decoder)
@@ -343,6 +345,14 @@ impl<R: Read + Seek> WebPDecoder<R> {
 
                             if let WebPRiffChunk::ANMF = chunk {
                                 self.num_frames += 1;
+                                if chunk_size < 24 {
+                                    return Err(DecodingError::InvalidChunkSize);
+                                }
+
+                                reader.seek_relative(12)?;
+                                let duration = reader.read_u32::<LittleEndian>()? & 0xffffff;
+                                self.loop_duration =
+                                    self.loop_duration.wrapping_add(u64::from(duration));
 
                                 // If the image is animated, the image data chunk will be inside the
                                 // ANMF chunks, so we must inspect them to determine whether the
@@ -350,18 +360,16 @@ impl<R: Read + Seek> WebPDecoder<R> {
                                 // and the spec says that lossless images SHOULD NOT contain ALPH
                                 // chunks, so we treat both as indicators of lossy images.
                                 if !self.is_lossy {
-                                    if chunk_size < 24 {
-                                        return Err(DecodingError::InvalidChunkSize);
-                                    }
-
-                                    reader.seek_relative(16)?;
                                     let (subchunk, ..) = read_chunk_header(&mut reader)?;
                                     if let WebPRiffChunk::VP8 | WebPRiffChunk::ALPH = subchunk {
                                         self.is_lossy = true;
                                     }
                                     reader.seek_relative(i64::from(chunk_size_rounded) - 24)?;
-                                    continue;
+                                } else {
+                                    reader.seek_relative(i64::from(chunk_size_rounded) - 16)?;
                                 }
+
+                                continue;
                             }
 
                             reader.seek_relative(i64::from(chunk_size_rounded))?;
@@ -395,10 +403,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                         Ok(Some(chunk)) => {
                             let mut cursor = Cursor::new(chunk);
                             cursor.read_exact(&mut info.background_color)?;
-                            match cursor.read_u16::<LittleEndian>()? {
-                                0 => self.animation.loops_before_done = None,
-                                n => self.animation.loops_before_done = Some(n),
-                            }
+                            self.loop_count = cursor.read_u16::<LittleEndian>()?;
                             self.animation.next_frame_start =
                                 self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
                         }
@@ -445,25 +450,6 @@ impl<R: Read + Seek> WebPDecoder<R> {
         self.memory_limit = limit;
     }
 
-    /// Returns true if the image is animated.
-    pub fn has_animation(&self) -> bool {
-        match &self.kind {
-            ImageKind::Lossy | ImageKind::Lossless => false,
-            ImageKind::Extended(extended) => extended.animation,
-        }
-    }
-
-    /// Returns whether the image has an alpha channel. If so, the pixel format is Rgba8 and
-    /// otherwise Rgb8.
-    pub fn has_alpha(&self) -> bool {
-        self.has_alpha
-    }
-
-    /// Returns whether the image is lossy. For animated images, this is true if any frame is lossy.
-    pub fn is_lossy(&mut self) -> bool {
-        self.is_lossy
-    }
-
     /// Sets the background color if the image is an extended and animated webp.
     pub fn set_background_color(&mut self, color: [u8; 4]) -> Result<(), DecodingError> {
         if let ImageKind::Extended(info) = &mut self.kind {
@@ -479,6 +465,45 @@ impl<R: Read + Seek> WebPDecoder<R> {
     /// Returns the (width, height) of the image in pixels.
     pub fn dimensions(&self) -> (u32, u32) {
         (self.width, self.height)
+    }
+
+    /// Returns whether the image has an alpha channel. If so, the pixel format is Rgba8 and
+    /// otherwise Rgb8.
+    pub fn has_alpha(&self) -> bool {
+        self.has_alpha
+    }
+
+    /// Returns true if the image is animated.
+    pub fn is_animated(&self) -> bool {
+        match &self.kind {
+            ImageKind::Lossy | ImageKind::Lossless => false,
+            ImageKind::Extended(extended) => extended.animation,
+        }
+    }
+
+    /// Returns whether the image is lossy. For animated images, this is true if any frame is lossy.
+    pub fn is_lossy(&mut self) -> bool {
+        self.is_lossy
+    }
+
+    /// Returns the number of frames of a single loop of the animation, or zero if the image is not
+    /// animated.
+    pub fn num_frames(&self) -> u32 {
+        self.num_frames
+    }
+
+    /// Returns the number of times the animation should loop, or zero if the animation loops
+    /// forever.
+    pub fn loop_count(&self) -> u16 {
+        self.loop_count
+    }
+
+    /// Returns the total duration of one loop through the animation in milliseconds, or zero if the
+    /// image is not animated.
+    ///
+    /// This is the sum of the durations of all individual frames of the image.
+    pub fn loop_duration(&self) -> u64 {
+        self.loop_duration
     }
 
     fn read_chunk(
@@ -529,7 +554,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
     pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
         assert_eq!(Some(buf.len()), self.output_buffer_size());
 
-        if self.has_animation() {
+        if self.is_animated() {
             let saved = std::mem::take(&mut self.animation);
             self.animation.next_frame_start =
                 self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
@@ -602,16 +627,18 @@ impl<R: Read + Seek> WebPDecoder<R> {
 
     /// Reads the next frame of the animation.
     ///
-    /// The frame contents are written into `buf` and the method returns the delay of the frame in
-    /// milliseconds. If there are no more frames, the method returns `None` and `buf` is left
+    /// The frame contents are written into `buf` and the method returns the duration of the frame
+    /// in milliseconds. If there are no more frames, the method returns `None` and `buf` is left
     /// unchanged.
+    ///
+    /// # Panics
     ///
     /// Panics if the image is not animated.
     pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<Option<u32>, DecodingError> {
-        assert!(self.has_animation());
+        assert!(self.is_animated());
         assert_eq!(Some(buf.len()), self.output_buffer_size());
 
-        if self.animation.loops_before_done == Some(0) {
+        if self.animation.next_frame == self.num_frames {
             return Ok(None);
         }
 
@@ -653,7 +680,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             None
         };
 
-        //read normal bitstream now
+        // Read normal bitstream now
         let (chunk, chunk_size, chunk_size_rounded) = read_chunk_header(&mut self.r)?;
         if chunk_size_rounded + 32 < anmf_size {
             return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()));
@@ -752,16 +779,6 @@ impl<R: Read + Seek> WebPDecoder<R> {
         self.animation.next_frame_start += anmf_size as u64 + 8;
         self.animation.next_frame += 1;
 
-        if self.animation.next_frame >= self.num_frames {
-            self.animation.next_frame = 0;
-            if self.animation.loops_before_done.is_some() {
-                *self.animation.loops_before_done.as_mut().unwrap() -= 1;
-            }
-            self.animation.next_frame_start =
-                self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
-            self.animation.dispose_next_frame = true;
-        }
-
         if self.has_alpha() {
             buf.copy_from_slice(self.animation.canvas.as_ref().unwrap());
         } else {
@@ -774,6 +791,19 @@ impl<R: Read + Seek> WebPDecoder<R> {
         }
 
         Ok(Some(duration))
+    }
+
+    /// Resets the animation to the first frame.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the image is not animated.
+    pub fn reset_animation(&mut self) {
+        assert!(self.is_animated());
+
+        self.animation.next_frame = 0;
+        self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
+        self.animation.dispose_next_frame = true;
     }
 }
 
