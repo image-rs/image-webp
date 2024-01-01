@@ -7,7 +7,7 @@ fn reference_test(file: &str) {
     let (width, height) = decoder.dimensions();
 
     // Decode reference PNG
-    let reference_path = if decoder.has_animation() {
+    let reference_path = if decoder.is_animated() {
         format!("tests/reference/{file}-1.png")
     } else {
         format!("tests/reference/{file}.png")
@@ -69,12 +69,10 @@ fn reference_test(file: &str) {
     }
 
     // If the file is animated, then check all frames.
-    if decoder.has_animation() {
-        for i in 1.. {
+    if decoder.is_animated() {
+        for i in 1..=decoder.num_frames() {
             let reference_path = PathBuf::from(format!("tests/reference/{file}-{i}.png"));
-            if !reference_path.exists() {
-                break;
-            }
+            assert!(reference_path.exists());
 
             let reference_contents = std::fs::read(reference_path).unwrap();
             let mut reference_decoder = png::Decoder::new(Cursor::new(reference_contents))
