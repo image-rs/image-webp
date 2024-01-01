@@ -123,6 +123,10 @@ pub enum DecodingError {
     /// Invalid chunk size
     #[error("Invalid chunk size")]
     InvalidChunkSize,
+
+    /// No more frames in image
+    #[error("No more frames")]
+    NoMoreFrames,
 }
 
 /// All possible RIFF chunks in a WebP image file
@@ -640,18 +644,18 @@ impl<R: Read + Seek> WebPDecoder<R> {
     /// Reads the next frame of the animation.
     ///
     /// The frame contents are written into `buf` and the method returns the duration of the frame
-    /// in milliseconds. If there are no more frames, the method returns `None` and `buf` is left
-    /// unchanged.
+    /// in milliseconds. If there are no more frames, the method returns
+    /// `DecodingError::NoMoreFrames` and `buf` is left unchanged.
     ///
     /// # Panics
     ///
     /// Panics if the image is not animated.
-    pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<Option<u32>, DecodingError> {
+    pub fn read_frame(&mut self, buf: &mut [u8]) -> Result<u32, DecodingError> {
         assert!(self.is_animated());
         assert_eq!(Some(buf.len()), self.output_buffer_size());
 
         if self.animation.next_frame == self.num_frames {
-            return Ok(None);
+            return Err(DecodingError::NoMoreFrames);
         }
 
         let ImageKind::Extended(info) = &self.kind else {
@@ -802,7 +806,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             }
         }
 
-        Ok(Some(duration))
+        Ok(duration)
     }
 
     /// Resets the animation to the first frame.
