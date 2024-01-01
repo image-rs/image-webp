@@ -670,9 +670,6 @@ static ZIGZAG: [u8; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15]
 
 struct BoolReader {
     reader: Cursor<Vec<u8>>,
-    //buf: Vec<u8>,
-    //index: usize,
-
     range: u32,
     value: u32,
     bit_count: u8,
@@ -757,7 +754,12 @@ impl BoolReader {
         }
     }
 
-    pub(crate) fn read_with_tree(&mut self, tree: &[i8], probs: &[Prob], start: isize) -> Result<i8, DecodingError> {
+    pub(crate) fn read_with_tree(
+        &mut self,
+        tree: &[i8],
+        probs: &[Prob],
+        start: isize,
+    ) -> Result<i8, DecodingError> {
         let mut index = start;
 
         loop {
@@ -1459,9 +1461,9 @@ impl<R: Read> Vp8Decoder<R> {
                 }
             }
 
-            let chroma = self
-                .b
-                .read_with_tree(&KEYFRAME_UV_MODE_TREE, &KEYFRAME_UV_MODE_PROBS, 0)?;
+            let chroma =
+                self.b
+                    .read_with_tree(&KEYFRAME_UV_MODE_TREE, &KEYFRAME_UV_MODE_PROBS, 0)?;
             mb.chroma_mode = ChromaMode::from_i8(chroma)
                 .ok_or(DecodingError::ChromaPredictionModeInvalid(chroma))?;
         }
@@ -1710,7 +1712,12 @@ impl<R: Read> Vp8Decoder<R> {
         Ok(has_coefficients)
     }
 
-    fn read_residual_data(&mut self, mb: &MacroBlock, mbx: usize, p: usize) -> Result<[i32; 384], DecodingError> {
+    fn read_residual_data(
+        &mut self,
+        mb: &MacroBlock,
+        mbx: usize,
+        p: usize,
+    ) -> Result<[i32; 384], DecodingError> {
         let sindex = mb.segmentid as usize;
         let mut blocks = [0i32; 384];
         let mut plane = if mb.luma_mode == LumaMode::B { 3 } else { 1 };
@@ -1771,7 +1778,8 @@ impl<R: Read> Vp8Decoder<R> {
                     let dcq = self.segment[sindex].uvdc;
                     let acq = self.segment[sindex].uvac;
 
-                    let n = self.read_coefficients(block, p, plane, complexity as usize, dcq, acq)?;
+                    let n =
+                        self.read_coefficients(block, p, plane, complexity as usize, dcq, acq)?;
                     if block[0] != 0 || n {
                         transform::idct4x4(block);
                     }
