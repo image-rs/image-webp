@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use std::io::{self, BufReader, Cursor, Read, Seek};
 
+use std::num::NonZeroU16;
 use std::ops::Range;
 use thiserror::Error;
 
@@ -211,6 +212,15 @@ impl Default for AnimationState {
     }
 }
 
+/// Number of times that an animation loops.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum LoopCount {
+    /// The animation loops forever.
+    Forever,
+    /// Each frame of the animation is displayed the specified number of times.
+    Times(NonZeroU16),
+}
+
 /// WebP image format decoder.
 pub struct WebPDecoder<R> {
     r: R,
@@ -225,7 +235,7 @@ pub struct WebPDecoder<R> {
     is_lossy: bool,
     has_alpha: bool,
     num_frames: u32,
-    loop_count: u16,
+    loop_count: LoopCount,
     loop_duration: u64,
 
     chunks: HashMap<WebPRiffChunk, Range<u64>>,
@@ -246,7 +256,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
             memory_limit: usize::MAX,
             is_lossy: false,
             has_alpha: false,
-            loop_count: 1,
+            loop_count: LoopCount::Times(NonZeroU16::new(1).unwrap()),
             loop_duration: 0,
         };
         decoder.read_data()?;
@@ -403,7 +413,10 @@ impl<R: Read + Seek> WebPDecoder<R> {
                         Ok(Some(chunk)) => {
                             let mut cursor = Cursor::new(chunk);
                             cursor.read_exact(&mut info.background_color)?;
-                            self.loop_count = cursor.read_u16::<LittleEndian>()?;
+                            self.loop_count = match cursor.read_u16::<LittleEndian>()? {
+                                0 => LoopCount::Forever,
+                                n => LoopCount::Times(NonZeroU16::new(n).unwrap()),
+                            };
                             self.animation.next_frame_start =
                                 self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
                         }
@@ -492,9 +505,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
         self.num_frames
     }
 
-    /// Returns the number of times the animation should loop, or zero if the animation loops
-    /// forever.
-    pub fn loop_count(&self) -> u16 {
+    /// Returns the number of times the animation should loop.
+    pub fn loop_count(&self) -> LoopCount {
         self.loop_count
     }
 
