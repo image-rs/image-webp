@@ -691,7 +691,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 // read alpha
                 let next_chunk_start = self.r.stream_position()? + chunk_size_rounded as u64;
                 let mut reader = (&mut self.r).take(chunk_size as u64);
-                let alpha_chunk = read_alpha_chunk(&mut reader, frame_width as u16, frame_height as u16)?;
+                let alpha_chunk =
+                    read_alpha_chunk(&mut reader, frame_width as u16, frame_height as u16)?;
 
                 // read opaque
                 self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
