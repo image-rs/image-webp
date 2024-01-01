@@ -571,8 +571,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
                     .clone();
                 let alpha_chunk = read_alpha_chunk(
                     &mut range_reader(&mut self.r, range.start..range.end)?,
-                    self.width,
-                    self.height,
+                    self.width as u16,
+                    self.height as u16,
                 )?;
 
                 for y in 0..frame.height {
@@ -632,6 +632,9 @@ impl<R: Read + Seek> WebPDecoder<R> {
         let frame_y = extended::read_3_bytes(&mut self.r)? * 2;
         let frame_width = extended::read_3_bytes(&mut self.r)? + 1;
         let frame_height = extended::read_3_bytes(&mut self.r)? + 1;
+        if frame_width > 16384 || frame_height > 16384 {
+            return Err(DecodingError::ImageTooLarge);
+        }
         if frame_x + frame_width > self.width || frame_y + frame_height > self.height {
             return Err(DecodingError::FrameOutsideImage);
         }
@@ -688,7 +691,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 // read alpha
                 let next_chunk_start = self.r.stream_position()? + chunk_size_rounded as u64;
                 let mut reader = (&mut self.r).take(chunk_size as u64);
-                let alpha_chunk = read_alpha_chunk(&mut reader, frame_width, frame_height)?;
+                let alpha_chunk = read_alpha_chunk(&mut reader, frame_width as u16, frame_height as u16)?;
 
                 // read opaque
                 self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
