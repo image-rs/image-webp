@@ -2,7 +2,7 @@ use super::lossless::LosslessDecoder;
 use crate::decoder::DecodingError;
 use byteorder::ReadBytesExt;
 use std::convert::TryInto;
-use std::io::{self, Read};
+use std::io::Read;
 
 #[derive(Debug, Clone)]
 pub(crate) struct WebPExtendedInfo {
@@ -264,8 +264,8 @@ pub(crate) enum FilteringMethod {
 
 pub(crate) fn read_alpha_chunk<R: Read>(
     reader: &mut R,
-    width: u32,
-    height: u32,
+    width: u16,
+    height: u16,
 ) -> Result<AlphaChunk, DecodingError> {
     let info_byte = reader.read_u8()?;
 
@@ -298,27 +298,16 @@ pub(crate) fn read_alpha_chunk<R: Read>(
         _ => return Err(DecodingError::InvalidCompressionMethod),
     };
 
-    let mut framedata = Vec::new();
-    reader.read_to_end(&mut framedata)?;
-
     let data = if lossless_compression {
-        let cursor = io::Cursor::new(framedata);
-
-        let mut decoder = LosslessDecoder::new(cursor);
-        //this is a potential problem for large images; would require rewriting lossless decoder to
-        //use u32 for width and height
-        let width: u16 = width.try_into().map_err(|_| DecodingError::ImageTooLarge)?;
-        let height: u16 = height
-            .try_into()
-            .map_err(|_| DecodingError::ImageTooLarge)?;
+        let mut decoder = LosslessDecoder::new(reader);
         let frame = decoder.decode_frame(Some((width, height)))?;
 
         let mut data = vec![0u8; usize::from(width) * usize::from(height)];
-
         frame.fill_green(&mut data);
-
         data
     } else {
+        let mut framedata = vec![0; width as usize * height as usize];
+        reader.read_exact(&mut framedata)?;
         framedata
     };
 
