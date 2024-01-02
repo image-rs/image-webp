@@ -12,7 +12,7 @@ fuzz_target!(|input: &[u8]| {
         if total_bytes <= 1024 * 1024 * 1024 {
             if decoder.is_animated() {
                 let mut data = vec![0; total_bytes];
-                while let Ok(_delay) = decoder.read_frame(&mut data) {};
+                while let Ok(_delay) = decoder.read_frame(&mut data) {}
             }
         }
     }
