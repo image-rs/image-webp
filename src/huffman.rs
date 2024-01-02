@@ -1,4 +1,4 @@
-use std::convert::TryInto;
+use std::{convert::TryInto, io::Read};
 
 use crate::decoder::DecodingError;
 
@@ -191,7 +191,10 @@ impl HuffmanTree {
     }
 
     /// Reads a symbol using the bitstream
-    pub(crate) fn read_symbol(&self, bit_reader: &mut BitReader) -> Result<u16, DecodingError> {
+    pub(crate) fn read_symbol<R: Read>(
+        &self,
+        bit_reader: &mut BitReader<R>,
+    ) -> Result<u16, DecodingError> {
         let mut index = 0;
         loop {
             match &self.tree[index] {
