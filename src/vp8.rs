@@ -17,8 +17,8 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use std::cmp;
 use std::convert::TryInto;
 use std::default::Default;
-use std::io::Cursor;
 use std::io::Read;
+use std::io::{Cursor, ErrorKind};
 
 use crate::decoder::DecodingError;
 
@@ -673,6 +673,7 @@ struct BoolReader {
     range: u32,
     value: u32,
     bit_count: u8,
+    eof: bool,
 }
 
 impl BoolReader {
@@ -682,6 +683,7 @@ impl BoolReader {
             range: 0,
             value: 0,
             bit_count: 0,
+            eof: false,
         }
     }
 
@@ -724,7 +726,18 @@ impl BoolReader {
 
             if self.bit_count >= 8 {
                 self.bit_count %= 8;
-                self.value |= u32::from(self.reader.read_u8()?) << self.bit_count;
+
+                // libwebp seems to (sometimes?) allow bitstreams that read one byte past the end.
+                // This match statement replicates that logic.
+                let v = match self.reader.read_u8() {
+                    Ok(v) => v,
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof && !self.eof => {
+                        self.eof = true;
+                        0
+                    }
+                    Err(e) => return Err(DecodingError::IoError(e)),
+                };
+                self.value |= u32::from(v) << self.bit_count;
             }
         }
 
