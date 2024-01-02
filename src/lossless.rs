@@ -5,6 +5,8 @@
 
 use std::{convert::TryInto, io::Read, mem};
 
+use byteorder::ReadBytesExt;
+
 use crate::decoder::DecodingError;
 
 use super::huffman::HuffmanTree;
@@ -58,8 +60,7 @@ const NUM_TRANSFORM_TYPES: usize = 4;
 //Decodes lossless WebP images
 #[derive(Debug)]
 pub(crate) struct LosslessDecoder<R> {
-    r: R,
-    bit_reader: BitReader,
+    bit_reader: BitReader<R>,
     frame: LosslessFrame,
     transforms: [Option<TransformType>; NUM_TRANSFORM_TYPES],
     transform_order: Vec<u8>,
@@ -69,8 +70,7 @@ impl<R: Read> LosslessDecoder<R> {
     /// Create a new decoder
     pub(crate) fn new(r: R) -> LosslessDecoder<R> {
         LosslessDecoder {
-            r,
-            bit_reader: BitReader::new(),
+            bit_reader: BitReader::new(r),
             frame: Default::default(),
             transforms: [None, None, None, None],
             transform_order: Vec::new(),
@@ -86,10 +86,6 @@ impl<R: Read> LosslessDecoder<R> {
         &mut self,
         implicit_dimensions: Option<(u16, u16)>,
     ) -> Result<&LosslessFrame, DecodingError> {
-        let mut buf = Vec::new();
-        self.r.read_to_end(&mut buf)?;
-        self.bit_reader.init(buf);
-
         match implicit_dimensions {
             Some((width, height)) => {
                 self.frame.width = width;
@@ -549,7 +545,7 @@ impl<R: Read> LosslessDecoder<R> {
 
     /// Gets the copy distance from the prefix code and bitstream
     fn get_copy_distance(
-        bit_reader: &mut BitReader,
+        bit_reader: &mut BitReader<R>,
         prefix_code: u16,
     ) -> Result<usize, DecodingError> {
         if prefix_code < 4 {
@@ -621,44 +617,33 @@ impl ColorCache {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct BitReader {
-    buf: Vec<u8>,
-    index: usize,
-    bit_count: u8,
+pub(crate) struct BitReader<R> {
+    reader: R,
+    buffer: u64,
+    nbits: u8,
 }
 
-impl BitReader {
-    fn new() -> BitReader {
-        BitReader {
-            buf: Vec::new(),
-            index: 0,
-            bit_count: 0,
+impl<R: Read> BitReader<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            buffer: 0,
+            nbits: 0,
         }
-    }
-
-    fn init(&mut self, buf: Vec<u8>) {
-        self.buf = buf;
     }
 
     pub(crate) fn read_bits<T: TryFrom<u32>>(&mut self, num: u8) -> Result<T, DecodingError> {
         debug_assert!(num as usize <= 8 * mem::size_of::<T>());
         debug_assert!(num <= 32);
 
-        let mut value = 0;
-
-        for i in 0..num {
-            if self.buf.len() <= self.index {
-                return Err(DecodingError::BitStreamError);
-            }
-            let bit_true = self.buf[self.index] & (1 << self.bit_count) != 0;
-            value += u32::from(bit_true) << i;
-            self.bit_count = if self.bit_count == 7 {
-                self.index += 1;
-                0
-            } else {
-                self.bit_count + 1
-            };
+        while self.nbits < num {
+            self.buffer |= u64::from(self.reader.read_u8()?) << self.nbits;
+            self.nbits += 8;
         }
+
+        let value = (self.buffer & ((1 << num) - 1)) as u32;
+        self.buffer >>= num;
+        self.nbits -= num;
 
         match value.try_into() {
             Ok(value) => Ok(value),
@@ -706,16 +691,14 @@ impl LosslessFrame {
 #[cfg(test)]
 mod test {
 
+    use std::io::Cursor;
+
     use super::BitReader;
 
     #[test]
     fn bit_read_test() {
-        let mut bit_reader = BitReader::new();
-
         //10011100 01000001 11100001
-        let buf = vec![0x9C, 0x41, 0xE1];
-
-        bit_reader.init(buf);
+        let mut bit_reader = BitReader::new(Cursor::new(vec![0x9C, 0x41, 0xE1]));
 
         assert_eq!(bit_reader.read_bits::<u8>(3).unwrap(), 4); //100
         assert_eq!(bit_reader.read_bits::<u8>(2).unwrap(), 3); //11
@@ -726,12 +709,8 @@ mod test {
 
     #[test]
     fn bit_read_error_test() {
-        let mut bit_reader = BitReader::new();
-
         //01101010
-        let buf = vec![0x6A];
-
-        bit_reader.init(buf);
+        let mut bit_reader = BitReader::new(Cursor::new(vec![0x6A]));
 
         assert_eq!(bit_reader.read_bits::<u8>(3).unwrap(), 2); //010
         assert_eq!(bit_reader.read_bits::<u8>(5).unwrap(), 13); //01101
