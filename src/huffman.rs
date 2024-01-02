@@ -77,8 +77,8 @@ impl HuffmanTree {
 
         // Ensure code lengths produce a valid huffman tree
         let mut total = 0;
-        for code_len in 1..=usize::from(max_code_length) {
-            total += (code_length_hist[code_len] as u32) << (MAX_ALLOWED_CODE_LENGTH - code_len);
+        for (code_len, &count) in code_length_hist.iter().enumerate() {
+            total += (count as u32) << (MAX_ALLOWED_CODE_LENGTH - code_len);
         }
         if total != 1 << MAX_ALLOWED_CODE_LENGTH {
             return Err(DecodingError::HuffmanError);
