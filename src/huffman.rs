@@ -64,29 +64,34 @@ impl HuffmanTree {
             .iter()
             .reduce(|a, b| if a >= b { a } else { b })
             .unwrap();
-
         if max_code_length > MAX_ALLOWED_CODE_LENGTH.try_into().unwrap() {
             return Err(DecodingError::HuffmanError);
         }
 
+        // Build histogram
         let mut code_length_hist = [0; MAX_ALLOWED_CODE_LENGTH + 1];
-
         for &length in code_lengths.iter() {
             code_length_hist[usize::from(length)] += 1;
         }
-
         code_length_hist[0] = 0;
 
+        // Ensure code lengths produce a valid huffman tree
+        let mut total = 0;
+        for code_len in 1..=usize::from(max_code_length) {
+            total += (code_length_hist[code_len] as u32) << (MAX_ALLOWED_CODE_LENGTH - code_len);
+        }
+        if total != 1 << MAX_ALLOWED_CODE_LENGTH {
+            return Err(DecodingError::HuffmanError);
+        }
+
+        // Assign codes
         let mut curr_code = 0;
         let mut next_codes = [None; MAX_ALLOWED_CODE_LENGTH + 1];
-
         for code_len in 1..=usize::from(max_code_length) {
             curr_code = (curr_code + code_length_hist[code_len - 1]) << 1;
             next_codes[code_len] = Some(curr_code);
         }
-
         let mut huff_codes = vec![None; code_lengths.len()];
-
         for (symbol, &length) in code_lengths.iter().enumerate() {
             let length = usize::from(length);
             if length > 0 {
