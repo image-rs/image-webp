@@ -9,9 +9,13 @@ use thiserror::Error;
 /// Color type of the image.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ColorType {
+    /// Opaque image with a single luminance byte per pixel.
     L8,
+    /// Image with a luminance and alpha byte per pixel.
     La8,
+    /// Opaque image with a red, green, and blue byte per pixel.
     Rgb8,
+    /// Image with a red, green, blue, and alpha byte per pixel.
     Rgba8,
 }
 
@@ -633,6 +637,7 @@ impl<W: Write> WebPEncoder<W> {
         if self.icc_profile.is_empty()
             && self.exif_metadata.is_empty()
             && self.xmp_metadata.is_empty()
+            && false
         {
             self.writer.write_all(b"RIFF")?;
             self.writer
@@ -640,23 +645,23 @@ impl<W: Write> WebPEncoder<W> {
             self.writer.write_all(b"WEBP")?;
             write_chunk(&mut self.writer, b"VP8L", &frame)?;
         } else {
-            let total_bytes = 24
+            let total_bytes = 30
                 + chunk_size(frame.len())
                 + chunk_size(self.icc_profile.len())
                 + chunk_size(self.exif_metadata.len())
                 + chunk_size(self.xmp_metadata.len());
 
             let mut flags = 0;
-            if !self.icc_profile.is_empty() {
+            if !self.xmp_metadata.is_empty() {
                 flags |= 1 << 2;
             }
-            if let ColorType::La8 | ColorType::Rgba8 = color {
+            if !self.exif_metadata.is_empty() {
                 flags |= 1 << 3;
             }
-            if !self.exif_metadata.is_empty() {
+            if let ColorType::La8 | ColorType::Rgba8 = color {
                 flags |= 1 << 4;
             }
-            if !self.xmp_metadata.is_empty() {
+            if !self.icc_profile.is_empty() {
                 flags |= 1 << 5;
             }
 
@@ -665,6 +670,7 @@ impl<W: Write> WebPEncoder<W> {
             self.writer.write_all(b"WEBP")?;
 
             self.writer.write_all(b"VP8X")?;
+            self.writer.write_all(&(10u32.to_le_bytes()))?; // chunk size
             self.writer.write_all(&[flags])?; // flags
             self.writer.write_all(&[0; 3])?; // reserved
             self.writer.write_all(&(width - 1).to_le_bytes()[..3])?; // canvas width
@@ -709,5 +715,30 @@ mod tests {
         let mut img2 = vec![0; 256 * 256 * 4];
         decoder.read_image(&mut img2).unwrap();
         assert_eq!(img, img2);
+    }
+
+    #[test]
+    fn write_webp_exif() {
+        let mut img = vec![0; 256 * 256 * 3];
+        rand::thread_rng().fill_bytes(&mut img);
+
+        let mut exif = vec![0; 10];
+        rand::thread_rng().fill_bytes(&mut exif);
+
+        let mut output = Vec::new();
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_exif_metadata(exif.clone());
+        encoder
+            .encode(&img, 256, 256, crate::ColorType::Rgb8)
+            .unwrap();
+
+        let mut decoder = crate::WebPDecoder::new(std::io::Cursor::new(output)).unwrap();
+
+        let mut img2 = vec![0; 256 * 256 * 3];
+        decoder.read_image(&mut img2).unwrap();
+        assert_eq!(img, img2);
+
+        let exif2 = decoder.exif_metadata().unwrap();
+        assert_eq!(Some(exif), exif2);
     }
 }
