@@ -641,7 +641,6 @@ impl<W: Write> WebPEncoder<W> {
         if self.icc_profile.is_empty()
             && self.exif_metadata.is_empty()
             && self.xmp_metadata.is_empty()
-            && false
         {
             self.writer.write_all(b"RIFF")?;
             self.writer
