@@ -7,6 +7,10 @@ use std::slice::ChunksExact;
 use thiserror::Error;
 
 /// Color type of the image.
+///
+/// Note that the WebP format doesn't have a concept of color type. All images are encoded as RGBA
+/// and some decoders may treat them as such. This enum is used to indicate the color type of the
+/// input data provided to the encoder, which can help improve compression ratio.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ColorType {
     /// Opaque image with a single luminance byte per pixel.
