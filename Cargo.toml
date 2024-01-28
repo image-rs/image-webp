@@ -1,11 +1,10 @@
 [package]
-name = "webp"
+name = "image-webp"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 rust-version = "1.67.1"
 include = ["/src", "LICENSE-APACHE", "LICENSE-MIT", "README.md"]
-publish = false
 
 [dependencies]
 byteorder = "1.4.3"

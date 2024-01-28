@@ -3,7 +3,7 @@ use std::{io::Cursor, path::PathBuf};
 fn reference_test(file: &str) {
     // Prepare WebP decoder
     let contents = std::fs::read(format!("tests/images/{file}.webp")).unwrap();
-    let mut decoder = webp::WebPDecoder::new(Cursor::new(contents)).unwrap();
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(contents)).unwrap();
     let (width, height) = decoder.dimensions();
 
     // Decode reference PNG
