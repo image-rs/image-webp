@@ -4,8 +4,10 @@
 #![deny(missing_docs)]
 
 pub use self::decoder::{DecodingError, WebPDecoder};
+pub use self::encoder::{ColorType, EncodingError, WebPEncoder};
 
 mod decoder;
+mod encoder;
 mod extended;
 mod huffman;
 mod loop_filter;
