@@ -18,5 +18,5 @@ thiserror = "1.0.47"
 
 [dev-dependencies]
 paste = "1.0.14"
-png = "0.17.10"
+png = "0.17.12"
 rand = "0.8.5"
