@@ -15,7 +15,6 @@
 use byteorder::BigEndian;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::cmp;
-use std::convert::TryInto;
 use std::default::Default;
 use std::io::Read;
 use std::io::{Cursor, ErrorKind};
