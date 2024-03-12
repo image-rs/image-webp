@@ -3,7 +3,7 @@
 //! [Lossless spec](https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification)
 //!
 
-use std::{convert::TryInto, io::Read, mem};
+use std::{io::Read, mem};
 
 use byteorder::ReadBytesExt;
 

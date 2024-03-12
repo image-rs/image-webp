@@ -1,4 +1,4 @@
-use std::{convert::TryInto, io::Read};
+use std::io::Read;
 
 use crate::decoder::DecodingError;
 
