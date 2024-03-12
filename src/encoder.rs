@@ -644,7 +644,7 @@ impl<W: Write> WebPEncoder<W> {
         {
             self.writer.write_all(b"RIFF")?;
             self.writer
-                .write_all(&(frame.len() as u32 + 12).to_le_bytes())?;
+                .write_all(&(chunk_size(frame.len()) + 4).to_le_bytes())?;
             self.writer.write_all(b"WEBP")?;
             write_chunk(&mut self.writer, b"VP8L", &frame)?;
         } else {
