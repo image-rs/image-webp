@@ -3,7 +3,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-pub use self::decoder::{DecodingError, WebPDecoder};
+pub use self::decoder::{DecodingError, LoopCount, WebPDecoder};
 pub use self::encoder::{ColorType, EncodingError, WebPEncoder};
 
 mod decoder;
