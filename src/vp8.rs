@@ -12,8 +12,8 @@
 //! of the VP8 format
 //!
 
-use byteorder::BigEndian;
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder_lite::BigEndian;
+use byteorder_lite::{LittleEndian, ReadBytesExt};
 use std::cmp;
 use std::default::Default;
 use std::io::Read;

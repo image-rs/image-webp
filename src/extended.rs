@@ -1,6 +1,6 @@
 use super::lossless::LosslessDecoder;
 use crate::decoder::DecodingError;
-use byteorder::ReadBytesExt;
+use byteorder_lite::ReadBytesExt;
 use std::io::Read;
 
 #[derive(Debug, Clone)]

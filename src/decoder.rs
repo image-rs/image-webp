@@ -1,4 +1,4 @@
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder_lite::{LittleEndian, ReadBytesExt};
 use std::collections::HashMap;
 
 use std::io::{self, BufReader, Cursor, Read, Seek};
