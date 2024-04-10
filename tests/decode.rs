@@ -1,4 +1,42 @@
-use std::{io::Cursor, path::PathBuf};
+use std::{
+    fs::create_dir_all,
+    io::{Cursor, Write},
+    path::PathBuf,
+};
+
+// Write images to `out/` directory on test failure - useful for diffing with reference images.
+const WRITE_IMAGES_ON_FAILURE: bool = false;
+
+fn save_image(data: &[u8], file: &str, i: Option<u32>, has_alpha: bool, width: u32, height: u32) {
+    if !WRITE_IMAGES_ON_FAILURE {
+        return;
+    }
+
+    let path = PathBuf::from(match i {
+        Some(i) => format!("tests/out/{file}-{i}.png"),
+        None => format!("tests/out/{file}.png"),
+    });
+
+    let directory = path.parent().unwrap();
+    if !directory.exists() {
+        create_dir_all(directory).unwrap();
+    }
+
+    let mut f = std::fs::File::create(path).unwrap();
+
+    let mut encoder = png::Encoder::new(&mut f, width, height);
+    if has_alpha {
+        encoder.set_color(png::ColorType::Rgba);
+    } else {
+        encoder.set_color(png::ColorType::Rgb);
+    }
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&data)
+        .unwrap();
+    f.flush().unwrap();
+}
 
 fn reference_test(file: &str) {
     // Prepare WebP decoder
@@ -34,22 +72,17 @@ fn reference_test(file: &str) {
     let mut data = vec![0; width as usize * height as usize * bytes_per_pixel];
     decoder.read_image(&mut data).unwrap();
 
-    // // Save mismatching images
-    // if data != reference_data {
-    //     let mut f = std::fs::File::create(format!("tests/out/{file}.png")).unwrap();
-    //     let mut encoder = png::Encoder::new(&mut f, width, height);
-    //     encoder.set_color(png::ColorType::Rgba);
-    //     encoder
-    //         .write_header()
-    //         .unwrap()
-    //         .write_image_data(&data)
-    //         .unwrap();
-    //     f.flush().unwrap();
-    // }
-
     // Compare pixels
     if !decoder.is_lossy() {
         if data != reference_data {
+            save_image(
+                &data,
+                file,
+                if decoder.is_animated() { Some(1) } else { None },
+                decoder.has_alpha(),
+                width,
+                height,
+            );
             panic!("Pixel mismatch")
         }
     } else {
@@ -62,10 +95,18 @@ fn reference_test(file: &str) {
             .zip(reference_data.iter())
             .filter(|(a, b)| a != b)
             .count();
-        assert!(
-            100 * num_bytes_different / data.len() < 10,
-            "More than 10% of pixels differ"
-        );
+        let percentage_different = 100 * num_bytes_different / data.len();
+        if percentage_different >= 10 {
+            save_image(
+                &data,
+                file,
+                if decoder.is_animated() { Some(1) } else { None },
+                decoder.has_alpha(),
+                width,
+                height,
+            );
+        }
+        assert!(percentage_different < 10, "More than 10% of pixels differ");
     }
 
     // If the file is animated, then check all frames.
@@ -89,6 +130,7 @@ fn reference_test(file: &str) {
 
             if !decoder.is_lossy() {
                 if data != reference_data {
+                    save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
                     panic!("Pixel mismatch")
                 }
             } else {
@@ -97,10 +139,11 @@ fn reference_test(file: &str) {
                     .zip(reference_data.iter())
                     .filter(|(a, b)| a != b)
                     .count();
-                assert!(
-                    100 * num_bytes_different / data.len() < 10,
-                    "More than 10% of pixels differ"
-                );
+                let percentage_different = 100 * num_bytes_different / data.len();
+                if percentage_different >= 10 {
+                    save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
+                }
+                assert!(percentage_different < 10, "More than 10% of pixels differ");
             }
         }
     }
