@@ -1200,10 +1200,14 @@ impl<R: Read> Vp8Decoder<R> {
             1
         };
         for i in 0usize..n {
-            let base = i32::from(if !self.segment[i].delta_values {
-                i16::from(self.segment[i].quantizer_level)
+            let base = i32::from(if self.segments_enabled {
+                if !self.segment[i].delta_values {
+                    i16::from(self.segment[i].quantizer_level)
+                } else {
+                    i16::from(self.segment[i].quantizer_level) + i16::from(yac_abs)
+                }
             } else {
-                i16::from(self.segment[i].quantizer_level) + i16::from(yac_abs)
+                i16::from(yac_abs)
             });
 
             self.segment[i].ydc = dc_quant(base + ydc_delta);
