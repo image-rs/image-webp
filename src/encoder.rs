@@ -1,7 +1,6 @@
 //! Encoding of WebP images.
 use std::collections::BinaryHeap;
 use std::io::{self, Write};
-use std::iter::FromIterator;
 use std::slice::ChunksExact;
 
 use thiserror::Error;

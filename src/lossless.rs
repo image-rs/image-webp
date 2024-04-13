@@ -5,7 +5,7 @@
 
 use std::{io::Read, mem};
 
-use byteorder::ReadBytesExt;
+use byteorder_lite::ReadBytesExt;
 
 use crate::decoder::DecodingError;
 

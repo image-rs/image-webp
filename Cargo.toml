@@ -13,7 +13,7 @@ categories = ["multimedia::images", "multimedia::encoding", "encoding"]
 include = ["/src", "LICENSE-APACHE", "LICENSE-MIT", "README.md"]
 
 [dependencies]
-byteorder = "1.4.3"
+byteorder-lite = "0.1.0"
 thiserror = "1.0.47"
 
 [dev-dependencies]
