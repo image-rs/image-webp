@@ -195,18 +195,29 @@ impl HuffmanTree {
         self.num_nodes == 1
     }
 
-    /// Reads a symbol using the bitstream
+    /// Reads a symbol using the bitstream.
+    ///
+    /// You must call call `bit_reader.fill()` before calling this function or it may erroroneosly
+    /// detect the end of the stream and return a bitstream error.
     pub(crate) fn read_symbol<R: Read>(
         &self,
         bit_reader: &mut BitReader<R>,
     ) -> Result<u16, DecodingError> {
+        let mut v = bit_reader.peek(15) as usize;
+        let mut depth = 0;
+
         let mut index = 0;
         loop {
             match &self.tree[index] {
                 HuffmanTreeNode::Branch(children_offset) => {
-                    index += children_offset + bit_reader.read_bits::<usize>(1)?;
+                    index += children_offset + (v & 1);
+                    depth += 1;
+                    v >>= 1;
                 }
-                HuffmanTreeNode::Leaf(symbol) => return Ok(*symbol),
+                HuffmanTreeNode::Leaf(symbol) => {
+                    bit_reader.consume(depth)?;
+                    return Ok(*symbol);
+                }
                 HuffmanTreeNode::Empty => return Err(DecodingError::HuffmanError),
             }
         }

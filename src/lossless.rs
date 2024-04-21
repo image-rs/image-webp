@@ -5,8 +5,6 @@
 
 use std::{io::Read, mem};
 
-use byteorder_lite::ReadBytesExt;
-
 use crate::decoder::DecodingError;
 
 use super::huffman::HuffmanTree;
@@ -379,6 +377,7 @@ impl<R: Read> LosslessDecoder<R> {
             }
             max_symbol -= 1;
 
+            self.bit_reader.fill()?;
             let code_len = table.read_symbol(&mut self.bit_reader)?;
 
             if code_len < 16 {
@@ -437,6 +436,8 @@ impl<R: Read> LosslessDecoder<R> {
 
         let mut next_block_start = 0;
         while index < num_values {
+            self.bit_reader.fill()?;
+
             if index >= next_block_start {
                 let x = index % usize::from(width);
                 let y = index / usize::from(width);
@@ -621,6 +622,8 @@ pub(crate) struct BitReader<R> {
     reader: R,
     buffer: u64,
     nbits: u8,
+    lookahead: u64,
+    lookahead_bits: u8,
 }
 
 impl<R: Read> BitReader<R> {
@@ -629,21 +632,90 @@ impl<R: Read> BitReader<R> {
             reader,
             buffer: 0,
             nbits: 0,
+            lookahead: 0,
+            lookahead_bits: 0,
         }
     }
 
+    fn apply_lookahead(&mut self) {
+        let num = self.lookahead_bits.min(64 - self.nbits);
+        self.buffer |= self.lookahead << self.nbits;
+        self.nbits += num;
+        self.lookahead = self.lookahead.checked_shr(num as u32).unwrap_or(0);
+        self.lookahead_bits -= num;
+    }
+
+    /// Fills the buffer with bits from the input stream.
+    ///
+    /// After this function, the internal buffer will contain 64-bits or have reached the end of
+    /// the input stream.
+    pub(crate) fn fill(&mut self) -> Result<(), DecodingError> {
+        // Check whether the buffer is already full.
+        if self.nbits == 64 {
+            return Ok(());
+        }
+
+        // Apply the lookahead bits if there are any.
+        if self.lookahead_bits > 0 {
+            self.apply_lookahead();
+            if self.nbits == 64 {
+                return Ok(());
+            }
+        }
+
+        debug_assert!(self.lookahead_bits == 0);
+        debug_assert!(self.nbits < 64);
+
+        // Read from the input stream.
+        let mut bytes_read = 0;
+        let mut bytes = [0; 8];
+        while bytes_read < 8 {
+            let n = self.reader.read(&mut bytes[bytes_read..])?;
+            if n == 0 {
+                if bytes_read == 0 {
+                    return Ok(());
+                }
+
+                // Technically, a `read` implementation can write bytes to the buffer even if it
+                // returns 0, so we need to zero out the remaining bytes to ensure that the buffer
+                // is properly initialized.
+                bytes[bytes_read..].fill(0);
+                break;
+            }
+            bytes_read += n;
+        }
+
+        self.lookahead = u64::from_le_bytes(bytes);
+        self.lookahead_bits = (bytes_read * 8) as u8;
+        self.apply_lookahead();
+
+        Ok(())
+    }
+
+    /// Peeks at the next `num` bits in the buffer.
+    pub(crate) fn peek(&self, num: u8) -> u64 {
+        self.buffer & ((1 << num) - 1)
+    }
+
+    /// Consumes `num` bits from the buffer returning an error if there are not enough bits.
+    pub(crate) fn consume(&mut self, num: u8) -> Result<(), DecodingError> {
+        if self.nbits < num {
+            return Err(DecodingError::BitStreamError);
+        }
+
+        self.buffer >>= num;
+        self.nbits -= num;
+        Ok(())
+    }
+
+    /// Convenience function to read a number of bits and convert them to a type.
     pub(crate) fn read_bits<T: TryFrom<u32>>(&mut self, num: u8) -> Result<T, DecodingError> {
         debug_assert!(num as usize <= 8 * mem::size_of::<T>());
         debug_assert!(num <= 32);
 
-        while self.nbits < num {
-            self.buffer |= u64::from(self.reader.read_u8()?) << self.nbits;
-            self.nbits += 8;
-        }
-
-        let value = (self.buffer & ((1 << num) - 1)) as u32;
-        self.buffer >>= num;
-        self.nbits -= num;
+        self.fill()?;
+        let value = self.peek(num) as u32;
+        self.consume(num)?;
 
         match value.try_into() {
             Ok(value) => Ok(value),
