@@ -3,7 +3,7 @@ use std::collections::BinaryHeap;
 use std::io::{self, Write};
 use std::slice::ChunksExact;
 
-use thiserror::Error;
+use quick_error::quick_error;
 
 /// Color type of the image.
 ///
@@ -22,17 +22,23 @@ pub enum ColorType {
     Rgba8,
 }
 
-/// Error that can occur during encoding.
-#[derive(Error, Debug)]
-#[non_exhaustive]
-pub enum EncodingError {
-    /// An IO error occurred.
-    #[error("IO error: {0}")]
-    IoError(#[from] io::Error),
+quick_error! {
+    /// Error that can occur during encoding.
+    #[derive(Debug)]
+    #[non_exhaustive]
+    pub enum EncodingError {
+        /// An IO error occurred.
+        IoError(err: io::Error) {
+            from()
+            display("IO error: {}", err)
+            source(err)
+        }
 
-    /// The image dimensions are not allowed by the WebP format.
-    #[error("Invalid dimensions")]
-    InvalidDimensions,
+        /// The image dimensions are not allowed by the WebP format.
+        InvalidDimensions {
+            display("Invalid dimensions")
+        }
+    }
 }
 
 struct BitWriter<W> {

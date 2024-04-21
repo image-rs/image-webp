@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
+#![recursion_limit = "256"]
 
 pub use self::decoder::{DecodingError, LoopCount, WebPDecoder};
 pub use self::encoder::{ColorType, EncodingError, WebPEncoder};
