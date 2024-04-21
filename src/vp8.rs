@@ -1156,11 +1156,11 @@ impl<R: Read> Vp8Decoder<R> {
 
     fn read_quantization_indices(&mut self) -> Result<(), DecodingError> {
         fn dc_quant(index: i32) -> i16 {
-            DC_QUANT[index.max(0).min(127) as usize]
+            DC_QUANT[index.clamp(0, 127) as usize]
         }
 
         fn ac_quant(index: i32) -> i16 {
-            AC_QUANT[index.max(0).min(127) as usize]
+            AC_QUANT[index.clamp(0, 127) as usize]
         }
 
         let yac_abs = self.b.read_literal(7)?;
@@ -2089,13 +2089,13 @@ impl<R: Read> Vp8Decoder<R> {
             }
         }
 
-        filter_level = filter_level.max(0).min(63);
+        filter_level = filter_level.clamp(0, 63);
 
         if macroblock.luma_mode == LumaMode::B {
             filter_level += self.mode_delta[0];
         }
 
-        let filter_level = filter_level.max(0).min(63) as u8;
+        let filter_level = filter_level.clamp(0, 63) as u8;
 
         //interior limit
         let mut interior_limit = filter_level;
@@ -2321,7 +2321,7 @@ fn add_residue(pblock: &mut [u8], rblock: &[i32; 16], y0: usize, x0: usize, stri
     let mut pos = y0 * stride + x0;
     for row in rblock.chunks(4) {
         for (p, &a) in pblock[pos..][..4].iter_mut().zip(row.iter()) {
-            *p = (a + i32::from(*p)).max(0).min(255) as u8;
+            *p = (a + i32::from(*p)).clamp(0, 255) as u8;
         }
         pos += stride;
     }
@@ -2433,7 +2433,7 @@ fn predict_tmpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize
         x_block[y * stride + 1..][..size]
             .iter_mut()
             .zip(above_slice)
-            .for_each(|(cur, &abv)| *cur = (left_minus_p + i32::from(abv)).max(0).min(255) as u8);
+            .for_each(|(cur, &abv)| *cur = (left_minus_p + i32::from(abv)).clamp(0, 255) as u8);
     }
 }
 

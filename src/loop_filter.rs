@@ -2,7 +2,7 @@
 
 #[inline]
 fn c(val: i32) -> i32 {
-    val.max(-128).min(127)
+    val.clamp(-128, 127)
 }
 
 //unsigned to signed

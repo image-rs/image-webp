@@ -33,7 +33,7 @@ fn save_image(data: &[u8], file: &str, i: Option<u32>, has_alpha: bool, width: u
     encoder
         .write_header()
         .unwrap()
-        .write_image_data(&data)
+        .write_image_data(data)
         .unwrap();
     f.flush().unwrap();
 }

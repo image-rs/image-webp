@@ -348,13 +348,7 @@ fn select(left: u32, top: u32, top_left: u32) -> u32 {
 
 /// Clamp a to [0, 255]
 fn clamp(a: i32) -> i32 {
-    if a < 0 {
-        0
-    } else if a > 255 {
-        255
-    } else {
-        a
-    }
+    a.clamp(0, 255)
 }
 
 /// Clamp add subtract full on one part
