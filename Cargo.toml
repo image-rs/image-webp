@@ -14,7 +14,7 @@ include = ["/src", "LICENSE-APACHE", "LICENSE-MIT", "README.md"]
 
 [dependencies]
 byteorder-lite = "0.1.0"
-thiserror = "1.0.47"
+quick-error = "2.0.1"
 
 [dev-dependencies]
 paste = "1.0.14"
