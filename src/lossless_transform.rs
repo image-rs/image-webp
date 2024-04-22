@@ -6,158 +6,186 @@ use super::lossless::subsample_size;
 pub(crate) enum TransformType {
     PredictorTransform {
         size_bits: u8,
-        predictor_data: Vec<u32>,
+        predictor_data: Vec<u8>,
     },
     ColorTransform {
         size_bits: u8,
-        transform_data: Vec<u32>,
+        transform_data: Vec<u8>,
     },
     SubtractGreen,
     ColorIndexingTransform {
         table_size: u16,
-        table_data: Vec<u32>,
+        table_data: Vec<u8>,
     },
 }
 
 pub(crate) fn apply_predictor_transform(
-    image_data: &mut [u32],
+    image_data: &mut [u8],
     width: u16,
     height: u16,
     size_bits: u8,
-    predictor_data: &[u32],
+    predictor_data: &[u8],
 ) -> Result<(), DecodingError> {
     let block_xsize = usize::from(subsample_size(width, size_bits));
     let width = usize::from(width);
     let height = usize::from(height);
 
-    if image_data.len() < width * height {
-        return Err(DecodingError::TransformError);
-    }
-
     //handle top and left borders specially
     //this involves ignoring mode and just setting prediction values like this
-    image_data[0] = add_pixels(image_data[0], 0xff000000);
+    image_data[3] = image_data[3].wrapping_add(255);
 
-    for x in 1..width {
-        image_data[x] = add_pixels(image_data[x], get_left(image_data, x, 0, width));
+    for x in 4..width * 4 {
+        image_data[x] = image_data[x].wrapping_add(image_data[x - 4]);
     }
 
     for y in 1..height {
-        image_data[y * width] = add_pixels(image_data[y * width], get_top(image_data, 0, y, width));
+        for i in 0..4 {
+            image_data[y * width * 4 + i] =
+                image_data[y * width * 4 + i].wrapping_add(image_data[(y - 1) * width * 4 + i]);
+        }
     }
 
     for y in 1..height {
-        for x in 1..width {
-            let block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
+        for block_x in 0..block_xsize {
+            let block_index = (y >> size_bits) * block_xsize + block_x;
+            let predictor = predictor_data[block_index * 4 + 1];
+            let start_index = (y * width + (block_x << size_bits).max(1)) * 4;
+            let end_index = (y * width + ((block_x + 1) << size_bits).min(width)) * 4;
 
-            let index = y * width + x;
-
-            let green = (predictor_data[block_index] >> 8) & 0xff;
-
-            match green {
-                0 => image_data[index] = add_pixels(image_data[index], 0xff000000),
+            match predictor {
+                0 => {
+                    for i in ((start_index + 3)..end_index).step_by(4) {
+                        image_data[i] = image_data[i].wrapping_add(0xff);
+                    }
+                }
                 1 => {
-                    image_data[index] =
-                        add_pixels(image_data[index], get_left(image_data, x, y, width))
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(image_data[i - 4]);
+                    }
                 }
                 2 => {
-                    image_data[index] =
-                        add_pixels(image_data[index], get_top(image_data, x, y, width))
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4]);
+                    }
                 }
                 3 => {
-                    image_data[index] =
-                        add_pixels(image_data[index], get_top_right(image_data, x, y, width))
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4 + 4]);
+                    }
                 }
                 4 => {
-                    image_data[index] =
-                        add_pixels(image_data[index], get_top_left(image_data, x, y, width))
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4 - 4]);
+                    }
                 }
                 5 => {
-                    image_data[index] = add_pixels(image_data[index], {
-                        let first = average2(
-                            get_left(image_data, x, y, width),
-                            get_top_right(image_data, x, y, width),
-                        );
-                        average2(first, get_top(image_data, x, y, width))
-                    })
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(average2(
+                            average2(image_data[i - 4], image_data[i - width * 4 + 4]),
+                            image_data[i - width * 4],
+                        ));
+                    }
                 }
                 6 => {
-                    image_data[index] = add_pixels(
-                        image_data[index],
-                        average2(
-                            get_left(image_data, x, y, width),
-                            get_top_left(image_data, x, y, width),
-                        ),
-                    )
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(average2(
+                            image_data[i - 4],
+                            image_data[i - width * 4 - 4],
+                        ));
+                    }
                 }
                 7 => {
-                    image_data[index] = add_pixels(
-                        image_data[index],
-                        average2(
-                            get_left(image_data, x, y, width),
-                            get_top(image_data, x, y, width),
-                        ),
-                    )
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i]
+                            .wrapping_add(average2(image_data[i - 4], image_data[i - width * 4]));
+                    }
                 }
                 8 => {
-                    image_data[index] = add_pixels(
-                        image_data[index],
-                        average2(
-                            get_top_left(image_data, x, y, width),
-                            get_top(image_data, x, y, width),
-                        ),
-                    )
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(average2(
+                            image_data[i - width * 4 - 4],
+                            image_data[i - width * 4],
+                        ));
+                    }
                 }
                 9 => {
-                    image_data[index] = add_pixels(
-                        image_data[index],
-                        average2(
-                            get_top(image_data, x, y, width),
-                            get_top_right(image_data, x, y, width),
-                        ),
-                    )
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(average2(
+                            image_data[i - width * 4],
+                            image_data[i - width * 4 + 4],
+                        ));
+                    }
                 }
                 10 => {
-                    image_data[index] = add_pixels(image_data[index], {
-                        let first = average2(
-                            get_left(image_data, x, y, width),
-                            get_top_left(image_data, x, y, width),
-                        );
-                        let second = average2(
-                            get_top(image_data, x, y, width),
-                            get_top_right(image_data, x, y, width),
-                        );
-                        average2(first, second)
-                    })
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(average2(
+                            average2(image_data[i - 4], image_data[i - width * 4 - 4]),
+                            average2(image_data[i - width * 4], image_data[i - width * 4 + 4]),
+                        ));
+                    }
                 }
                 11 => {
-                    image_data[index] = add_pixels(
-                        image_data[index],
-                        select(
-                            get_left(image_data, x, y, width),
-                            get_top(image_data, x, y, width),
-                            get_top_left(image_data, x, y, width),
-                        ),
-                    )
+                    for i in (start_index..end_index).step_by(4) {
+                        let lred = image_data[i - 4];
+                        let lgreen = image_data[i - 3];
+                        let lblue = image_data[i - 2];
+                        let lalpha = image_data[i - 1];
+
+                        let tred = image_data[i - width * 4];
+                        let tgreen = image_data[i - width * 4 + 1];
+                        let tblue = image_data[i - width * 4 + 2];
+                        let talpha = image_data[i - width * 4 + 3];
+
+                        let tlred = image_data[i - width * 4 - 4];
+                        let tlgreen = image_data[i - width * 4 - 3];
+                        let tlblue = image_data[i - width * 4 - 2];
+                        let tlalpha = image_data[i - width * 4 - 1];
+
+                        let predict_red = i16::from(lred) + i16::from(tred) - i16::from(tlred);
+                        let predict_green =
+                            i16::from(lgreen) + i16::from(tgreen) - i16::from(tlgreen);
+                        let predict_blue = i16::from(lblue) + i16::from(tblue) - i16::from(tlblue);
+                        let predict_alpha =
+                            i16::from(lalpha) + i16::from(talpha) - i16::from(tlalpha);
+
+                        let predict_left = i16::abs(predict_red - i16::from(lred))
+                            + i16::abs(predict_green - i16::from(lgreen))
+                            + i16::abs(predict_blue - i16::from(lblue))
+                            + i16::abs(predict_alpha - i16::from(lalpha));
+                        let predict_top = i16::abs(predict_red - i16::from(tred))
+                            + i16::abs(predict_green - i16::from(tgreen))
+                            + i16::abs(predict_blue - i16::from(tblue))
+                            + i16::abs(predict_alpha - i16::from(talpha));
+
+                        if predict_left < predict_top {
+                            image_data[i] = image_data[i].wrapping_add(lred);
+                            image_data[i + 1] = image_data[i + 1].wrapping_add(lgreen);
+                            image_data[i + 2] = image_data[i + 2].wrapping_add(lblue);
+                            image_data[i + 3] = image_data[i + 3].wrapping_add(lalpha);
+                        } else {
+                            image_data[i] = image_data[i].wrapping_add(tred);
+                            image_data[i + 1] = image_data[i + 1].wrapping_add(tgreen);
+                            image_data[i + 2] = image_data[i + 2].wrapping_add(tblue);
+                            image_data[i + 3] = image_data[i + 3].wrapping_add(talpha);
+                        }
+                    }
                 }
                 12 => {
-                    image_data[index] = add_pixels(
-                        image_data[index],
-                        clamp_add_subtract_full(
-                            get_left(image_data, x, y, width),
-                            get_top(image_data, x, y, width),
-                            get_top_left(image_data, x, y, width),
-                        ),
-                    )
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(clamp_add_subtract_full(
+                            i16::from(image_data[i - 4]),
+                            i16::from(image_data[i - width * 4]),
+                            i16::from(image_data[i - width * 4 - 4]),
+                        ));
+                    }
                 }
                 13 => {
-                    image_data[index] = add_pixels(image_data[index], {
-                        let first = average2(
-                            get_left(image_data, x, y, width),
-                            get_top(image_data, x, y, width),
-                        );
-                        clamp_add_subtract_half(first, get_top_left(image_data, x, y, width))
-                    })
+                    for i in start_index..end_index {
+                        image_data[i] = image_data[i].wrapping_add(clamp_add_subtract_half(
+                            i16::from(average2(image_data[i - 4], image_data[i - width * 4])),
+                            i16::from(image_data[i - width * 4 - 4]),
+                        ));
+                    }
                 }
                 _ => {}
             }
@@ -168,83 +196,92 @@ pub(crate) fn apply_predictor_transform(
 }
 
 pub(crate) fn apply_color_transform(
-    image_data: &mut [u32],
+    image_data: &mut [u8],
     width: u16,
-    height: u16,
     size_bits: u8,
-    transform_data: &[u32],
+    transform_data: &[u8],
 ) {
     let block_xsize = usize::from(subsample_size(width, size_bits));
     let width = usize::from(width);
-    let height = usize::from(height);
 
-    for y in 0..height {
-        for x in 0..width {
+    for (y, row) in image_data.chunks_exact_mut(width * 4).enumerate() {
+        for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
             let block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
+            let red_to_blue = transform_data[block_index * 4];
+            let green_to_blue = transform_data[block_index * 4 + 1];
+            let green_to_red = transform_data[block_index * 4 + 2];
 
-            let index = y * width + x;
+            let green = u32::from(pixel[1]);
+            let mut temp_red = u32::from(pixel[0]);
+            let mut temp_blue = u32::from(pixel[2]);
 
-            let multiplier = ColorTransformElement::from_color_code(transform_data[block_index]);
+            temp_red += color_transform_delta(green_to_red as i8, green as i8);
+            temp_blue += color_transform_delta(green_to_blue as i8, green as i8);
+            temp_blue += color_transform_delta(red_to_blue as i8, temp_red as i8);
 
-            image_data[index] = transform_color(&multiplier, image_data[index]);
+            pixel[0] = (temp_red & 0xff) as u8;
+            pixel[2] = (temp_blue & 0xff) as u8;
         }
     }
 }
 
-pub(crate) fn apply_subtract_green_transform(image_data: &mut [u32]) {
-    for pixel in image_data.iter_mut() {
-        *pixel = add_green(*pixel);
+pub(crate) fn apply_subtract_green_transform(image_data: &mut [u8]) {
+    for pixel in image_data.chunks_exact_mut(4) {
+        pixel[0] = pixel[0].wrapping_add(pixel[1]);
+        pixel[2] = pixel[2].wrapping_add(pixel[1]);
     }
 }
 
 pub(crate) fn apply_color_indexing_transform(
-    image_data: &mut Vec<u32>,
+    image_data: &mut Vec<u8>,
     width: u16,
     height: u16,
     table_size: u16,
-    table_data: &[u32],
+    table_data: &[u8],
 ) -> Result<(), DecodingError> {
-    let mut new_image_data = Vec::with_capacity(usize::from(width) * usize::from(height));
+    let mut new_image_data = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
 
-    let width_bits: u8 = if table_size <= 2 {
-        3
-    } else if table_size <= 4 {
-        2
-    } else if table_size <= 16 {
-        1
-    } else {
-        0
-    };
+    todo!();
 
-    let bits_per_pixel = 8 >> width_bits;
-    let mask = (1 << bits_per_pixel) - 1;
+    // let width_bits: u8 = if table_size <= 2 {
+    //     3
+    // } else if table_size <= 4 {
+    //     2
+    // } else if table_size <= 16 {
+    //     1
+    // } else {
+    //     0
+    // };
 
-    let mut src = 0;
-    let width = usize::from(width);
+    // let bits_per_pixel = 8 >> width_bits;
+    // let mask = (1 << bits_per_pixel) - 1;
 
-    let pixels_per_byte = 1 << width_bits;
-    let count_mask = pixels_per_byte - 1;
-    let mut packed_pixels = 0;
+    // let mut src = 0;
+    // let width = usize::from(width);
 
-    for _y in 0..usize::from(height) {
-        for x in 0..width {
-            if (x & count_mask) == 0 {
-                packed_pixels = (image_data[src] >> 8) & 0xff;
-                src += 1;
-            }
+    // let pixels_per_byte = 1 << width_bits;
+    // let count_mask = pixels_per_byte - 1;
+    // let mut packed_pixels = 0;
 
-            let pixels: usize = (packed_pixels & mask).try_into().unwrap();
-            let new_val = if pixels >= table_size.into() {
-                0x00000000
-            } else {
-                table_data[pixels]
-            };
+    // for _y in 0..usize::from(height) {
+    //     for x in 0..width {
+    //         if (x & count_mask) == 0 {
+    //             packed_pixels = (image_data[src] >> 8) & 0xff;
+    //             src += 1;
+    //         }
 
-            new_image_data.push(new_val);
+    //         let pixels: usize = (packed_pixels & mask).try_into().unwrap();
+    //         let new_val = if pixels >= table_size.into() {
+    //             0x00000000
+    //         } else {
+    //             table_data[pixels]
+    //         };
 
-            packed_pixels >>= bits_per_pixel;
-        }
-    }
+    //         new_image_data.push(new_val);
+
+    //         packed_pixels >>= bits_per_pixel;
+    //     }
+    // }
 
     *image_data = new_image_data;
     Ok(())
@@ -252,192 +289,22 @@ pub(crate) fn apply_color_indexing_transform(
 
 //predictor functions
 
-/// Adds 2 pixels mod 256 for each pixel
-pub(crate) fn add_pixels(a: u32, b: u32) -> u32 {
-    let new_alpha = ((a >> 24) + (b >> 24)) & 0xff;
-    let new_red = (((a >> 16) & 0xff) + ((b >> 16) & 0xff)) & 0xff;
-    let new_green = (((a >> 8) & 0xff) + ((b >> 8) & 0xff)) & 0xff;
-    let new_blue = ((a & 0xff) + (b & 0xff)) & 0xff;
-
-    (new_alpha << 24) + (new_red << 16) + (new_green << 8) + new_blue
-}
-
-/// Get left pixel
-fn get_left(data: &[u32], x: usize, y: usize, width: usize) -> u32 {
-    data[y * width + x - 1]
-}
-
-/// Get top pixel
-fn get_top(data: &[u32], x: usize, y: usize, width: usize) -> u32 {
-    data[(y - 1) * width + x]
-}
-
-/// Get pixel to top right
-fn get_top_right(data: &[u32], x: usize, y: usize, width: usize) -> u32 {
-    // if x == width - 1 this gets the left most pixel of the current row
-    // as described in the specification
-    data[(y - 1) * width + x + 1]
-}
-
-/// Get pixel to top left
-fn get_top_left(data: &[u32], x: usize, y: usize, width: usize) -> u32 {
-    data[(y - 1) * width + x - 1]
-}
-
-/// Get average of 2 pixels
-fn average2(a: u32, b: u32) -> u32 {
-    let mut avg = 0u32;
-    for i in 0..4 {
-        let sub_a: u8 = ((a >> (i * 8)) & 0xff).try_into().unwrap();
-        let sub_b: u8 = ((b >> (i * 8)) & 0xff).try_into().unwrap();
-        avg |= u32::from(sub_average2(sub_a, sub_b)) << (i * 8);
-    }
-    avg
-}
-
 /// Get average of 2 bytes
-fn sub_average2(a: u8, b: u8) -> u8 {
+fn average2(a: u8, b: u8) -> u8 {
     ((u16::from(a) + u16::from(b)) / 2).try_into().unwrap()
 }
 
-/// Get a specific byte from argb pixel
-fn get_byte(val: u32, byte: u8) -> u8 {
-    ((val >> (byte * 8)) & 0xff).try_into().unwrap()
-}
-
-/// Get byte as i32 for convenience
-fn get_byte_i32(val: u32, byte: u8) -> i32 {
-    i32::from(get_byte(val, byte))
-}
-
-/// Select left or top byte
-fn select(left: u32, top: u32, top_left: u32) -> u32 {
-    let predict_alpha = get_byte_i32(left, 3) + get_byte_i32(top, 3) - get_byte_i32(top_left, 3);
-    let predict_red = get_byte_i32(left, 2) + get_byte_i32(top, 2) - get_byte_i32(top_left, 2);
-    let predict_green = get_byte_i32(left, 1) + get_byte_i32(top, 1) - get_byte_i32(top_left, 1);
-    let predict_blue = get_byte_i32(left, 0) + get_byte_i32(top, 0) - get_byte_i32(top_left, 0);
-
-    let predict_left = i32::abs(predict_alpha - get_byte_i32(left, 3))
-        + i32::abs(predict_red - get_byte_i32(left, 2))
-        + i32::abs(predict_green - get_byte_i32(left, 1))
-        + i32::abs(predict_blue - get_byte_i32(left, 0));
-    let predict_top = i32::abs(predict_alpha - get_byte_i32(top, 3))
-        + i32::abs(predict_red - get_byte_i32(top, 2))
-        + i32::abs(predict_green - get_byte_i32(top, 1))
-        + i32::abs(predict_blue - get_byte_i32(top, 0));
-
-    if predict_left < predict_top {
-        left
-    } else {
-        top
-    }
-}
-
-/// Clamp a to [0, 255]
-fn clamp(a: i32) -> i32 {
-    a.clamp(0, 255)
-}
-
 /// Clamp add subtract full on one part
-fn clamp_add_subtract_full_sub(a: i32, b: i32, c: i32) -> i32 {
-    clamp(a + b - c)
+fn clamp_add_subtract_full(a: i16, b: i16, c: i16) -> u8 {
+    (a + b - c).clamp(0, 255) as u8
 }
 
 /// Clamp add subtract half on one part
-fn clamp_add_subtract_half_sub(a: i32, b: i32) -> i32 {
-    clamp(a + (a - b) / 2)
-}
-
-/// Clamp add subtract full on 3 pixels
-fn clamp_add_subtract_full(a: u32, b: u32, c: u32) -> u32 {
-    let mut value: u32 = 0;
-    for i in 0..4u8 {
-        let sub_a: i32 = ((a >> (i * 8)) & 0xff).try_into().unwrap();
-        let sub_b: i32 = ((b >> (i * 8)) & 0xff).try_into().unwrap();
-        let sub_c: i32 = ((c >> (i * 8)) & 0xff).try_into().unwrap();
-        value |=
-            u32::try_from(clamp_add_subtract_full_sub(sub_a, sub_b, sub_c)).unwrap() << (i * 8);
-    }
-    value
-}
-
-/// Clamp add subtract half on 2 pixels
-fn clamp_add_subtract_half(a: u32, b: u32) -> u32 {
-    let mut value = 0;
-    for i in 0..4u8 {
-        let sub_a: i32 = ((a >> (i * 8)) & 0xff).try_into().unwrap();
-        let sub_b: i32 = ((b >> (i * 8)) & 0xff).try_into().unwrap();
-        value |= u32::try_from(clamp_add_subtract_half_sub(sub_a, sub_b)).unwrap() << (i * 8);
-    }
-
-    value
-}
-
-//color transform
-
-#[derive(Debug, Clone, Copy)]
-struct ColorTransformElement {
-    green_to_red: u8,
-    green_to_blue: u8,
-    red_to_blue: u8,
-}
-
-impl ColorTransformElement {
-    fn from_color_code(color_code: u32) -> ColorTransformElement {
-        ColorTransformElement {
-            green_to_red: (color_code & 0xff).try_into().unwrap(),
-            green_to_blue: ((color_code >> 8) & 0xff).try_into().unwrap(),
-            red_to_blue: ((color_code >> 16) & 0xff).try_into().unwrap(),
-        }
-    }
-}
-
-/// Does color transform on red and blue transformed by green
-fn color_transform(red: u8, blue: u8, green: u8, trans: &ColorTransformElement) -> (u8, u8) {
-    let mut temp_red = u32::from(red);
-    let mut temp_blue = u32::from(blue);
-
-    //as does the conversion from u8 to signed two's complement i8 required
-    temp_red += color_transform_delta(trans.green_to_red as i8, green as i8);
-    temp_blue += color_transform_delta(trans.green_to_blue as i8, green as i8);
-    temp_blue += color_transform_delta(trans.red_to_blue as i8, temp_red as i8);
-
-    (
-        (temp_red & 0xff).try_into().unwrap(),
-        (temp_blue & 0xff).try_into().unwrap(),
-    )
+fn clamp_add_subtract_half(a: i16, b: i16) -> u8 {
+    (a + (a - b) / 2).clamp(0, 255) as u8
 }
 
 /// Does color transform on 2 numbers
 fn color_transform_delta(t: i8, c: i8) -> u32 {
     ((i16::from(t) * i16::from(c)) as u32) >> 5
-}
-
-// Does color transform on a pixel with a color transform element
-fn transform_color(multiplier: &ColorTransformElement, color_value: u32) -> u32 {
-    let alpha = get_byte(color_value, 3);
-    let red = get_byte(color_value, 2);
-    let green = get_byte(color_value, 1);
-    let blue = get_byte(color_value, 0);
-
-    let (new_red, new_blue) = color_transform(red, blue, green, multiplier);
-
-    (u32::from(alpha) << 24)
-        + (u32::from(new_red) << 16)
-        + (u32::from(green) << 8)
-        + u32::from(new_blue)
-}
-
-//subtract green function
-
-/// Adds green to red and blue of a pixel
-fn add_green(argb: u32) -> u32 {
-    let red = (argb >> 16) & 0xff;
-    let green = (argb >> 8) & 0xff;
-    let blue = argb & 0xff;
-
-    let new_red = (red + green) & 0xff;
-    let new_blue = (blue + green) & 0xff;
-
-    (argb & 0xff00ff00) | (new_red << 16) | (new_blue)
 }
