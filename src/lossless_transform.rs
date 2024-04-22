@@ -19,248 +19,235 @@ pub(crate) enum TransformType {
     },
 }
 
-impl TransformType {
-    /// Applies a transform to the image data
-    pub(crate) fn apply_transform(
-        &self,
-        image_data: &mut Vec<u32>,
-        width: u16,
-        height: u16,
-    ) -> Result<(), DecodingError> {
-        match self {
-            TransformType::PredictorTransform {
-                size_bits,
-                predictor_data,
-            } => {
-                let block_xsize = usize::from(subsample_size(width, *size_bits));
-                let width = usize::from(width);
-                let height = usize::from(height);
+pub(crate) fn apply_predictor_transform(
+    image_data: &mut [u32],
+    width: u16,
+    height: u16,
+    size_bits: u8,
+    predictor_data: &[u32],
+) -> Result<(), DecodingError> {
+    let block_xsize = usize::from(subsample_size(width, size_bits));
+    let width = usize::from(width);
+    let height = usize::from(height);
 
-                if image_data.len() < width * height {
-                    return Err(DecodingError::TransformError);
+    if image_data.len() < width * height {
+        return Err(DecodingError::TransformError);
+    }
+
+    //handle top and left borders specially
+    //this involves ignoring mode and just setting prediction values like this
+    image_data[0] = add_pixels(image_data[0], 0xff000000);
+
+    for x in 1..width {
+        image_data[x] = add_pixels(image_data[x], get_left(image_data, x, 0, width));
+    }
+
+    for y in 1..height {
+        image_data[y * width] = add_pixels(image_data[y * width], get_top(image_data, 0, y, width));
+    }
+
+    for y in 1..height {
+        for x in 1..width {
+            let block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
+
+            let index = y * width + x;
+
+            let green = (predictor_data[block_index] >> 8) & 0xff;
+
+            match green {
+                0 => image_data[index] = add_pixels(image_data[index], 0xff000000),
+                1 => {
+                    image_data[index] =
+                        add_pixels(image_data[index], get_left(image_data, x, y, width))
                 }
-
-                //handle top and left borders specially
-                //this involves ignoring mode and just setting prediction values like this
-                image_data[0] = add_pixels(image_data[0], 0xff000000);
-
-                for x in 1..width {
-                    image_data[x] = add_pixels(image_data[x], get_left(image_data, x, 0, width));
+                2 => {
+                    image_data[index] =
+                        add_pixels(image_data[index], get_top(image_data, x, y, width))
                 }
-
-                for y in 1..height {
-                    image_data[y * width] =
-                        add_pixels(image_data[y * width], get_top(image_data, 0, y, width));
+                3 => {
+                    image_data[index] =
+                        add_pixels(image_data[index], get_top_right(image_data, x, y, width))
                 }
-
-                for y in 1..height {
-                    for x in 1..width {
-                        let block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
-
-                        let index = y * width + x;
-
-                        let green = (predictor_data[block_index] >> 8) & 0xff;
-
-                        match green {
-                            0 => image_data[index] = add_pixels(image_data[index], 0xff000000),
-                            1 => {
-                                image_data[index] =
-                                    add_pixels(image_data[index], get_left(image_data, x, y, width))
-                            }
-                            2 => {
-                                image_data[index] =
-                                    add_pixels(image_data[index], get_top(image_data, x, y, width))
-                            }
-                            3 => {
-                                image_data[index] = add_pixels(
-                                    image_data[index],
-                                    get_top_right(image_data, x, y, width),
-                                )
-                            }
-                            4 => {
-                                image_data[index] = add_pixels(
-                                    image_data[index],
-                                    get_top_left(image_data, x, y, width),
-                                )
-                            }
-                            5 => {
-                                image_data[index] = add_pixels(image_data[index], {
-                                    let first = average2(
-                                        get_left(image_data, x, y, width),
-                                        get_top_right(image_data, x, y, width),
-                                    );
-                                    average2(first, get_top(image_data, x, y, width))
-                                })
-                            }
-                            6 => {
-                                image_data[index] = add_pixels(
-                                    image_data[index],
-                                    average2(
-                                        get_left(image_data, x, y, width),
-                                        get_top_left(image_data, x, y, width),
-                                    ),
-                                )
-                            }
-                            7 => {
-                                image_data[index] = add_pixels(
-                                    image_data[index],
-                                    average2(
-                                        get_left(image_data, x, y, width),
-                                        get_top(image_data, x, y, width),
-                                    ),
-                                )
-                            }
-                            8 => {
-                                image_data[index] = add_pixels(
-                                    image_data[index],
-                                    average2(
-                                        get_top_left(image_data, x, y, width),
-                                        get_top(image_data, x, y, width),
-                                    ),
-                                )
-                            }
-                            9 => {
-                                image_data[index] = add_pixels(
-                                    image_data[index],
-                                    average2(
-                                        get_top(image_data, x, y, width),
-                                        get_top_right(image_data, x, y, width),
-                                    ),
-                                )
-                            }
-                            10 => {
-                                image_data[index] = add_pixels(image_data[index], {
-                                    let first = average2(
-                                        get_left(image_data, x, y, width),
-                                        get_top_left(image_data, x, y, width),
-                                    );
-                                    let second = average2(
-                                        get_top(image_data, x, y, width),
-                                        get_top_right(image_data, x, y, width),
-                                    );
-                                    average2(first, second)
-                                })
-                            }
-                            11 => {
-                                image_data[index] = add_pixels(
-                                    image_data[index],
-                                    select(
-                                        get_left(image_data, x, y, width),
-                                        get_top(image_data, x, y, width),
-                                        get_top_left(image_data, x, y, width),
-                                    ),
-                                )
-                            }
-                            12 => {
-                                image_data[index] = add_pixels(
-                                    image_data[index],
-                                    clamp_add_subtract_full(
-                                        get_left(image_data, x, y, width),
-                                        get_top(image_data, x, y, width),
-                                        get_top_left(image_data, x, y, width),
-                                    ),
-                                )
-                            }
-                            13 => {
-                                image_data[index] = add_pixels(image_data[index], {
-                                    let first = average2(
-                                        get_left(image_data, x, y, width),
-                                        get_top(image_data, x, y, width),
-                                    );
-                                    clamp_add_subtract_half(
-                                        first,
-                                        get_top_left(image_data, x, y, width),
-                                    )
-                                })
-                            }
-                            _ => {}
-                        }
-                    }
+                4 => {
+                    image_data[index] =
+                        add_pixels(image_data[index], get_top_left(image_data, x, y, width))
                 }
-            }
-            TransformType::ColorTransform {
-                size_bits,
-                transform_data,
-            } => {
-                let block_xsize = usize::from(subsample_size(width, *size_bits));
-                let width = usize::from(width);
-                let height = usize::from(height);
-
-                for y in 0..height {
-                    for x in 0..width {
-                        let block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
-
-                        let index = y * width + x;
-
-                        let multiplier =
-                            ColorTransformElement::from_color_code(transform_data[block_index]);
-
-                        image_data[index] = transform_color(&multiplier, image_data[index]);
-                    }
+                5 => {
+                    image_data[index] = add_pixels(image_data[index], {
+                        let first = average2(
+                            get_left(image_data, x, y, width),
+                            get_top_right(image_data, x, y, width),
+                        );
+                        average2(first, get_top(image_data, x, y, width))
+                    })
                 }
-            }
-            TransformType::SubtractGreen => {
-                let width = usize::from(width);
-                for y in 0..usize::from(height) {
-                    for x in 0..width {
-                        image_data[y * width + x] = add_green(image_data[y * width + x]);
-                    }
+                6 => {
+                    image_data[index] = add_pixels(
+                        image_data[index],
+                        average2(
+                            get_left(image_data, x, y, width),
+                            get_top_left(image_data, x, y, width),
+                        ),
+                    )
                 }
-            }
-            TransformType::ColorIndexingTransform {
-                table_size,
-                table_data,
-            } => {
-                let mut new_image_data =
-                    Vec::with_capacity(usize::from(width) * usize::from(height));
-
-                let table_size = *table_size;
-                let width_bits: u8 = if table_size <= 2 {
-                    3
-                } else if table_size <= 4 {
-                    2
-                } else if table_size <= 16 {
-                    1
-                } else {
-                    0
-                };
-
-                let bits_per_pixel = 8 >> width_bits;
-                let mask = (1 << bits_per_pixel) - 1;
-
-                let mut src = 0;
-                let width = usize::from(width);
-
-                let pixels_per_byte = 1 << width_bits;
-                let count_mask = pixels_per_byte - 1;
-                let mut packed_pixels = 0;
-
-                for _y in 0..usize::from(height) {
-                    for x in 0..width {
-                        if (x & count_mask) == 0 {
-                            packed_pixels = (image_data[src] >> 8) & 0xff;
-                            src += 1;
-                        }
-
-                        let pixels: usize = (packed_pixels & mask).try_into().unwrap();
-                        let new_val = if pixels >= table_size.into() {
-                            0x00000000
-                        } else {
-                            table_data[pixels]
-                        };
-
-                        new_image_data.push(new_val);
-
-                        packed_pixels >>= bits_per_pixel;
-                    }
+                7 => {
+                    image_data[index] = add_pixels(
+                        image_data[index],
+                        average2(
+                            get_left(image_data, x, y, width),
+                            get_top(image_data, x, y, width),
+                        ),
+                    )
                 }
-
-                *image_data = new_image_data;
+                8 => {
+                    image_data[index] = add_pixels(
+                        image_data[index],
+                        average2(
+                            get_top_left(image_data, x, y, width),
+                            get_top(image_data, x, y, width),
+                        ),
+                    )
+                }
+                9 => {
+                    image_data[index] = add_pixels(
+                        image_data[index],
+                        average2(
+                            get_top(image_data, x, y, width),
+                            get_top_right(image_data, x, y, width),
+                        ),
+                    )
+                }
+                10 => {
+                    image_data[index] = add_pixels(image_data[index], {
+                        let first = average2(
+                            get_left(image_data, x, y, width),
+                            get_top_left(image_data, x, y, width),
+                        );
+                        let second = average2(
+                            get_top(image_data, x, y, width),
+                            get_top_right(image_data, x, y, width),
+                        );
+                        average2(first, second)
+                    })
+                }
+                11 => {
+                    image_data[index] = add_pixels(
+                        image_data[index],
+                        select(
+                            get_left(image_data, x, y, width),
+                            get_top(image_data, x, y, width),
+                            get_top_left(image_data, x, y, width),
+                        ),
+                    )
+                }
+                12 => {
+                    image_data[index] = add_pixels(
+                        image_data[index],
+                        clamp_add_subtract_full(
+                            get_left(image_data, x, y, width),
+                            get_top(image_data, x, y, width),
+                            get_top_left(image_data, x, y, width),
+                        ),
+                    )
+                }
+                13 => {
+                    image_data[index] = add_pixels(image_data[index], {
+                        let first = average2(
+                            get_left(image_data, x, y, width),
+                            get_top(image_data, x, y, width),
+                        );
+                        clamp_add_subtract_half(first, get_top_left(image_data, x, y, width))
+                    })
+                }
+                _ => {}
             }
         }
-
-        Ok(())
     }
+
+    Ok(())
+}
+
+pub(crate) fn apply_color_transform(
+    image_data: &mut [u32],
+    width: u16,
+    height: u16,
+    size_bits: u8,
+    transform_data: &[u32],
+) {
+    let block_xsize = usize::from(subsample_size(width, size_bits));
+    let width = usize::from(width);
+    let height = usize::from(height);
+
+    for y in 0..height {
+        for x in 0..width {
+            let block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
+
+            let index = y * width + x;
+
+            let multiplier = ColorTransformElement::from_color_code(transform_data[block_index]);
+
+            image_data[index] = transform_color(&multiplier, image_data[index]);
+        }
+    }
+}
+
+pub(crate) fn apply_subtract_green_transform(image_data: &mut [u32]) {
+    for pixel in image_data.iter_mut() {
+        *pixel = add_green(*pixel);
+    }
+}
+
+pub(crate) fn apply_color_indexing_transform(
+    image_data: &mut Vec<u32>,
+    width: u16,
+    height: u16,
+    table_size: u16,
+    table_data: &[u32],
+) -> Result<(), DecodingError> {
+    let mut new_image_data = Vec::with_capacity(usize::from(width) * usize::from(height));
+
+    let width_bits: u8 = if table_size <= 2 {
+        3
+    } else if table_size <= 4 {
+        2
+    } else if table_size <= 16 {
+        1
+    } else {
+        0
+    };
+
+    let bits_per_pixel = 8 >> width_bits;
+    let mask = (1 << bits_per_pixel) - 1;
+
+    let mut src = 0;
+    let width = usize::from(width);
+
+    let pixels_per_byte = 1 << width_bits;
+    let count_mask = pixels_per_byte - 1;
+    let mut packed_pixels = 0;
+
+    for _y in 0..usize::from(height) {
+        for x in 0..width {
+            if (x & count_mask) == 0 {
+                packed_pixels = (image_data[src] >> 8) & 0xff;
+                src += 1;
+            }
+
+            let pixels: usize = (packed_pixels & mask).try_into().unwrap();
+            let new_val = if pixels >= table_size.into() {
+                0x00000000
+            } else {
+                table_data[pixels]
+            };
+
+            new_image_data.push(new_val);
+
+            packed_pixels >>= bits_per_pixel;
+        }
+    }
+
+    *image_data = new_image_data;
+    Ok(())
 }
 
 //predictor functions

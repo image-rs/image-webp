@@ -6,6 +6,10 @@
 use std::{io::Read, mem};
 
 use crate::decoder::DecodingError;
+use crate::lossless_transform::{
+    apply_color_indexing_transform, apply_color_transform, apply_predictor_transform,
+    apply_subtract_green_transform,
+};
 
 use super::huffman::HuffmanTree;
 use super::lossless_transform::{add_pixels, TransformType};
@@ -59,9 +63,10 @@ const NUM_TRANSFORM_TYPES: usize = 4;
 #[derive(Debug)]
 pub(crate) struct LosslessDecoder<R> {
     bit_reader: BitReader<R>,
-    frame: LosslessFrame,
     transforms: [Option<TransformType>; NUM_TRANSFORM_TYPES],
     transform_order: Vec<u8>,
+    width: u16,
+    height: u16,
 }
 
 impl<R: Read> LosslessDecoder<R> {
@@ -69,9 +74,10 @@ impl<R: Read> LosslessDecoder<R> {
     pub(crate) fn new(r: R) -> LosslessDecoder<R> {
         LosslessDecoder {
             bit_reader: BitReader::new(r),
-            frame: Default::default(),
             transforms: [None, None, None, None],
             transform_order: Vec::new(),
+            width: 0,
+            height: 0,
         }
     }
 
@@ -82,44 +88,77 @@ impl<R: Read> LosslessDecoder<R> {
     /// `None` and the frame dimensions will be determined by reading the VP8L header.
     pub(crate) fn decode_frame(
         &mut self,
-        implicit_dimensions: Option<(u16, u16)>,
-    ) -> Result<&LosslessFrame, DecodingError> {
-        match implicit_dimensions {
-            Some((width, height)) => {
-                self.frame.width = width;
-                self.frame.height = height;
+        width: u32,
+        height: u32,
+        implicit_dimensions: bool,
+        buf: &mut [u8],
+    ) -> Result<(), DecodingError> {
+        if implicit_dimensions {
+            self.width = width as u16;
+            self.height = height as u16;
+        } else {
+            let signature = self.bit_reader.read_bits::<u8>(8)?;
+            if signature != 0x2f {
+                return Err(DecodingError::LosslessSignatureInvalid(signature));
             }
-            None => {
-                let signature = self.bit_reader.read_bits::<u8>(8)?;
-                if signature != 0x2f {
-                    return Err(DecodingError::LosslessSignatureInvalid(signature));
-                }
 
-                self.frame.width = self.bit_reader.read_bits::<u16>(14)? + 1;
-                self.frame.height = self.bit_reader.read_bits::<u16>(14)? + 1;
+            self.width = self.bit_reader.read_bits::<u16>(14)? + 1;
+            self.height = self.bit_reader.read_bits::<u16>(14)? + 1;
+            if u32::from(self.width) != width || u32::from(self.height) != height {
+                return Err(DecodingError::InconsistentImageSizes);
+            }
 
-                let _alpha_used = self.bit_reader.read_bits::<u8>(1)?;
-                let version_num = self.bit_reader.read_bits::<u8>(3)?;
-                if version_num != 0 {
-                    return Err(DecodingError::VersionNumberInvalid(version_num));
-                }
+            let _alpha_used = self.bit_reader.read_bits::<u8>(1)?;
+            let version_num = self.bit_reader.read_bits::<u8>(3)?;
+            if version_num != 0 {
+                return Err(DecodingError::VersionNumberInvalid(version_num));
             }
         }
 
         let transformed_width = self.read_transforms()?;
-        let mut data = self.decode_image_stream(transformed_width, self.frame.height, true)?;
+
+        let mut data = vec![0u32; usize::from(transformed_width) * usize::from(self.height)];
+        self.decode_image_stream(transformed_width, self.height, true, &mut data)?;
 
         let mut width = transformed_width;
         for &trans_index in self.transform_order.iter().rev() {
             let transform = self.transforms[usize::from(trans_index)].as_ref().unwrap();
-            if let TransformType::ColorIndexingTransform { .. } = transform {
-                width = self.frame.width;
+            match transform {
+                TransformType::PredictorTransform {
+                    size_bits,
+                    predictor_data,
+                } => {
+                    apply_predictor_transform(&mut data, width, self.height, *size_bits, predictor_data)?
+                }
+                TransformType::ColorTransform {
+                    size_bits,
+                    transform_data,
+                } => apply_color_transform(&mut data, width, self.height, *size_bits, transform_data),
+                TransformType::SubtractGreen => apply_subtract_green_transform(&mut data),
+                TransformType::ColorIndexingTransform {
+                    table_size,
+                    table_data,
+                } => {
+                    width = self.width;
+                    apply_color_indexing_transform(
+                        &mut data,
+                        self.width,
+                        self.height,
+                        *table_size,
+                        table_data,
+                    )?;
+                }
             }
-            transform.apply_transform(&mut data, width, self.frame.height)?;
         }
 
-        self.frame.buf = data;
-        Ok(&self.frame)
+        for (&argb_val, chunk) in data.iter().zip(buf.chunks_exact_mut(4)) {
+            chunk[0] = ((argb_val >> 16) & 0xff).try_into().unwrap();
+            chunk[1] = ((argb_val >> 8) & 0xff).try_into().unwrap();
+            chunk[2] = (argb_val & 0xff).try_into().unwrap();
+            chunk[3] = ((argb_val >> 24) & 0xff).try_into().unwrap();
+        }
+
+        Ok(())
     }
 
     /// Reads Image data from the bitstream
@@ -132,7 +171,8 @@ impl<R: Read> LosslessDecoder<R> {
         xsize: u16,
         ysize: u16,
         is_argb_img: bool,
-    ) -> Result<Vec<u32>, DecodingError> {
+        data: &mut [u32],
+    ) -> Result<(), DecodingError> {
         let color_cache_bits = self.read_color_cache()?;
         let color_cache = color_cache_bits.map(|bits| {
             let size = 1 << bits;
@@ -144,12 +184,12 @@ impl<R: Read> LosslessDecoder<R> {
         });
 
         let huffman_info = self.read_huffman_codes(is_argb_img, xsize, ysize, color_cache)?;
-        self.decode_image_data(xsize, ysize, huffman_info)
+        self.decode_image_data(xsize, ysize, huffman_info, data)
     }
 
     /// Reads transforms and their data from the bitstream
     fn read_transforms(&mut self) -> Result<u16, DecodingError> {
-        let mut xsize = self.frame.width;
+        let mut xsize = self.width;
 
         while self.bit_reader.read_bits::<u8>(1)? == 1 {
             let transform_type_val = self.bit_reader.read_bits::<u8>(2)?;
@@ -168,13 +208,15 @@ impl<R: Read> LosslessDecoder<R> {
                     let size_bits = self.bit_reader.read_bits::<u8>(3)? + 2;
 
                     let block_xsize = subsample_size(xsize, size_bits);
-                    let block_ysize = subsample_size(self.frame.height, size_bits);
+                    let block_ysize = subsample_size(self.height, size_bits);
 
-                    let data = self.decode_image_stream(block_xsize, block_ysize, false)?;
+                    let mut predictor_data =
+                        vec![0u32; usize::from(block_xsize) * usize::from(block_ysize)];
+                    self.decode_image_stream(block_xsize, block_ysize, false, &mut predictor_data)?;
 
                     TransformType::PredictorTransform {
                         size_bits,
-                        predictor_data: data,
+                        predictor_data,
                     }
                 }
                 1 => {
@@ -183,13 +225,15 @@ impl<R: Read> LosslessDecoder<R> {
                     let size_bits = self.bit_reader.read_bits::<u8>(3)? + 2;
 
                     let block_xsize = subsample_size(xsize, size_bits);
-                    let block_ysize = subsample_size(self.frame.height, size_bits);
+                    let block_ysize = subsample_size(self.height, size_bits);
 
-                    let data = self.decode_image_stream(block_xsize, block_ysize, false)?;
+                    let mut transform_data =
+                        vec![0u32; usize::from(block_xsize) * usize::from(block_ysize)];
+                    self.decode_image_stream(block_xsize, block_ysize, false, &mut transform_data)?;
 
                     TransformType::ColorTransform {
                         size_bits,
-                        transform_data: data,
+                        transform_data,
                     }
                 }
                 2 => {
@@ -200,7 +244,8 @@ impl<R: Read> LosslessDecoder<R> {
                 3 => {
                     let color_table_size = self.bit_reader.read_bits::<u16>(8)? + 1;
 
-                    let mut color_map = self.decode_image_stream(color_table_size, 1, false)?;
+                    let mut color_map = vec![0u32; usize::from(color_table_size)];
+                    self.decode_image_stream(color_table_size, 1, false, &mut color_map)?;
 
                     let bits = if color_table_size <= 2 {
                         3
@@ -257,7 +302,8 @@ impl<R: Read> LosslessDecoder<R> {
             huffman_xsize = subsample_size(xsize, huffman_bits);
             huffman_ysize = subsample_size(ysize, huffman_bits);
 
-            entropy_image = self.decode_image_stream(huffman_xsize, huffman_ysize, false)?;
+            entropy_image = vec![0u32; usize::from(huffman_xsize) * usize::from(huffman_ysize)];
+            self.decode_image_stream(huffman_xsize, huffman_ysize, false, &mut entropy_image)?;
 
             for pixel in entropy_image.iter_mut() {
                 let meta_huff_code = (*pixel >> 8) & 0xffff;
@@ -425,9 +471,9 @@ impl<R: Read> LosslessDecoder<R> {
         width: u16,
         height: u16,
         mut huffman_info: HuffmanInfo,
-    ) -> Result<Vec<u32>, DecodingError> {
+        data: &mut [u32],
+    ) -> Result<(), DecodingError> {
         let num_values = usize::from(width) * usize::from(height);
-        let mut data = vec![0; num_values];
 
         let huff_index = huffman_info.get_huff_index(0, 0);
         let mut tree = &huffman_info.huffman_code_groups[huff_index];
@@ -526,7 +572,7 @@ impl<R: Read> LosslessDecoder<R> {
             }
         }
 
-        Ok(data)
+        Ok(())
     }
 
     /// Reads color cache data from the bitstream
@@ -720,42 +766,6 @@ impl<R: Read> BitReader<R> {
         match value.try_into() {
             Ok(value) => Ok(value),
             Err(_) => unreachable!("Value too large to fit in type"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct LosslessFrame {
-    pub(crate) width: u16,
-    pub(crate) height: u16,
-
-    pub(crate) buf: Vec<u32>,
-}
-
-impl LosslessFrame {
-    /// Fills a buffer by converting from argb to rgba
-    pub(crate) fn fill_rgba(&self, buf: &mut [u8]) {
-        for (&argb_val, chunk) in self.buf.iter().zip(buf.chunks_exact_mut(4)) {
-            chunk[0] = ((argb_val >> 16) & 0xff).try_into().unwrap();
-            chunk[1] = ((argb_val >> 8) & 0xff).try_into().unwrap();
-            chunk[2] = (argb_val & 0xff).try_into().unwrap();
-            chunk[3] = ((argb_val >> 24) & 0xff).try_into().unwrap();
-        }
-    }
-
-    pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
-        for (&argb_val, chunk) in self.buf.iter().zip(buf.chunks_exact_mut(3)) {
-            chunk[0] = ((argb_val >> 16) & 0xff).try_into().unwrap();
-            chunk[1] = ((argb_val >> 8) & 0xff).try_into().unwrap();
-            chunk[2] = (argb_val & 0xff).try_into().unwrap();
-        }
-    }
-
-    /// Fills a buffer with just the green values from the lossless decoding
-    /// Used in extended alpha decoding
-    pub(crate) fn fill_green(&self, buf: &mut [u8]) {
-        for (&argb_val, buf_value) in self.buf.iter().zip(buf.iter_mut()) {
-            *buf_value = ((argb_val >> 8) & 0xff).try_into().unwrap();
         }
     }
 }

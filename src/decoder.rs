@@ -608,16 +608,16 @@ impl<R: Read + Seek> WebPDecoder<R> {
             self.animation = saved;
             result?;
         } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
-            let mut frame = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
-            let frame = frame.decode_frame(None)?;
-            if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
-                return Err(DecodingError::InconsistentImageSizes);
-            }
+            let mut decoder = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
 
             if self.has_alpha {
-                frame.fill_rgba(buf);
+                decoder.decode_frame(self.width, self.height, false, buf)?;
             } else {
-                frame.fill_rgb(buf);
+                let mut data = vec![0; self.width as usize * self.height as usize * 4];
+                decoder.decode_frame(self.width, self.height, false, &mut data)?;
+                for (rgba_val, chunk) in data.chunks_exact(4).zip(buf.chunks_exact_mut(3)) {
+                    chunk.copy_from_slice(&rgba_val[..3]);
+                }
             }
         } else {
             let range = self
@@ -748,12 +748,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
             WebPRiffChunk::VP8L => {
                 let reader = (&mut self.r).take(chunk_size);
                 let mut lossless_decoder = LosslessDecoder::new(reader);
-                let frame = lossless_decoder.decode_frame(None)?;
-                if frame.width as u32 != frame_width || frame.height as u32 != frame_height {
-                    return Err(DecodingError::InconsistentImageSizes);
-                }
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
-                frame.fill_rgba(&mut rgba_frame);
+                lossless_decoder.decode_frame(frame_width, frame_height, false, &mut rgba_frame)?;
                 (rgba_frame, true)
             }
             WebPRiffChunk::ALPH => {
