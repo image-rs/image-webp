@@ -728,15 +728,11 @@ impl BoolReader {
 
                 // libwebp seems to (sometimes?) allow bitstreams that read one byte past the end.
                 // This match statement replicates that logic.
-                let v = match self.reader.read_u8() {
-                    Ok(v) => v,
-                    Err(e) if e.kind() == ErrorKind::UnexpectedEof && !self.eof => {
-                        self.eof = true;
-                        0
-                    }
+                match self.reader.read_u8() {
+                    Ok(v) => self.value |= u32::from(v) << self.bit_count,
+                    Err(e) if e.kind() == ErrorKind::UnexpectedEof && !self.eof => self.eof = true,
                     Err(e) => return Err(DecodingError::IoError(e)),
                 };
-                self.value |= u32::from(v) << self.bit_count;
             }
         }
 
@@ -874,17 +870,6 @@ impl Frame {
     }
 
     fn fill_rgb_row(y_vec: &[u8], u_vec: &[u8], v_vec: &[u8], rgb: &mut [u8]) {
-        const YUV_FIX2: i32 = 6;
-
-        /// _mm_mulhi_epu16 emulation
-        fn mulhi(v: u8, coeff: u16) -> i32 {
-            ((u32::from(v) * u32::from(coeff)) >> 8) as i32
-        }
-
-        fn clip(v: i32) -> u8 {
-            (v.max(0) >> YUV_FIX2).min(255) as u8
-        }
-
         // Fill 2 pixels per iteration: these pixels share `u` and `v` components
         let mut rgb_chunks = rgb.chunks_exact_mut(6);
         let mut y_chunks = y_vec.chunks_exact(2);
@@ -972,26 +957,6 @@ impl Frame {
         // let b: u8 = clamp((298 * c + 516 * d + 128) >> 8, 0, 255)
         //     .try_into()
         //     .unwrap();
-
-        // Based on [src/dsp/yuv.h](https://github.com/webmproject/libwebp/blob/8534f53960befac04c9631e6e50d21dcb42dfeaf/src/dsp/yuv.h#L79)
-        // from the libwebp source.
-        const YUV_FIX2: i32 = 6;
-        const YUV_MASK2: i32 = (256 << YUV_FIX2) - 1;
-
-        /// _mm_mulhi_epu16 emulation
-        fn mulhi(v: u8, coeff: u16) -> i32 {
-            ((u32::from(v) * u32::from(coeff)) >> 8) as i32
-        }
-        fn clip(v: i32) -> u8 {
-            if (v & !YUV_MASK2) == 0 {
-                (v >> YUV_FIX2) as u8
-            } else if v < 0 {
-                0
-            } else {
-                255
-            }
-        }
-
         rgb[0] = clip(mulhi(y, 19077) + mulhi(v, 26149) - 14234);
         rgb[1] = clip(mulhi(y, 19077) - mulhi(u, 6419) - mulhi(v, 13320) + 8708);
         rgb[2] = clip(mulhi(y, 19077) + mulhi(u, 33050) - 17685);
@@ -1001,6 +966,34 @@ impl Frame {
     pub fn get_buf_size(&self) -> usize {
         self.ybuf.len() * 3
     }
+}
+
+/// `_mm_mulhi_epu16` emulation used in `Frame::fill_rgb` and `Frame::fill_rgba`.
+fn mulhi(v: u8, coeff: u16) -> i32 {
+    ((u32::from(v) * u32::from(coeff)) >> 8) as i32
+}
+
+/// Used in `Frame::fill_rgb` and `Frame::fill_rgba`.
+/// This function has been rewritten to encourage auto-vectorization.
+///
+/// Based on [src/dsp/yuv.h](https://github.com/webmproject/libwebp/blob/8534f53960befac04c9631e6e50d21dcb42dfeaf/src/dsp/yuv.h#L79)
+/// from the libwebp source.
+/// ```text
+/// const YUV_FIX2: i32 = 6;
+/// const YUV_MASK2: i32 = (256 << YUV_FIX2) - 1;
+/// fn clip(v: i32) -> u8 {
+///     if (v & !YUV_MASK2) == 0 {
+///         (v >> YUV_FIX2) as u8
+///     } else if v < 0 {
+///         0
+///     } else {
+///         255
+///     }
+/// }
+/// ```
+fn clip(v: i32) -> u8 {
+    const YUV_FIX2: i32 = 6;
+    (v >> YUV_FIX2).max(0).min(255) as u8
 }
 
 #[derive(Clone, Copy, Default)]
