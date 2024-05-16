@@ -380,13 +380,12 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 while position < max_position {
                     match read_chunk_header(&mut reader) {
                         Ok((chunk, chunk_size, chunk_size_rounded)) => {
-                            if chunk.is_unknown() {
-                                break;
-                            }
-
                             let range = position + 8..position + 8 + chunk_size;
                             position += 8 + chunk_size_rounded;
-                            self.chunks.entry(chunk).or_insert(range);
+
+                            if !chunk.is_unknown() {
+                                self.chunks.entry(chunk).or_insert(range);
+                            }
 
                             if let WebPRiffChunk::ANMF = chunk {
                                 self.num_frames += 1;
