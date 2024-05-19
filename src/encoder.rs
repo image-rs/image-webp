@@ -5,7 +5,6 @@ use std::slice::ChunksExact;
 
 use quick_error::quick_error;
 
-
 /// Color type of the image.
 ///
 /// Note that the WebP format doesn't have a concept of color type. All images are encoded as RGBA
