@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::decoder::DecodingError;
 
 use super::lossless::subsample_size;
@@ -238,53 +240,62 @@ pub(crate) fn apply_color_indexing_transform(
     height: u16,
     table_size: u16,
     table_data: &[u8],
-) -> Result<(), DecodingError> {
-    let mut new_image_data = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
+) {
+    if table_size > 16 {
+        let mut table = table_data.chunks_exact(4).collect::<Vec<_>>();
+        table.resize(256, &[0; 4]);
 
-    todo!();
+        for pixel in image_data.chunks_exact_mut(4) {
+            pixel.copy_from_slice(table[pixel[0] as usize]);
+        }
+    } else {
+        image_data.resize(usize::from(width) * usize::from(height) * 4, 0);
 
-    // let width_bits: u8 = if table_size <= 2 {
-    //     3
-    // } else if table_size <= 4 {
-    //     2
-    // } else if table_size <= 16 {
-    //     1
-    // } else {
-    //     0
-    // };
+        let width_bits: u8 = if table_size <= 2 {
+            3
+        } else if table_size <= 4 {
+            2
+        } else if table_size <= 16 {
+            1
+        } else {
+            unreachable!()
+        };
 
-    // let bits_per_pixel = 8 >> width_bits;
-    // let mask = (1 << bits_per_pixel) - 1;
+        let bits_per_entry = 8 / (1 << width_bits);
+        let mask = (1 << bits_per_entry) - 1;
+        let table = (0..256)
+            .flat_map(|i| {
+                // TODO is this right?
+                let mut entry = Vec::new();
+                for j in 0..(1 << width_bits) {
+                    entry.extend_from_slice(
+                        &table_data[(i >> (j * bits_per_entry) & mask) * 4..][..4],
+                    );
+                }
+                entry
+            })
+            .collect::<Vec<_>>();
+        let table = table.chunks_exact(4 << width_bits).collect::<Vec<_>>();
 
-    // let mut src = 0;
-    // let width = usize::from(width);
+        let entry_size = 4 << width_bits;
+        let index_image_width = width.div_ceil(1 << width_bits) as usize;
+        let final_entry_size = width as usize * 4 - entry_size * (index_image_width - 1);
 
-    // let pixels_per_byte = 1 << width_bits;
-    // let count_mask = pixels_per_byte - 1;
-    // let mut packed_pixels = 0;
+        for y in (0..height as usize).rev() {
+            for x in (0..index_image_width as usize).rev() {
+                let input_index = y * index_image_width * 4 + x * 4 + 1;
+                let output_index = y * width as usize * 4 + x * entry_size;
+                let table_index = image_data[input_index] as usize;
 
-    // for _y in 0..usize::from(height) {
-    //     for x in 0..width {
-    //         if (x & count_mask) == 0 {
-    //             packed_pixels = (image_data[src] >> 8) & 0xff;
-    //             src += 1;
-    //         }
-
-    //         let pixels: usize = (packed_pixels & mask).try_into().unwrap();
-    //         let new_val = if pixels >= table_size.into() {
-    //             0x00000000
-    //         } else {
-    //             table_data[pixels]
-    //         };
-
-    //         new_image_data.push(new_val);
-
-    //         packed_pixels >>= bits_per_pixel;
-    //     }
-    // }
-
-    *image_data = new_image_data;
-    Ok(())
+                if x == index_image_width - 1 {
+                    image_data[output_index..][..final_entry_size]
+                        .copy_from_slice(&table[table_index][..final_entry_size]);
+                } else {
+                    image_data[output_index..][..entry_size].copy_from_slice(table[table_index]);
+                }
+            }
+        }
+    }
 }
 
 //predictor functions
