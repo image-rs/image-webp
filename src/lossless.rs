@@ -116,10 +116,15 @@ impl<R: Read> LosslessDecoder<R> {
         }
 
         let transformed_width = self.read_transforms()?;
+        let transformed_size = usize::from(transformed_width) * usize::from(self.height) * 4;
+        self.decode_image_stream(
+            transformed_width,
+            self.height,
+            true,
+            &mut buf[..transformed_size],
+        )?;
 
-        let mut data = vec![0; usize::from(transformed_width) * usize::from(self.height) * 4];
-        self.decode_image_stream(transformed_width, self.height, true, &mut data)?;
-
+        let mut image_size = transformed_size;
         let mut width = transformed_width;
         for &trans_index in self.transform_order.iter().rev() {
             let transform = self.transforms[usize::from(trans_index)].as_ref().unwrap();
@@ -128,7 +133,7 @@ impl<R: Read> LosslessDecoder<R> {
                     size_bits,
                     predictor_data,
                 } => apply_predictor_transform(
-                    &mut data,
+                    &mut buf[..image_size],
                     width,
                     self.height,
                     *size_bits,
@@ -137,25 +142,23 @@ impl<R: Read> LosslessDecoder<R> {
                 TransformType::ColorTransform {
                     size_bits,
                     transform_data,
-                } => apply_color_transform(&mut data, width, *size_bits, transform_data),
-                TransformType::SubtractGreen => apply_subtract_green_transform(&mut data),
+                } => {
+                    apply_color_transform(&mut buf[..image_size], width, *size_bits, transform_data)
+                }
+                TransformType::SubtractGreen => {
+                    apply_subtract_green_transform(&mut buf[..image_size])
+                }
                 TransformType::ColorIndexingTransform {
                     table_size,
                     table_data,
                 } => {
                     width = self.width;
-                    apply_color_indexing_transform(
-                        &mut data,
-                        self.width,
-                        self.height,
-                        *table_size,
-                        table_data,
-                    )
+                    image_size = usize::from(width) * usize::from(self.height) * 4;
+                    apply_color_indexing_transform(buf, width, self.height, *table_size, table_data)
                 }
             }
         }
 
-        buf.copy_from_slice(&data);
         Ok(())
     }
 

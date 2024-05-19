@@ -1,5 +1,3 @@
-use std::mem;
-
 use crate::decoder::DecodingError;
 
 use super::lossless::subsample_size;
@@ -235,7 +233,7 @@ pub(crate) fn apply_subtract_green_transform(image_data: &mut [u8]) {
 }
 
 pub(crate) fn apply_color_indexing_transform(
-    image_data: &mut Vec<u8>,
+    image_data: &mut [u8],
     width: u16,
     height: u16,
     table_size: u16,
@@ -249,8 +247,6 @@ pub(crate) fn apply_color_indexing_transform(
             pixel.copy_from_slice(table[pixel[0] as usize]);
         }
     } else {
-        image_data.resize(usize::from(width) * usize::from(height) * 4, 0);
-
         let width_bits: u8 = if table_size <= 2 {
             3
         } else if table_size <= 4 {
