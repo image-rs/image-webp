@@ -5,6 +5,8 @@ use std::slice::ChunksExact;
 
 use quick_error::quick_error;
 
+use crate::vp8;
+
 /// Color type of the image.
 ///
 /// Note that the WebP format doesn't have a concept of color type. All images are encoded as RGBA
@@ -653,11 +655,16 @@ impl<W: Write> WebPEncoder<W> {
             self.writer.write_all(b"WEBP")?;
             write_chunk(&mut self.writer, b"VP8L", &frame)?;
         } else {
-            let total_bytes = 30
-                + chunk_size(frame.len())
-                + chunk_size(self.icc_profile.len())
-                + chunk_size(self.exif_metadata.len())
-                + chunk_size(self.xmp_metadata.len());
+            let mut total_bytes = 22 + chunk_size(frame.len());
+            if !self.icc_profile.is_empty() {
+                total_bytes += chunk_size(self.icc_profile.len());
+            }
+            if !self.exif_metadata.is_empty() {
+                total_bytes += chunk_size(self.exif_metadata.len());
+            }
+            if !self.xmp_metadata.is_empty() {
+                total_bytes += chunk_size(self.xmp_metadata.len());
+            }
 
             let mut flags = 0;
             if !self.xmp_metadata.is_empty() {
@@ -677,12 +684,12 @@ impl<W: Write> WebPEncoder<W> {
             self.writer.write_all(&total_bytes.to_le_bytes())?;
             self.writer.write_all(b"WEBP")?;
 
-            self.writer.write_all(b"VP8X")?;
-            self.writer.write_all(&(10u32.to_le_bytes()))?; // chunk size
-            self.writer.write_all(&[flags])?; // flags
-            self.writer.write_all(&[0; 3])?; // reserved
-            self.writer.write_all(&(width - 1).to_le_bytes()[..3])?; // canvas width
-            self.writer.write_all(&(height - 1).to_le_bytes()[..3])?; // canvas height
+            let mut vp8x = Vec::new();
+            vp8x.write_all(&[flags])?; // flags
+            vp8x.write_all(&[0; 3])?; // reserved
+            vp8x.write_all(&(width - 1).to_le_bytes()[..3])?; // canvas width
+            vp8x.write_all(&(height - 1).to_le_bytes()[..3])?; // canvas height
+            write_chunk(&mut self.writer, b"VP8X", &vp8x)?;
 
             if !self.icc_profile.is_empty() {
                 write_chunk(&mut self.writer, b"ICCP", &self.icc_profile)?;
@@ -748,5 +755,49 @@ mod tests {
 
         let exif2 = decoder.exif_metadata().unwrap();
         assert_eq!(Some(exif), exif2);
+    }
+
+    #[test]
+    fn roundtrip_libwebp() {
+        let mut img = vec![0; 256 * 256 * 4];
+        rand::thread_rng().fill_bytes(&mut img);
+
+        let mut output = Vec::new();
+        WebPEncoder::new(&mut output)
+            .encode(&img[..256 * 256 * 3], 256, 256, crate::ColorType::Rgb8)
+            .unwrap();
+        webp::Decoder::new(&output).decode().unwrap();
+
+        let mut output = Vec::new();
+        WebPEncoder::new(&mut output)
+            .encode(&img, 256, 256, crate::ColorType::Rgba8)
+            .unwrap();
+        webp::Decoder::new(&output).decode().unwrap();
+
+        let mut output = Vec::new();
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_icc_profile(vec![0; 10]);
+        encoder
+            .encode(&img, 256, 256, crate::ColorType::Rgba8)
+            .unwrap();
+        webp::Decoder::new(&output).decode().unwrap();
+
+        let mut output = Vec::new();
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_exif_metadata(vec![0; 10]);
+        encoder
+            .encode(&img, 256, 256, crate::ColorType::Rgba8)
+            .unwrap();
+        webp::Decoder::new(&output).decode().unwrap();
+
+        let mut output = Vec::new();
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_xmp_metadata(vec![0; 7]);
+        encoder.set_icc_profile(vec![0; 8]);
+        encoder.set_icc_profile(vec![0; 9]);
+        encoder
+            .encode(&img, 256, 256, crate::ColorType::Rgba8)
+            .unwrap();
+        webp::Decoder::new(&output).decode().unwrap();
     }
 }
