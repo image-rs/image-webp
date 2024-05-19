@@ -5,7 +5,6 @@ use std::slice::ChunksExact;
 
 use quick_error::quick_error;
 
-use crate::vp8;
 
 /// Color type of the image.
 ///
