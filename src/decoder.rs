@@ -774,7 +774,7 @@ impl<R: Read + Seek> WebPDecoder<R> {
                     return Err(DecodingError::ChunkHeaderInvalid(next_chunk.to_fourcc()));
                 }
 
-                let mut vp8_decoder = Vp8Decoder::new((&mut self.r).take(chunk_size));
+                let mut vp8_decoder = Vp8Decoder::new((&mut self.r).take(next_chunk_size));
                 let frame = vp8_decoder.decode_frame()?;
 
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
