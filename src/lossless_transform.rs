@@ -261,7 +261,6 @@ pub(crate) fn apply_color_indexing_transform(
         let mask = (1 << bits_per_entry) - 1;
         let table = (0..256)
             .flat_map(|i| {
-                // TODO is this right?
                 let mut entry = Vec::new();
                 for j in 0..(1 << width_bits) {
                     entry.extend_from_slice(
