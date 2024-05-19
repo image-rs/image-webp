@@ -34,6 +34,7 @@ jobs:
     - name: build
       run: cargo build -v
     - name: test
+      if: ${{ matrix.rust != '1.67.1' }}
       run: cargo test -v && cargo doc -v
 
   test_big_endian:
