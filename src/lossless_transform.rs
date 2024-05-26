@@ -288,7 +288,7 @@ pub(crate) fn apply_color_indexing_transform(
         let final_entry_size = width as usize * 4 - entry_size * (index_image_width - 1);
 
         for y in (0..height as usize).rev() {
-            for x in (0..index_image_width as usize).rev() {
+            for x in (0..index_image_width).rev() {
                 let input_index = y * index_image_width * 4 + x * 4 + 1;
                 let output_index = y * width as usize * 4 + x * entry_size;
                 let table_index = image_data[input_index] as usize;
