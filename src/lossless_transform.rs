@@ -239,6 +239,17 @@ pub(crate) fn apply_color_indexing_transform(
     table_size: u16,
     table_data: &[u8],
 ) {
+    // TODO: Replace with built-in div_ceil when MSRV is 1.73+
+    fn div_ceil(a: u16, b: u16) -> u16 {
+        let d = a / b;
+        let r = a % b;
+        if r > 0 && b > 0 {
+            d + 1
+        } else {
+            d
+        }
+    }
+
     if table_size > 16 {
         let mut table = table_data.chunks_exact(4).collect::<Vec<_>>();
         table.resize(256, &[0; 4]);
@@ -273,7 +284,7 @@ pub(crate) fn apply_color_indexing_transform(
         let table = table.chunks_exact(4 << width_bits).collect::<Vec<_>>();
 
         let entry_size = 4 << width_bits;
-        let index_image_width = width.div_ceil(1 << width_bits) as usize;
+        let index_image_width = div_ceil(width, 1 << width_bits) as usize;
         let final_entry_size = width as usize * 4 - entry_size * (index_image_width - 1);
 
         for y in (0..height as usize).rev() {
