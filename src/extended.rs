@@ -299,11 +299,15 @@ pub(crate) fn read_alpha_chunk<R: Read>(
 
     let data = if lossless_compression {
         let mut decoder = LosslessDecoder::new(reader);
-        let frame = decoder.decode_frame(Some((width, height)))?;
 
-        let mut data = vec![0u8; usize::from(width) * usize::from(height)];
-        frame.fill_green(&mut data);
-        data
+        let mut data = vec![0; usize::from(width) * usize::from(height) * 4];
+        decoder.decode_frame(width as u32, height as u32, true, &mut data)?;
+
+        let mut green = vec![0; usize::from(width) * usize::from(height)];
+        for (rgba_val, green_val) in data.chunks_exact(4).zip(green.iter_mut()) {
+            *green_val = rgba_val[1];
+        }
+        green
     } else {
         let mut framedata = vec![0; width as usize * height as usize];
         reader.read_exact(&mut framedata)?;
