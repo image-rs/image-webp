@@ -9,7 +9,7 @@
 //! # Related Links
 //! * [rfc-6386](http://tools.ietf.org/html/rfc6386) - The VP8 Data Format and Decoding Guide
 //! * [VP8.pdf](http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/37073.pdf) - An overview of
-//! of the VP8 format
+//!   of the VP8 format
 //!
 
 use byteorder_lite::BigEndian;
@@ -993,7 +993,7 @@ fn mulhi(v: u8, coeff: u16) -> i32 {
 /// ```
 fn clip(v: i32) -> u8 {
     const YUV_FIX2: i32 = 6;
-    (v >> YUV_FIX2).max(0).min(255) as u8
+    (v >> YUV_FIX2).clamp(0, 255) as u8
 }
 
 #[derive(Clone, Copy, Default)]
