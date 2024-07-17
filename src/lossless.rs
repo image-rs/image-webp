@@ -286,7 +286,7 @@ impl<R: Read> LosslessDecoder<R> {
         ysize: u16,
         color_cache: Option<ColorCache>,
     ) -> Result<HuffmanInfo, DecodingError> {
-        let mut num_huff_groups = 1;
+        let mut num_huff_groups = 1u32;
 
         let mut huffman_bits = 0;
         let mut huffman_xsize = 1;
@@ -306,8 +306,8 @@ impl<R: Read> LosslessDecoder<R> {
                 .chunks_exact(4)
                 .map(|pixel| {
                     let meta_huff_code = u16::from(pixel[0]) << 8 | u16::from(pixel[1]);
-                    if meta_huff_code >= num_huff_groups {
-                        num_huff_groups = meta_huff_code + 1;
+                    if u32::from(meta_huff_code) >= num_huff_groups {
+                        num_huff_groups = u32::from(meta_huff_code) + 1;
                     }
                     meta_huff_code
                 })
