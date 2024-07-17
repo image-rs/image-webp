@@ -274,9 +274,12 @@ pub(crate) fn apply_color_indexing_transform(
             .flat_map(|i| {
                 let mut entry = Vec::new();
                 for j in 0..(1 << width_bits) {
-                    entry.extend_from_slice(
-                        &table_data[(i >> (j * bits_per_entry) & mask) * 4..][..4],
-                    );
+                    let k = i >> (j * bits_per_entry) & mask;
+                    if k < table_size {
+                        entry.extend_from_slice(&table_data[usize::from(k) * 4..][..4]);
+                    } else {
+                        entry.extend_from_slice(&[0; 4]);
+                    }
                 }
                 entry
             })
