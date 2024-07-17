@@ -255,7 +255,7 @@ pub(crate) fn apply_color_indexing_transform(
         table.resize(256, &[0; 4]);
 
         for pixel in image_data.chunks_exact_mut(4) {
-            pixel.copy_from_slice(table[pixel[0] as usize]);
+            pixel.copy_from_slice(table[pixel[1] as usize]);
         }
     } else {
         let width_bits: u8 = if table_size <= 2 {

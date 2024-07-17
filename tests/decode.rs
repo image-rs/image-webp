@@ -168,4 +168,4 @@ reftest!(gallery1, 1, 2, 3, 4, 5);
 reftest!(gallery2, 1_webp_ll, 2_webp_ll, 3_webp_ll, 4_webp_ll, 5_webp_ll);
 reftest!(gallery2, 1_webp_a, 2_webp_a, 3_webp_a, 4_webp_a, 5_webp_a);
 reftest!(animated, random_lossless, random_lossy);
-reftest!(regression, color_index, dark);
+reftest!(regression, color_index, dark, tiny);

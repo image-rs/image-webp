@@ -29,6 +29,7 @@ convert -delay 15 -size 99x87 xc: xc: xc: xc: +noise Random -define webp:lossles
 ## images/regression
 
 color_index.webp: Manually constructed to reproduce decoding error.
+tiny.webp: Provided in a [bug report](https://github.com/image-rs/image-webp/issues/81).
 
 # Reference images
 
@@ -55,3 +56,4 @@ for i in {1..4}; do webpmux -get frame ${i} ../../images/animated/random_lossy.w
 ## reference/regression
 
 color_index.png: Converted with dwebp.
+tiny.png: Converted with dwebp.
