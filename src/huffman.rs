@@ -26,19 +26,6 @@ pub(crate) struct HuffmanTree {
 }
 
 impl HuffmanTree {
-    fn is_full(&self) -> bool {
-        self.num_nodes == self.max_nodes
-    }
-
-    /// Turns a node from empty into a branch and assigns its children
-    fn assign_children(&mut self, node_index: usize) -> usize {
-        let offset_index = self.num_nodes - node_index;
-        self.tree[node_index] = HuffmanTreeNode::Branch(offset_index);
-        self.num_nodes += 2;
-
-        offset_index
-    }
-
     /// Init a huffman tree
     fn init(num_leaves: usize) -> Result<HuffmanTree, DecodingError> {
         if num_leaves == 0 {
@@ -126,10 +113,15 @@ impl HuffmanTree {
 
             let offset = match node {
                 HuffmanTreeNode::Empty => {
-                    if self.is_full() {
+                    if self.num_nodes == self.max_nodes {
                         return Err(DecodingError::HuffmanError);
                     }
-                    self.assign_children(node_index)
+
+                    // Turns a node from empty into a branch and assigns its children
+                    let offset_index = self.num_nodes - node_index;
+                    self.tree[node_index] = HuffmanTreeNode::Branch(offset_index);
+                    self.num_nodes += 2;
+                    offset_index
                 }
                 HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
                 HuffmanTreeNode::Branch(offset) => offset,
