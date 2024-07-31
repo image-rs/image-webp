@@ -358,24 +358,22 @@ impl<R: Read> LosslessDecoder<R> {
         if simple {
             let num_symbols = self.bit_reader.read_bits::<u8>(1)? + 1;
 
-            let mut code_lengths = vec![u16::from(num_symbols - 1)];
-            let mut codes = vec![0];
-            let mut symbols = Vec::new();
-
             let is_first_8bits = self.bit_reader.read_bits::<u8>(1)?;
-            symbols.push(self.bit_reader.read_bits::<u16>(1 + 7 * is_first_8bits)?);
+            let zero_symbol = self.bit_reader.read_bits::<u16>(1 + 7 * is_first_8bits)?;
 
-            if num_symbols == 2 {
-                symbols.push(self.bit_reader.read_bits::<u16>(8)?);
-                code_lengths.push(1);
-                codes.push(1);
-            }
-
-            if symbols.iter().any(|&s| s > alphabet_size) {
+            if zero_symbol >= alphabet_size {
                 return Err(DecodingError::BitStreamError);
             }
 
-            HuffmanTree::build_explicit(code_lengths, codes, symbols)
+            if num_symbols == 1 {
+                Ok(HuffmanTree::build_single_node(zero_symbol))
+            } else {
+                let one_symbol = self.bit_reader.read_bits::<u16>(8)?;
+                if one_symbol >= alphabet_size {
+                    return Err(DecodingError::BitStreamError);
+                }
+                Ok(HuffmanTree::build_two_node(zero_symbol, one_symbol))
+            }
         } else {
             let mut code_length_code_lengths = vec![0; CODE_LENGTH_CODES];
 

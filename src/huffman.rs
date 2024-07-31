@@ -151,10 +151,19 @@ impl HuffmanTree {
             }
         }
 
-        let mut tree = HuffmanTree::init(num_symbols)?;
+        if num_symbols == 0 {
+            return Err(DecodingError::HuffmanError);
+        }
+
+        let max_nodes = 2 * num_symbols - 1;
+        let mut tree = HuffmanTree {
+            tree: vec![HuffmanTreeNode::Empty; max_nodes],
+            max_nodes,
+            num_nodes: 1,
+        };
 
         if num_symbols == 1 {
-            tree.add_symbol(root_symbol, 0, 0)?;
+            return Ok(Self::build_single_node(root_symbol));
         } else {
             let codes = HuffmanTree::code_lengths_to_codes(&code_lengths)?;
 
@@ -168,19 +177,17 @@ impl HuffmanTree {
         Ok(tree)
     }
 
-    /// Builds a tree explicitly from lengths, codes and symbols
-    pub(crate) fn build_explicit(
-        code_lengths: Vec<u16>,
-        codes: Vec<u16>,
-        symbols: Vec<u16>,
-    ) -> Result<HuffmanTree, DecodingError> {
-        let mut tree = HuffmanTree::init(symbols.len())?;
+    pub(crate) fn build_single_node(symbol: u16) -> HuffmanTree {
+        let mut tree = HuffmanTree::init(1).unwrap();
+        tree.add_symbol(symbol, 0, 0).unwrap();
+        tree
+    }
 
-        for i in 0..symbols.len() {
-            tree.add_symbol(symbols[i], codes[i], code_lengths[i])?;
-        }
-
-        Ok(tree)
+    pub(crate) fn build_two_node(zero: u16, one: u16) -> HuffmanTree {
+        let mut tree = HuffmanTree::init(2).unwrap();
+        tree.add_symbol(zero, 0, 1).unwrap();
+        tree.add_symbol(one, 1, 1).unwrap();
+        tree
     }
 
     pub(crate) fn is_single_node(&self) -> bool {
