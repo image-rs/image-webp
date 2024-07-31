@@ -20,15 +20,16 @@ enum HuffmanTreeNode {
 #[derive(Clone, Debug)]
 pub(crate) struct HuffmanTreeInner {
     tree: Vec<HuffmanTreeNode>,
-    max_nodes: usize,
     num_nodes: usize,
+
+    table: Vec<u32>,
+    table_mask: u16,
 }
 
 /// Huffman tree
 #[derive(Clone, Debug)]
 pub(crate) enum HuffmanTree {
     Single(u16),
-    Pair(u16, u16),
     Tree(HuffmanTreeInner),
 }
 
@@ -50,18 +51,10 @@ impl HuffmanTreeInner {
         let code = usize::from(code);
 
         for length in (0..code_length).rev() {
-            if node_index >= self.max_nodes {
-                return Err(DecodingError::HuffmanError);
-            }
-
             let node = self.tree[node_index];
 
             let offset = match node {
                 HuffmanTreeNode::Empty => {
-                    if self.num_nodes == self.max_nodes {
-                        return Err(DecodingError::HuffmanError);
-                    }
-
                     // Turns a node from empty into a branch and assigns its children
                     let offset_index = self.num_nodes - node_index;
                     self.tree[node_index] = HuffmanTreeNode::Branch(offset_index);
@@ -86,8 +79,24 @@ impl HuffmanTreeInner {
 }
 
 impl HuffmanTree {
-    /// Converts code lengths to codes
-    fn code_lengths_to_codes(code_lengths: &[u16]) -> Result<Vec<Option<u16>>, DecodingError> {
+    /// Builds a tree implicitly, just from code lengths
+    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<HuffmanTree, DecodingError> {
+        let mut num_symbols = 0;
+        let mut root_symbol = 0;
+
+        for (symbol, length) in code_lengths.iter().enumerate() {
+            if *length > 0 {
+                num_symbols += 1;
+                root_symbol = symbol.try_into().unwrap();
+            }
+        }
+
+        if num_symbols == 0 {
+            return Err(DecodingError::HuffmanError);
+        } else if num_symbols == 1 {
+            return Ok(Self::build_single_node(root_symbol));
+        };
+
         let max_code_length = *code_lengths
             .iter()
             .reduce(|a, b| if a >= b { a } else { b })
@@ -114,63 +123,60 @@ impl HuffmanTree {
 
         // Assign codes
         let mut curr_code = 0;
-        let mut next_codes = [None; MAX_ALLOWED_CODE_LENGTH + 1];
+        let mut next_codes = [0; MAX_ALLOWED_CODE_LENGTH + 1];
         for code_len in 1..=usize::from(max_code_length) {
             curr_code = (curr_code + code_length_hist[code_len - 1]) << 1;
-            next_codes[code_len] = Some(curr_code);
+            next_codes[code_len] = curr_code;
         }
-        let mut huff_codes = vec![None; code_lengths.len()];
+        let mut huff_codes = vec![0u16; code_lengths.len()];
         for (symbol, &length) in code_lengths.iter().enumerate() {
             let length = usize::from(length);
             if length > 0 {
                 huff_codes[symbol] = next_codes[length];
-                if let Some(value) = next_codes[length].as_mut() {
-                    *value += 1;
+                next_codes[length] += 1;
+            }
+        }
+
+        // Populate decoding table
+        let table_bits = max_code_length.min(10);
+        let table_size = (1 << table_bits) as usize;
+        let table_mask = table_size as u16 - 1;
+        let mut table = vec![0; table_size];
+        for (symbol, (&code, &length)) in huff_codes.iter().zip(code_lengths.iter()).enumerate() {
+            if length != 0 && length <= table_bits {
+                let mut j = ((code as u16).reverse_bits() >> (16 - length)) as usize;
+                let entry = ((length as u32) << 16) | symbol as u32;
+                while j < table_size {
+                    table[j] = entry;
+                    j += 1 << length as usize;
                 }
-            } else {
-                huff_codes[symbol] = None;
             }
         }
 
-        Ok(huff_codes)
-    }
-
-    /// Builds a tree implicitly, just from code lengths
-    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<HuffmanTree, DecodingError> {
-        let mut num_symbols = 0;
-        let mut root_symbol = 0;
-
-        for (symbol, length) in code_lengths.iter().enumerate() {
-            if *length > 0 {
-                num_symbols += 1;
-                root_symbol = symbol.try_into().unwrap();
-            }
-        }
-
-        if num_symbols == 0 {
-            return Err(DecodingError::HuffmanError);
-        }
-
-        let max_nodes = 2 * num_symbols - 1;
-        let mut tree = HuffmanTreeInner {
-            tree: vec![HuffmanTreeNode::Empty; max_nodes],
-            max_nodes,
-            num_nodes: 1,
-        };
-
-        if num_symbols == 1 {
-            return Ok(Self::build_single_node(root_symbol));
-        } else {
-            let codes = HuffmanTree::code_lengths_to_codes(&code_lengths)?;
+        // If the longest code is larger than the table size, build a tree as a fallback.
+        if max_code_length > table_bits {
+            let max_nodes = 2 * num_symbols - 1;
+            let mut tree = HuffmanTreeInner {
+                tree: vec![HuffmanTreeNode::Empty; max_nodes],
+                num_nodes: 1,
+                table,
+                table_mask,
+            };
 
             for (symbol, &length) in code_lengths.iter().enumerate() {
-                if length > 0 && codes[symbol].is_some() {
-                    tree.add_symbol(symbol.try_into().unwrap(), codes[symbol].unwrap(), length)?;
+                if length > 0 {
+                    tree.add_symbol(symbol.try_into().unwrap(), huff_codes[symbol], length)?;
                 }
             }
+            Ok(HuffmanTree::Tree(tree))
+        } else {
+            Ok(HuffmanTree::Tree(HuffmanTreeInner {
+                tree: Vec::new(),
+                num_nodes: 1,
+                table,
+                table_mask,
+            }))
         }
-
-        Ok(HuffmanTree::Tree(tree))
     }
 
     pub(crate) fn build_single_node(symbol: u16) -> HuffmanTree {
@@ -178,7 +184,17 @@ impl HuffmanTree {
     }
 
     pub(crate) fn build_two_node(zero: u16, one: u16) -> HuffmanTree {
-        HuffmanTree::Pair(zero, one)
+        // HuffmanTree::Pair(zero, one)
+        HuffmanTree::Tree(HuffmanTreeInner {
+            tree: vec![
+                HuffmanTreeNode::Leaf(zero),
+                HuffmanTreeNode::Leaf(one),
+                HuffmanTreeNode::Empty,
+            ],
+            num_nodes: 3,
+            table: vec![1 << 16 | zero as u32, 1 << 16 | one as u32],
+            table_mask: 0x1,
+        })
     }
 
     pub(crate) fn is_single_node(&self) -> bool {
@@ -195,18 +211,15 @@ impl HuffmanTree {
     ) -> Result<u16, DecodingError> {
         match self {
             HuffmanTree::Single(symbol) => Ok(*symbol),
-            HuffmanTree::Pair(zero, one) => {
-                let v = bit_reader.peek(1);
-                bit_reader.consume(1)?;
-                if v == 0 {
-                    Ok(*zero)
-                } else {
-                    Ok(*one)
-                }
-            }
             HuffmanTree::Tree(inner) => {
                 let mut v = bit_reader.peek(15) as usize;
                 let mut depth = 0;
+
+                let entry = inner.table[v & inner.table_mask as usize];
+                if entry != 0 {
+                    bit_reader.consume((entry >> 16) as u8)?;
+                    return Ok(entry as u16);
+                }
 
                 let mut index = 0;
                 loop {
