@@ -87,15 +87,18 @@ pub(crate) fn composite_frame(
     } else if frame_has_alpha {
         for y in 0..height {
             let frame_index = (y * frame_width as usize) * 4;
-            let canvas_index = (y + frame_offset_y as usize) * canvas_width as usize * 4;
+            let canvas_index = (frame_offset_x as usize
+                + (y + frame_offset_y as usize) * canvas_width as usize)
+                * 4;
 
             canvas[canvas_index..][..width * 4].copy_from_slice(&frame[frame_index..][..width * 4]);
         }
     } else {
         for y in 0..height {
             let index = (y * frame_width as usize) * 3;
-            let canvas_index = (y + frame_offset_y as usize) * canvas_width as usize * 4;
-
+            let canvas_index = (frame_offset_x as usize
+                + (y + frame_offset_y as usize) * canvas_width as usize)
+                * 4;
             let input = &frame[index..][..width * 3];
             let output = &mut canvas[canvas_index..][..width * 4];
 
