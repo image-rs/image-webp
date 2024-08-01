@@ -201,6 +201,30 @@ impl HuffmanTree {
         matches!(self, HuffmanTree::Single(_))
     }
 
+    #[inline(never)]
+    fn read_symbol_slowpath<R: Read>(
+        inner: &HuffmanTreeInner,
+        mut v: usize,
+        bit_reader: &mut BitReader<R>,
+    ) -> Result<u16, DecodingError> {
+        let mut depth = 0;
+        let mut index = 0;
+        loop {
+            match &inner.tree[index] {
+                HuffmanTreeNode::Branch(children_offset) => {
+                    index += children_offset + (v & 1);
+                    depth += 1;
+                    v >>= 1;
+                }
+                HuffmanTreeNode::Leaf(symbol) => {
+                    bit_reader.consume(depth)?;
+                    return Ok(*symbol);
+                }
+                HuffmanTreeNode::Empty => return Err(DecodingError::HuffmanError),
+            }
+        }
+    }
+
     /// Reads a symbol using the bitstream.
     ///
     /// You must call call `bit_reader.fill()` before calling this function or it may erroroneosly
@@ -210,33 +234,17 @@ impl HuffmanTree {
         bit_reader: &mut BitReader<R>,
     ) -> Result<u16, DecodingError> {
         match self {
-            HuffmanTree::Single(symbol) => Ok(*symbol),
             HuffmanTree::Tree(inner) => {
-                let mut v = bit_reader.peek(15) as usize;
-                let mut depth = 0;
-
-                let entry = inner.table[v & inner.table_mask as usize];
+                let v = bit_reader.peek_full() as u16;
+                let entry = inner.table[(v & inner.table_mask) as usize];
                 if entry != 0 {
                     bit_reader.consume((entry >> 16) as u8)?;
                     return Ok(entry as u16);
                 }
 
-                let mut index = 0;
-                loop {
-                    match &inner.tree[index] {
-                        HuffmanTreeNode::Branch(children_offset) => {
-                            index += children_offset + (v & 1);
-                            depth += 1;
-                            v >>= 1;
-                        }
-                        HuffmanTreeNode::Leaf(symbol) => {
-                            bit_reader.consume(depth)?;
-                            return Ok(*symbol);
-                        }
-                        HuffmanTreeNode::Empty => return Err(DecodingError::HuffmanError),
-                    }
-                }
+                Self::read_symbol_slowpath(inner, v as usize, bit_reader)
             }
+            HuffmanTree::Single(symbol) => Ok(*symbol),
         }
     }
 }

@@ -749,6 +749,11 @@ impl<R: Read> BitReader<R> {
         self.buffer & ((1 << num) - 1)
     }
 
+    /// Peeks at the full buffer.
+    pub(crate) fn peek_full(&self) -> u64 {
+        self.buffer
+    }
+
     /// Consumes `num` bits from the buffer returning an error if there are not enough bits.
     pub(crate) fn consume(&mut self, num: u8) -> Result<(), DecodingError> {
         if self.nbits < num {
