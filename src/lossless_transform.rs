@@ -205,22 +205,24 @@ pub(crate) fn apply_color_transform(
     let width = usize::from(width);
 
     for (y, row) in image_data.chunks_exact_mut(width * 4).enumerate() {
-        for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
-            let block_index = (y >> size_bits) * block_xsize + (x >> size_bits);
+        for (block_x, block) in row.chunks_mut(4 << size_bits).enumerate() {
+            let block_index = (y >> size_bits) * block_xsize + block_x;
             let red_to_blue = transform_data[block_index * 4];
             let green_to_blue = transform_data[block_index * 4 + 1];
             let green_to_red = transform_data[block_index * 4 + 2];
 
-            let green = u32::from(pixel[1]);
-            let mut temp_red = u32::from(pixel[0]);
-            let mut temp_blue = u32::from(pixel[2]);
+            for pixel in block.chunks_exact_mut(4) {
+                let green = u32::from(pixel[1]);
+                let mut temp_red = u32::from(pixel[0]);
+                let mut temp_blue = u32::from(pixel[2]);
 
-            temp_red += color_transform_delta(green_to_red as i8, green as i8);
-            temp_blue += color_transform_delta(green_to_blue as i8, green as i8);
-            temp_blue += color_transform_delta(red_to_blue as i8, temp_red as i8);
+                temp_red += color_transform_delta(green_to_red as i8, green as i8);
+                temp_blue += color_transform_delta(green_to_blue as i8, green as i8);
+                temp_blue += color_transform_delta(red_to_blue as i8, temp_red as i8);
 
-            pixel[0] = (temp_red & 0xff) as u8;
-            pixel[2] = (temp_blue & 0xff) as u8;
+                pixel[0] = (temp_red & 0xff) as u8;
+                pixel[2] = (temp_blue & 0xff) as u8;
+            }
         }
     }
 }
