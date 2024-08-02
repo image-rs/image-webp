@@ -548,8 +548,15 @@ impl<R: Read> LosslessDecoder<R> {
                     return Err(DecodingError::BitStreamError);
                 }
 
-                for i in 0..length * 4 {
-                    data[index * 4 + i] = data[index * 4 + i - dist * 4];
+                if dist == 1 {
+                    let value: [u8; 4] = data[(index - dist) * 4..][..4].try_into().unwrap();
+                    for i in 0..length {
+                        data[index * 4 + i * 4..][..4].copy_from_slice(&value);
+                    }
+                } else {
+                    for i in 0..length * 4 {
+                        data[index * 4 + i] = data[index * 4 + i - dist * 4];
+                    }
                 }
                 index += length;
             } else {
