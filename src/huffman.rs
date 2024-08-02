@@ -17,9 +17,8 @@ enum HuffmanTreeNode {
     Empty,
 }
 
-/// Huffman tree
 #[derive(Clone, Debug)]
-pub(crate) enum HuffmanTree {
+enum HuffmanTreeInner {
     Single(u16),
     Tree {
         tree: Vec<HuffmanTreeNode>,
@@ -28,9 +27,13 @@ pub(crate) enum HuffmanTree {
     },
 }
 
+/// Huffman tree
+#[derive(Clone, Debug)]
+pub(crate) struct HuffmanTree(HuffmanTreeInner);
+
 impl Default for HuffmanTree {
     fn default() -> Self {
-        HuffmanTree::Single(0)
+        Self(HuffmanTreeInner::Single(0))
     }
 }
 
@@ -153,19 +156,19 @@ impl HuffmanTree {
             }
         }
 
-        Ok(HuffmanTree::Tree {
+        Ok(Self(HuffmanTreeInner::Tree {
             tree,
             table,
             table_mask,
-        })
+        }))
     }
 
     pub(crate) fn build_single_node(symbol: u16) -> HuffmanTree {
-        HuffmanTree::Single(symbol)
+        Self(HuffmanTreeInner::Single(symbol))
     }
 
     pub(crate) fn build_two_node(zero: u16, one: u16) -> HuffmanTree {
-        HuffmanTree::Tree {
+        Self(HuffmanTreeInner::Tree {
             tree: vec![
                 HuffmanTreeNode::Leaf(zero),
                 HuffmanTreeNode::Leaf(one),
@@ -173,11 +176,11 @@ impl HuffmanTree {
             ],
             table: vec![1 << 16 | zero as u32, 1 << 16 | one as u32],
             table_mask: 0x1,
-        }
+        })
     }
 
     pub(crate) fn is_single_node(&self) -> bool {
-        matches!(self, HuffmanTree::Single(_))
+        matches!(self.0, HuffmanTreeInner::Single(_))
     }
 
     #[inline(never)]
@@ -212,8 +215,8 @@ impl HuffmanTree {
         &self,
         bit_reader: &mut BitReader<R>,
     ) -> Result<u16, DecodingError> {
-        match self {
-            HuffmanTree::Tree {
+        match &self.0 {
+            HuffmanTreeInner::Tree {
                 tree,
                 table,
                 table_mask,
@@ -227,7 +230,7 @@ impl HuffmanTree {
 
                 Self::read_symbol_slowpath(tree, v as usize, bit_reader)
             }
-            HuffmanTree::Single(symbol) => Ok(*symbol),
+            HuffmanTreeInner::Single(symbol) => Ok(*symbol),
         }
     }
 }
