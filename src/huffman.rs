@@ -103,7 +103,7 @@ impl HuffmanTree {
         let mut table = vec![0; table_size];
         for (symbol, (&code, &length)) in huff_codes.iter().zip(code_lengths.iter()).enumerate() {
             if length != 0 && length <= table_bits {
-                let mut j = ((code as u16).reverse_bits() >> (16 - length)) as usize;
+                let mut j = (u16::reverse_bits(code) >> (16 - length)) as usize;
                 let entry = ((length as u32) << 16) | symbol as u32;
                 while j < table_size {
                     table[j] = entry;
