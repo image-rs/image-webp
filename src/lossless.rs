@@ -604,7 +604,10 @@ impl<R: Read> LosslessDecoder<R> {
         let extra_bits: u8 = ((prefix_code - 2) >> 1).try_into().unwrap();
         let offset = (2 + (usize::from(prefix_code) & 1)) << extra_bits;
 
-        Ok(offset + bit_reader.read_bits::<usize>(extra_bits)? + 1)
+        let bits = bit_reader.peek(extra_bits) as usize;
+        bit_reader.consume(extra_bits)?;
+
+        Ok(offset + bits + 1)
     }
 
     /// Gets distance to pixel
