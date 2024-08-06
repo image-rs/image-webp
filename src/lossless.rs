@@ -473,7 +473,6 @@ impl<R: Read> LosslessDecoder<R> {
 
         let huff_index = huffman_info.get_huff_index(0, 0);
         let mut tree = &huffman_info.huffman_code_groups[huff_index];
-        let mut last_cached = 0;
         let mut index = 0;
 
         let mut next_block_start = 0;
@@ -523,15 +522,19 @@ impl<R: Read> LosslessDecoder<R> {
             //check code
             if code < 256 {
                 //literal, so just use huffman codes and read as argb
-                let red = tree[RED].read_symbol(&mut self.bit_reader)?;
-                let blue = tree[BLUE].read_symbol(&mut self.bit_reader)?;
-                let alpha = tree[ALPHA].read_symbol(&mut self.bit_reader)?;
+                let green = code as u8;
+                let red = tree[RED].read_symbol(&mut self.bit_reader)? as u8;
+                let blue = tree[BLUE].read_symbol(&mut self.bit_reader)? as u8;
+                let alpha = tree[ALPHA].read_symbol(&mut self.bit_reader)? as u8;
 
-                data[index * 4] = red as u8;
-                data[index * 4 + 1] = code as u8;
-                data[index * 4 + 2] = blue as u8;
-                data[index * 4 + 3] = alpha as u8;
+                data[index * 4] = red;
+                data[index * 4 + 1] = green;
+                data[index * 4 + 2] = blue;
+                data[index * 4 + 3] = alpha;
 
+                if let Some(color_cache) = huffman_info.color_cache.as_mut() {
+                    color_cache.insert([red, green, blue, alpha]);
+                }
                 index += 1;
             } else if code < 256 + 24 {
                 //backward reference, so go back and use that to add image data
@@ -551,26 +554,28 @@ impl<R: Read> LosslessDecoder<R> {
                     for i in 0..length {
                         data[index * 4 + i * 4..][..4].copy_from_slice(&value);
                     }
+                    if let Some(color_cache) = huffman_info.color_cache.as_mut() {
+                        color_cache.insert(value);
+                    }
                 } else {
                     for i in 0..length * 4 {
                         data[index * 4 + i] = data[index * 4 + i - dist * 4];
+                    }
+                    if let Some(color_cache) = huffman_info.color_cache.as_mut() {
+                        for pixel in data[index * 4..][..length * 4].chunks_exact(4) {
+                            color_cache.insert(pixel.try_into().unwrap());
+                        }
                     }
                 }
                 index += length;
             } else {
                 //color cache, so use previously stored pixels to get this pixel
                 let key = code - 256 - 24;
-
-                if let Some(color_cache) = huffman_info.color_cache.as_mut() {
-                    //cache old colors
-                    while last_cached < index {
-                        color_cache.insert(data[last_cached * 4..][..4].try_into().unwrap());
-                        last_cached += 1;
-                    }
-                    data[index * 4..][..4].copy_from_slice(&color_cache.lookup(key.into())?);
-                } else {
-                    return Err(DecodingError::BitStreamError);
-                }
+                let color_cache = huffman_info
+                    .color_cache
+                    .as_mut()
+                    .ok_or(DecodingError::BitStreamError)?;
+                data[index * 4..][..4].copy_from_slice(&color_cache.lookup(key.into())?);
                 index += 1;
             }
         }
