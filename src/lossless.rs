@@ -3,7 +3,8 @@
 //! [Lossless spec](https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification)
 //!
 
-use std::{io::Read, mem};
+use std::io::BufRead;
+use std::mem;
 
 use crate::decoder::DecodingError;
 use crate::lossless_transform::{
@@ -69,7 +70,7 @@ pub(crate) struct LosslessDecoder<R> {
     height: u16,
 }
 
-impl<R: Read> LosslessDecoder<R> {
+impl<R: BufRead> LosslessDecoder<R> {
     /// Create a new decoder
     pub(crate) fn new(r: R) -> LosslessDecoder<R> {
         LosslessDecoder {
@@ -525,6 +526,9 @@ impl<R: Read> LosslessDecoder<R> {
                 let green = code as u8;
                 let red = tree[RED].read_symbol(&mut self.bit_reader)? as u8;
                 let blue = tree[BLUE].read_symbol(&mut self.bit_reader)? as u8;
+                if self.bit_reader.nbits < 15 {
+                    self.bit_reader.fill()?;
+                }
                 let alpha = tree[ALPHA].read_symbol(&mut self.bit_reader)? as u8;
 
                 data[index * 4] = red;
@@ -682,27 +686,15 @@ pub(crate) struct BitReader<R> {
     reader: R,
     buffer: u64,
     nbits: u8,
-    lookahead: u64,
-    lookahead_bits: u8,
 }
 
-impl<R: Read> BitReader<R> {
+impl<R: BufRead> BitReader<R> {
     fn new(reader: R) -> Self {
         Self {
             reader,
             buffer: 0,
             nbits: 0,
-            lookahead: 0,
-            lookahead_bits: 0,
         }
-    }
-
-    fn apply_lookahead(&mut self) {
-        let num = self.lookahead_bits.min(64 - self.nbits);
-        self.buffer |= self.lookahead << self.nbits;
-        self.nbits += num;
-        self.lookahead = self.lookahead.checked_shr(num as u32).unwrap_or(0);
-        self.lookahead_bits -= num;
     }
 
     /// Fills the buffer with bits from the input stream.
@@ -710,44 +702,22 @@ impl<R: Read> BitReader<R> {
     /// After this function, the internal buffer will contain 64-bits or have reached the end of
     /// the input stream.
     pub(crate) fn fill(&mut self) -> Result<(), DecodingError> {
-        // Check whether the buffer is already full.
-        if self.nbits == 64 {
-            return Ok(());
-        }
-
-        // Apply the lookahead bits if there are any.
-        if self.lookahead_bits > 0 {
-            self.apply_lookahead();
-            if self.nbits == 64 {
-                return Ok(());
-            }
-        }
-
-        debug_assert!(self.lookahead_bits == 0);
         debug_assert!(self.nbits < 64);
 
-        // Read from the input stream.
-        let mut bytes_read = 0;
-        let mut bytes = [0; 8];
-        while bytes_read < 8 {
-            let n = self.reader.read(&mut bytes[bytes_read..])?;
-            if n == 0 {
-                if bytes_read == 0 {
-                    return Ok(());
-                }
-
-                // Technically, a `read` implementation can write bytes to the buffer even if it
-                // returns 0, so we need to zero out the remaining bytes to ensure that the buffer
-                // is properly initialized.
-                bytes[bytes_read..].fill(0);
-                break;
+        let mut buf = self.reader.fill_buf()?;
+        if buf.len() >= 8 {
+            let lookahead = u64::from_le_bytes(buf[..8].try_into().unwrap());
+            self.reader.consume(usize::from((63 - self.nbits) / 8));
+            self.buffer |= lookahead << self.nbits;
+            self.nbits |= 56;
+        } else {
+            while buf.len() > 0 && self.nbits < 56 {
+                self.buffer |= u64::from(buf[0]) << self.nbits;
+                self.nbits += 8;
+                self.reader.consume(1);
+                buf = self.reader.fill_buf()?;
             }
-            bytes_read += n;
         }
-
-        self.lookahead = u64::from_le_bytes(bytes);
-        self.lookahead_bits = (bytes_read * 8) as u8;
-        self.apply_lookahead();
 
         Ok(())
     }
@@ -778,7 +748,9 @@ impl<R: Read> BitReader<R> {
         debug_assert!(num as usize <= 8 * mem::size_of::<T>());
         debug_assert!(num <= 32);
 
-        self.fill()?;
+        if self.nbits < num {
+            self.fill()?;
+        }
         let value = self.peek(num) as u32;
         self.consume(num)?;
 
