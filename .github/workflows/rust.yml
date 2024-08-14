@@ -36,6 +36,9 @@ jobs:
     - name: test
       if: ${{ matrix.rust != '1.67.1' }}
       run: cargo test -v && cargo doc -v
+    - name: bench
+      if: ${{ matrix.rust == 'nightly' }}
+      run: cargo bench -v --features _benchmarks
 
   test_big_endian:
     # github actions does not support big endian systems directly, but it does support QEMU.
@@ -67,23 +70,11 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
-    - name: install-dependencies
-      run: sudo apt update && sudo apt install ninja-build meson nasm
     - uses: actions/checkout@v4
     - uses: dtolnay/rust-toolchain@stable
       with:
         components: clippy
     - run: cargo clippy --all-features -- -D warnings
-      env:
-        SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: always
-
-  build_benchmarks:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@nightly
-    - name: build
-      run: cargo build -v --benches
 
   rustfmt:
     runs-on: ubuntu-latest

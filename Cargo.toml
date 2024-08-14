@@ -21,3 +21,6 @@ paste = "1.0.14"
 png = "0.17.12"
 rand = "0.8.5"
 webp = "0.3.0"
+
+[features]
+_benchmarks = []

@@ -2660,26 +2660,14 @@ fn predict_bhupred(a: &mut [u8], x0: usize, y0: usize, stride: usize) {
     a[(y0 + 3) * stride + x0 + 3] = l3;
 }
 
-#[cfg(test)]
-mod test {
-
-    #[cfg(feature = "benchmarks")]
-    extern crate test;
-    use super::{
-        add_residue, avg2, avg3, edge_pixels, predict_bhepred, predict_bldpred, predict_brdpred,
-        predict_bvepred, top_pixels,
-    };
-    #[cfg(feature = "benchmarks")]
-    use super::{predict_4x4, IntraMode};
-    #[cfg(feature = "benchmarks")]
+#[cfg(all(test, feature = "_benchmarks"))]
+mod benches {
+    use super::*;
     use test::{black_box, Bencher};
 
-    #[cfg(feature = "benchmarks")]
     const W: usize = 256;
-    #[cfg(feature = "benchmarks")]
     const H: usize = 256;
 
-    #[cfg(feature = "benchmarks")]
     fn make_sample_image() -> Vec<u8> {
         let mut v = Vec::with_capacity((W * H * 4) as usize);
         for c in 0u8..=255 {
@@ -2693,7 +2681,6 @@ mod test {
         v
     }
 
-    #[cfg(feature = "benchmarks")]
     #[bench]
     fn bench_predict_4x4(b: &mut Bencher) {
         let mut v = black_box(make_sample_image());
@@ -2723,7 +2710,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "benchmarks")]
     #[bench]
     fn bench_predict_bvepred(b: &mut Bencher) {
         let mut v = make_sample_image();
@@ -2733,7 +2719,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "benchmarks")]
     #[bench]
     fn bench_predict_bldpred(b: &mut Bencher) {
         let mut v = black_box(make_sample_image());
@@ -2743,7 +2728,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "benchmarks")]
     #[bench]
     fn bench_predict_brdpred(b: &mut Bencher) {
         let mut v = black_box(make_sample_image());
@@ -2753,7 +2737,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "benchmarks")]
     #[bench]
     fn bench_predict_bhepred(b: &mut Bencher) {
         let mut v = black_box(make_sample_image());
@@ -2763,7 +2746,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "benchmarks")]
     #[bench]
     fn bench_top_pixels(b: &mut Bencher) {
         let v = black_box(make_sample_image());
@@ -2773,7 +2755,6 @@ mod test {
         });
     }
 
-    #[cfg(feature = "benchmarks")]
     #[bench]
     fn bench_edge_pixels(b: &mut Bencher) {
         let v = black_box(make_sample_image());
@@ -2782,6 +2763,11 @@ mod test {
             black_box(edge_pixels(black_box(&v), 5, 5, W * 2));
         });
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 
     #[test]
     fn test_avg2() {
