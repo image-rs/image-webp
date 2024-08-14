@@ -357,43 +357,43 @@ mod benches {
     }
 
     #[bench]
-    fn predictor0(b: &mut test::Bencher) {
+    fn predictor00(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_0);
     }
     #[bench]
-    fn predictor1(b: &mut test::Bencher) {
+    fn predictor01(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_1);
     }
     #[bench]
-    fn predictor2(b: &mut test::Bencher) {
+    fn predictor02(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_2);
     }
     #[bench]
-    fn predictor3(b: &mut test::Bencher) {
+    fn predictor03(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_3);
     }
     #[bench]
-    fn predictor4(b: &mut test::Bencher) {
+    fn predictor04(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_4);
     }
     #[bench]
-    fn predictor5(b: &mut test::Bencher) {
+    fn predictor05(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_5);
     }
     #[bench]
-    fn predictor6(b: &mut test::Bencher) {
+    fn predictor06(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_6);
     }
     #[bench]
-    fn predictor7(b: &mut test::Bencher) {
+    fn predictor07(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_7);
     }
     #[bench]
-    fn predictor8(b: &mut test::Bencher) {
+    fn predictor08(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_8);
     }
     #[bench]
-    fn predictor9(b: &mut test::Bencher) {
+    fn predictor09(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_9);
     }
     #[bench]
