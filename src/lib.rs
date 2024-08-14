@@ -4,7 +4,6 @@
 #![deny(missing_docs)]
 // Increase recursion limit for the `quick_error!` macro.
 #![recursion_limit = "256"]
-
 // Enable nightly benchmark functionality if "_benchmarks" feature is enabled.
 #![cfg_attr(all(test, feature = "_benchmarks"), feature(test))]
 #[cfg(all(test, feature = "_benchmarks"))]
@@ -18,9 +17,8 @@ mod encoder;
 mod extended;
 mod huffman;
 mod loop_filter;
-mod lossless_transform;
 mod lossless;
+mod lossless_transform;
 mod transform;
 
 pub mod vp8;
-
