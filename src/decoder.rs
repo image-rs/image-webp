@@ -2,7 +2,7 @@ use byteorder_lite::{LittleEndian, ReadBytesExt};
 use quick_error::quick_error;
 
 use std::collections::HashMap;
-use std::io::{self, BufReader, Cursor, Read, Seek};
+use std::io::{self, BufRead, Cursor, Read, Seek};
 use std::num::NonZeroU16;
 use std::ops::Range;
 
@@ -276,7 +276,7 @@ pub struct WebPDecoder<R> {
     chunks: HashMap<WebPRiffChunk, Range<u64>>,
 }
 
-impl<R: Read + Seek> WebPDecoder<R> {
+impl<R: BufRead + Seek> WebPDecoder<R> {
     /// Create a new WebPDecoder from the reader `r`. The decoder performs many small reads, so the
     /// reader should be buffered.
     pub fn new(r: R) -> Result<WebPDecoder<R>, DecodingError> {
@@ -370,15 +370,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
                 let max_position = position + riff_size.saturating_sub(12);
                 self.r.seek(io::SeekFrom::Start(position))?;
 
-                // Resist denial of service attacks by using a BufReader. In most images there
-                // should be a very small number of chunks. However, nothing prevents a malicious
-                // image from having an extremely large number of "unknown" chunks. Issuing
-                // millions of reads and seeks against the underlying reader might be very
-                // expensive.
-                let mut reader = BufReader::with_capacity(64 << 10, &mut self.r);
-
                 while position < max_position {
-                    match read_chunk_header(&mut reader) {
+                    match read_chunk_header(&mut self.r) {
                         Ok((chunk, chunk_size, chunk_size_rounded)) => {
                             let range = position + 8..position + 8 + chunk_size;
                             position += 8 + chunk_size_rounded;
@@ -393,8 +386,8 @@ impl<R: Read + Seek> WebPDecoder<R> {
                                     return Err(DecodingError::InvalidChunkSize);
                                 }
 
-                                reader.seek_relative(12)?;
-                                let duration = reader.read_u32::<LittleEndian>()? & 0xffffff;
+                                self.r.seek_relative(12)?;
+                                let duration = self.r.read_u32::<LittleEndian>()? & 0xffffff;
                                 self.loop_duration =
                                     self.loop_duration.wrapping_add(u64::from(duration));
 
@@ -404,19 +397,19 @@ impl<R: Read + Seek> WebPDecoder<R> {
                                 // and the spec says that lossless images SHOULD NOT contain ALPH
                                 // chunks, so we treat both as indicators of lossy images.
                                 if !self.is_lossy {
-                                    let (subchunk, ..) = read_chunk_header(&mut reader)?;
+                                    let (subchunk, ..) = read_chunk_header(&mut self.r)?;
                                     if let WebPRiffChunk::VP8 | WebPRiffChunk::ALPH = subchunk {
                                         self.is_lossy = true;
                                     }
-                                    reader.seek_relative(chunk_size_rounded as i64 - 24)?;
+                                    self.r.seek_relative(chunk_size_rounded as i64 - 24)?;
                                 } else {
-                                    reader.seek_relative(chunk_size_rounded as i64 - 16)?;
+                                    self.r.seek_relative(chunk_size_rounded as i64 - 16)?;
                                 }
 
                                 continue;
                             }
 
-                            reader.seek_relative(chunk_size_rounded as i64)?;
+                            self.r.seek_relative(chunk_size_rounded as i64)?;
                         }
                         Err(DecodingError::IoError(e))
                             if e.kind() == io::ErrorKind::UnexpectedEof =>
@@ -849,21 +842,21 @@ impl<R: Read + Seek> WebPDecoder<R> {
     }
 }
 
-pub(crate) fn range_reader<R: Read + Seek>(
+pub(crate) fn range_reader<R: BufRead + Seek>(
     mut r: R,
     range: Range<u64>,
-) -> Result<impl Read, DecodingError> {
+) -> Result<impl BufRead, DecodingError> {
     r.seek(io::SeekFrom::Start(range.start))?;
     Ok(r.take(range.end - range.start))
 }
 
-pub(crate) fn read_fourcc<R: Read>(mut r: R) -> Result<WebPRiffChunk, DecodingError> {
+pub(crate) fn read_fourcc<R: BufRead>(mut r: R) -> Result<WebPRiffChunk, DecodingError> {
     let mut chunk_fourcc = [0; 4];
     r.read_exact(&mut chunk_fourcc)?;
     Ok(WebPRiffChunk::from_fourcc(chunk_fourcc))
 }
 
-pub(crate) fn read_chunk_header<R: Read>(
+pub(crate) fn read_chunk_header<R: BufRead>(
     mut r: R,
 ) -> Result<(WebPRiffChunk, u64, u64), DecodingError> {
     let chunk = read_fourcc(&mut r)?;
