@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::decoder::DecodingError;
 
 use super::lossless::subsample_size;
@@ -53,146 +55,156 @@ pub(crate) fn apply_predictor_transform(
             let end_index = (y * width + ((block_x + 1) << size_bits).min(width)) * 4;
 
             match predictor {
-                0 => {
-                    for i in ((start_index + 3)..end_index).step_by(4) {
-                        image_data[i] = image_data[i].wrapping_add(0xff);
-                    }
-                }
-                1 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(image_data[i - 4]);
-                    }
-                }
-                2 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4]);
-                    }
-                }
-                3 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4 + 4]);
-                    }
-                }
-                4 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4 - 4]);
-                    }
-                }
-                5 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(average2(
-                            average2(image_data[i - 4], image_data[i - width * 4 + 4]),
-                            image_data[i - width * 4],
-                        ));
-                    }
-                }
-                6 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(average2(
-                            image_data[i - 4],
-                            image_data[i - width * 4 - 4],
-                        ));
-                    }
-                }
-                7 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i]
-                            .wrapping_add(average2(image_data[i - 4], image_data[i - width * 4]));
-                    }
-                }
-                8 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(average2(
-                            image_data[i - width * 4 - 4],
-                            image_data[i - width * 4],
-                        ));
-                    }
-                }
-                9 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(average2(
-                            image_data[i - width * 4],
-                            image_data[i - width * 4 + 4],
-                        ));
-                    }
-                }
-                10 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(average2(
-                            average2(image_data[i - 4], image_data[i - width * 4 - 4]),
-                            average2(image_data[i - width * 4], image_data[i - width * 4 + 4]),
-                        ));
-                    }
-                }
-                11 => {
-                    for i in (start_index..end_index).step_by(4) {
-                        let lred = image_data[i - 4];
-                        let lgreen = image_data[i - 3];
-                        let lblue = image_data[i - 2];
-                        let lalpha = image_data[i - 1];
-
-                        let tred = image_data[i - width * 4];
-                        let tgreen = image_data[i - width * 4 + 1];
-                        let tblue = image_data[i - width * 4 + 2];
-                        let talpha = image_data[i - width * 4 + 3];
-
-                        let tlred = image_data[i - width * 4 - 4];
-                        let tlgreen = image_data[i - width * 4 - 3];
-                        let tlblue = image_data[i - width * 4 - 2];
-                        let tlalpha = image_data[i - width * 4 - 1];
-
-                        let predict_red = i16::from(lred) + i16::from(tred) - i16::from(tlred);
-                        let predict_green =
-                            i16::from(lgreen) + i16::from(tgreen) - i16::from(tlgreen);
-                        let predict_blue = i16::from(lblue) + i16::from(tblue) - i16::from(tlblue);
-                        let predict_alpha =
-                            i16::from(lalpha) + i16::from(talpha) - i16::from(tlalpha);
-
-                        let predict_left = i16::abs(predict_red - i16::from(lred))
-                            + i16::abs(predict_green - i16::from(lgreen))
-                            + i16::abs(predict_blue - i16::from(lblue))
-                            + i16::abs(predict_alpha - i16::from(lalpha));
-                        let predict_top = i16::abs(predict_red - i16::from(tred))
-                            + i16::abs(predict_green - i16::from(tgreen))
-                            + i16::abs(predict_blue - i16::from(tblue))
-                            + i16::abs(predict_alpha - i16::from(talpha));
-
-                        if predict_left < predict_top {
-                            image_data[i] = image_data[i].wrapping_add(lred);
-                            image_data[i + 1] = image_data[i + 1].wrapping_add(lgreen);
-                            image_data[i + 2] = image_data[i + 2].wrapping_add(lblue);
-                            image_data[i + 3] = image_data[i + 3].wrapping_add(lalpha);
-                        } else {
-                            image_data[i] = image_data[i].wrapping_add(tred);
-                            image_data[i + 1] = image_data[i + 1].wrapping_add(tgreen);
-                            image_data[i + 2] = image_data[i + 2].wrapping_add(tblue);
-                            image_data[i + 3] = image_data[i + 3].wrapping_add(talpha);
-                        }
-                    }
-                }
-                12 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(clamp_add_subtract_full(
-                            i16::from(image_data[i - 4]),
-                            i16::from(image_data[i - width * 4]),
-                            i16::from(image_data[i - width * 4 - 4]),
-                        ));
-                    }
-                }
-                13 => {
-                    for i in start_index..end_index {
-                        image_data[i] = image_data[i].wrapping_add(clamp_add_subtract_half(
-                            i16::from(average2(image_data[i - 4], image_data[i - width * 4])),
-                            i16::from(image_data[i - width * 4 - 4]),
-                        ));
-                    }
-                }
+                0 => apply_predictor_transform_0(image_data, start_index..end_index, width),
+                1 => apply_predictor_transform_1(image_data, start_index..end_index, width),
+                2 => apply_predictor_transform_2(image_data, start_index..end_index, width),
+                3 => apply_predictor_transform_3(image_data, start_index..end_index, width),
+                4 => apply_predictor_transform_4(image_data, start_index..end_index, width),
+                5 => apply_predictor_transform_5(image_data, start_index..end_index, width),
+                6 => apply_predictor_transform_6(image_data, start_index..end_index, width),
+                7 => apply_predictor_transform_7(image_data, start_index..end_index, width),
+                8 => apply_predictor_transform_8(image_data, start_index..end_index, width),
+                9 => apply_predictor_transform_9(image_data, start_index..end_index, width),
+                10 => apply_predictor_transform_10(image_data, start_index..end_index, width),
+                11 => apply_predictor_transform_11(image_data, start_index..end_index, width),
+                12 => apply_predictor_transform_12(image_data, start_index..end_index, width),
+                13 => apply_predictor_transform_13(image_data, start_index..end_index, width),
                 _ => {}
             }
         }
     }
 
     Ok(())
+}
+pub fn apply_predictor_transform_0(image_data: &mut [u8], range: Range<usize>, _width: usize) {
+    for i in ((range.start + 3)..range.end).step_by(4) {
+        image_data[i] = image_data[i].wrapping_add(0xff);
+    }
+}
+pub fn apply_predictor_transform_1(image_data: &mut [u8], range: Range<usize>, _width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(image_data[i - 4]);
+    }
+}
+pub fn apply_predictor_transform_2(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4]);
+    }
+}
+pub fn apply_predictor_transform_3(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4 + 4]);
+    }
+}
+pub fn apply_predictor_transform_4(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4 - 4]);
+    }
+}
+pub fn apply_predictor_transform_5(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(average2(
+            average2(image_data[i - 4], image_data[i - width * 4 + 4]),
+            image_data[i - width * 4],
+        ));
+    }
+}
+pub fn apply_predictor_transform_6(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] =
+            image_data[i].wrapping_add(average2(image_data[i - 4], image_data[i - width * 4 - 4]));
+    }
+}
+pub fn apply_predictor_transform_7(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] =
+            image_data[i].wrapping_add(average2(image_data[i - 4], image_data[i - width * 4]));
+    }
+}
+pub fn apply_predictor_transform_8(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(average2(
+            image_data[i - width * 4 - 4],
+            image_data[i - width * 4],
+        ));
+    }
+}
+pub fn apply_predictor_transform_9(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(average2(
+            image_data[i - width * 4],
+            image_data[i - width * 4 + 4],
+        ));
+    }
+}
+pub fn apply_predictor_transform_10(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(average2(
+            average2(image_data[i - 4], image_data[i - width * 4 - 4]),
+            average2(image_data[i - width * 4], image_data[i - width * 4 + 4]),
+        ));
+    }
+}
+pub fn apply_predictor_transform_11(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range.step_by(4) {
+        let lred = image_data[i - 4];
+        let lgreen = image_data[i - 3];
+        let lblue = image_data[i - 2];
+        let lalpha = image_data[i - 1];
+
+        let tred = image_data[i - width * 4];
+        let tgreen = image_data[i - width * 4 + 1];
+        let tblue = image_data[i - width * 4 + 2];
+        let talpha = image_data[i - width * 4 + 3];
+
+        let tlred = image_data[i - width * 4 - 4];
+        let tlgreen = image_data[i - width * 4 - 3];
+        let tlblue = image_data[i - width * 4 - 2];
+        let tlalpha = image_data[i - width * 4 - 1];
+
+        let predict_red = i16::from(lred) + i16::from(tred) - i16::from(tlred);
+        let predict_green = i16::from(lgreen) + i16::from(tgreen) - i16::from(tlgreen);
+        let predict_blue = i16::from(lblue) + i16::from(tblue) - i16::from(tlblue);
+        let predict_alpha = i16::from(lalpha) + i16::from(talpha) - i16::from(tlalpha);
+
+        let predict_left = i16::abs(predict_red - i16::from(lred))
+            + i16::abs(predict_green - i16::from(lgreen))
+            + i16::abs(predict_blue - i16::from(lblue))
+            + i16::abs(predict_alpha - i16::from(lalpha));
+        let predict_top = i16::abs(predict_red - i16::from(tred))
+            + i16::abs(predict_green - i16::from(tgreen))
+            + i16::abs(predict_blue - i16::from(tblue))
+            + i16::abs(predict_alpha - i16::from(talpha));
+
+        if predict_left < predict_top {
+            image_data[i] = image_data[i].wrapping_add(lred);
+            image_data[i + 1] = image_data[i + 1].wrapping_add(lgreen);
+            image_data[i + 2] = image_data[i + 2].wrapping_add(lblue);
+            image_data[i + 3] = image_data[i + 3].wrapping_add(lalpha);
+        } else {
+            image_data[i] = image_data[i].wrapping_add(tred);
+            image_data[i + 1] = image_data[i + 1].wrapping_add(tgreen);
+            image_data[i + 2] = image_data[i + 2].wrapping_add(tblue);
+            image_data[i + 3] = image_data[i + 3].wrapping_add(talpha);
+        }
+    }
+}
+pub fn apply_predictor_transform_12(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(clamp_add_subtract_full(
+            i16::from(image_data[i - 4]),
+            i16::from(image_data[i - width * 4]),
+            i16::from(image_data[i - width * 4 - 4]),
+        ));
+    }
+}
+pub fn apply_predictor_transform_13(image_data: &mut [u8], range: Range<usize>, width: usize) {
+    for i in range {
+        image_data[i] = image_data[i].wrapping_add(clamp_add_subtract_half(
+            i16::from(average2(image_data[i - 4], image_data[i - width * 4])),
+            i16::from(image_data[i - width * 4 - 4]),
+        ));
+    }
 }
 
 pub(crate) fn apply_color_transform(
@@ -329,4 +341,75 @@ fn clamp_add_subtract_half(a: i16, b: i16) -> u8 {
 /// Does color transform on 2 numbers
 fn color_transform_delta(t: i8, c: i8) -> u32 {
     ((i16::from(t) * i16::from(c)) as u32) >> 5
+}
+
+#[cfg(all(test, feature = "_benchmarks"))]
+mod benches {
+    fn measure_predictor(
+        b: &mut test::Bencher,
+        predictor: fn(&mut [u8], std::ops::Range<usize>, usize),
+    ) {
+        let width = 256;
+        let mut data = vec![0u8; width * 8];
+        test::black_box(&mut data);
+        b.bytes = 4 * width as u64 - 4;
+        b.iter(|| predictor(&mut data, width * 4 + 4..width * 8, width));
+    }
+
+    #[bench]
+    fn predictor0(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_0);
+    }
+    #[bench]
+    fn predictor1(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_1);
+    }
+    #[bench]
+    fn predictor2(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_2);
+    }
+    #[bench]
+    fn predictor3(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_3);
+    }
+    #[bench]
+    fn predictor4(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_4);
+    }
+    #[bench]
+    fn predictor5(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_5);
+    }
+    #[bench]
+    fn predictor6(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_6);
+    }
+    #[bench]
+    fn predictor7(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_7);
+    }
+    #[bench]
+    fn predictor8(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_8);
+    }
+    #[bench]
+    fn predictor9(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_9);
+    }
+    #[bench]
+    fn predictor10(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_10);
+    }
+    #[bench]
+    fn predictor11(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_11);
+    }
+    #[bench]
+    fn predictor12(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_12);
+    }
+    #[bench]
+    fn predictor13(b: &mut test::Bencher) {
+        measure_predictor(b, super::apply_predictor_transform_13);
+    }
 }
