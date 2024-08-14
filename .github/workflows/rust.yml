@@ -43,7 +43,7 @@ jobs:
     # note: you can also use this approach to test for big endian locally.
     runs-on: ubuntu-latest
 
-    # we are using the cross project for cross compilation to mips:
+    # we are using the cross project for cross compilation:
     # https://github.com/cross-rs/cross
     steps:
       - uses: actions/checkout@v4
@@ -61,19 +61,8 @@ jobs:
       - name: Start Docker (required for cross-rs)
         run: sudo systemctl start docker
 
-      - name: Cross-Compile project to powerpc-unknown-linux-gnu
-        run: |
-          cross build --target=powerpc-unknown-linux-gnu --verbose -v --no-default-features --features "$FEATURES"
-        env:
-          FEATURES: ${{ matrix.features }}
-
-      # https://github.com/cross-rs/cross#supported-targets
       - name: Cross-Run Tests in powerpc-unknown-linux-gnu using Qemu
-        continue-on-error: true
-        run: |
-          cross test --target powerpc-unknown-linux-gnu --verbose -v --no-default-features --features "$FEATURES"
-        env:
-          FEATURES: ${{ matrix.features }}
+        run: cross test --target powerpc-unknown-linux-gnu --verbose -v
 
   clippy:
     runs-on: ubuntu-latest
