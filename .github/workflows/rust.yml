@@ -39,7 +39,7 @@ jobs:
 
   test_big_endian:
     # github actions does not support big endian systems directly, but it does support QEMU.
-    # so we install qemu, then build and run the tests in an emulated mips system.
+    # so we install qemu, then build and run the tests in an emulated powerpc system.
     # note: you can also use this approach to test for big endian locally.
     runs-on: ubuntu-latest
 
