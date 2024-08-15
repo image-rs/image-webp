@@ -478,84 +478,81 @@ fn color_transform_delta(t: i8, c: i8) -> u32 {
 #[cfg(all(test, feature = "_benchmarks"))]
 mod benches {
     use rand::Rng;
-    use test::black_box;
+    use test::{black_box, Bencher};
 
-    fn measure_predictor(
-        b: &mut test::Bencher,
-        predictor: fn(&mut [u8], std::ops::Range<usize>, usize),
-    ) {
+    fn measure_predictor(b: &mut Bencher, predictor: fn(&mut [u8], std::ops::Range<usize>, usize)) {
         let width = 256;
         let mut data = vec![0u8; width * 8];
         rand::thread_rng().fill(&mut data[..]);
         b.bytes = 4 * width as u64 - 4;
         b.iter(|| {
             predictor(
-                test::black_box(&mut data),
-                test::black_box(width * 4 + 4..width * 8),
-                test::black_box(width),
+                black_box(&mut data),
+                black_box(width * 4 + 4..width * 8),
+                black_box(width),
             )
         });
     }
 
     #[bench]
-    fn predictor00(b: &mut test::Bencher) {
+    fn predictor00(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_0);
     }
     #[bench]
-    fn predictor01(b: &mut test::Bencher) {
+    fn predictor01(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_1);
     }
     #[bench]
-    fn predictor02(b: &mut test::Bencher) {
+    fn predictor02(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_2);
     }
     #[bench]
-    fn predictor03(b: &mut test::Bencher) {
+    fn predictor03(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_3);
     }
     #[bench]
-    fn predictor04(b: &mut test::Bencher) {
+    fn predictor04(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_4);
     }
     #[bench]
-    fn predictor05(b: &mut test::Bencher) {
+    fn predictor05(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_5);
     }
     #[bench]
-    fn predictor06(b: &mut test::Bencher) {
+    fn predictor06(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_6);
     }
     #[bench]
-    fn predictor07(b: &mut test::Bencher) {
+    fn predictor07(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_7);
     }
     #[bench]
-    fn predictor08(b: &mut test::Bencher) {
+    fn predictor08(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_8);
     }
     #[bench]
-    fn predictor09(b: &mut test::Bencher) {
+    fn predictor09(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_9);
     }
     #[bench]
-    fn predictor10(b: &mut test::Bencher) {
+    fn predictor10(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_10);
     }
     #[bench]
-    fn predictor11(b: &mut test::Bencher) {
+    fn predictor11(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_11);
     }
     #[bench]
-    fn predictor12(b: &mut test::Bencher) {
+    fn predictor12(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_12);
     }
     #[bench]
-    fn predictor13(b: &mut test::Bencher) {
+    fn predictor13(b: &mut Bencher) {
         measure_predictor(b, super::apply_predictor_transform_13);
     }
 
     #[bench]
-    fn color_transform(b: &mut test::Bencher) {
+    fn color_transform(b: &mut Bencher) {
         let width = 256;
         let height = 256;
         let size_bits = 3;
@@ -575,7 +572,7 @@ mod benches {
     }
 
     #[bench]
-    fn subtract_green(b: &mut test::Bencher) {
+    fn subtract_green(b: &mut Bencher) {
         let mut data = vec![0u8; 1024 * 4];
         rand::thread_rng().fill(&mut data[..]);
         b.bytes = data.len() as u64;
