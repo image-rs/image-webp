@@ -413,20 +413,29 @@ fn clamp_add_subtract_half(a: i16, b: i16) -> u8 {
 
 /// Does color transform on 2 numbers
 fn color_transform_delta(t: i8, c: i8) -> u32 {
-    ((i16::from(t) * i16::from(c)) as u32) >> 5
+    (i16::from(t) * i16::from(c)) as u32 >> 5
 }
 
 #[cfg(all(test, feature = "_benchmarks"))]
 mod benches {
+    use rand::Rng;
+    use test::black_box;
+
     fn measure_predictor(
         b: &mut test::Bencher,
         predictor: fn(&mut [u8], std::ops::Range<usize>, usize),
     ) {
         let width = 256;
         let mut data = vec![0u8; width * 8];
-        test::black_box(&mut data);
+        rand::thread_rng().fill(&mut data[..]);
         b.bytes = 4 * width as u64 - 4;
-        b.iter(|| predictor(&mut data, width * 4 + 4..width * 8, width));
+        b.iter(|| {
+            predictor(
+                test::black_box(&mut data),
+                test::black_box(width * 4 + 4..width * 8),
+                test::black_box(width),
+            )
+        });
     }
 
     #[bench]
@@ -484,5 +493,25 @@ mod benches {
     #[bench]
     fn predictor13(b: &mut test::Bencher) {
         measure_predictor(b, super::apply_predictor_transform_13);
+    }
+
+    #[bench]
+    fn color_transform(b: &mut test::Bencher) {
+        let width = 256;
+        let height = 256;
+        let size_bits = 3;
+        let mut data = vec![0u8; width * height * 4];
+        let mut transform_data = vec![0u8; width * height * 4 >> (size_bits * 2)];
+        rand::thread_rng().fill(&mut data[..]);
+        rand::thread_rng().fill(&mut transform_data[..]);
+        b.bytes = 4 * width as u64 * height as u64;
+        b.iter(|| {
+            super::apply_color_transform(
+                black_box(&mut data),
+                black_box(width as u16),
+                black_box(size_bits),
+                black_box(&transform_data),
+            );
+        });
     }
 }
