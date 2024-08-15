@@ -1,7 +1,7 @@
 use super::lossless::LosslessDecoder;
 use crate::decoder::DecodingError;
 use byteorder_lite::ReadBytesExt;
-use std::io::Read;
+use std::io::{BufRead, Read};
 
 #[derive(Debug, Clone)]
 pub(crate) struct WebPExtendedInfo {
@@ -264,7 +264,7 @@ pub(crate) enum FilteringMethod {
     Gradient,
 }
 
-pub(crate) fn read_alpha_chunk<R: Read>(
+pub(crate) fn read_alpha_chunk<R: BufRead>(
     reader: &mut R,
     width: u16,
     height: u16,

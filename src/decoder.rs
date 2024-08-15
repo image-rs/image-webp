@@ -2,7 +2,7 @@ use byteorder_lite::{LittleEndian, ReadBytesExt};
 use quick_error::quick_error;
 
 use std::collections::HashMap;
-use std::io::{self, BufReader, Cursor, Read, Seek};
+use std::io::{self, BufRead, BufReader, Cursor, Read, Seek};
 use std::num::NonZeroU16;
 use std::ops::Range;
 
@@ -276,7 +276,7 @@ pub struct WebPDecoder<R> {
     chunks: HashMap<WebPRiffChunk, Range<u64>>,
 }
 
-impl<R: Read + Seek> WebPDecoder<R> {
+impl<R: BufRead + Seek> WebPDecoder<R> {
     /// Create a new WebPDecoder from the reader `r`. The decoder performs many small reads, so the
     /// reader should be buffered.
     pub fn new(r: R) -> Result<WebPDecoder<R>, DecodingError> {
@@ -849,10 +849,10 @@ impl<R: Read + Seek> WebPDecoder<R> {
     }
 }
 
-pub(crate) fn range_reader<R: Read + Seek>(
+pub(crate) fn range_reader<R: BufRead + Seek>(
     mut r: R,
     range: Range<u64>,
-) -> Result<impl Read, DecodingError> {
+) -> Result<impl BufRead, DecodingError> {
     r.seek(io::SeekFrom::Start(range.start))?;
     Ok(r.take(range.end - range.start))
 }

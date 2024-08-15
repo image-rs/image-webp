@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::BufRead;
 
 use crate::decoder::DecodingError;
 
@@ -184,7 +184,7 @@ impl HuffmanTree {
     }
 
     #[inline(never)]
-    fn read_symbol_slowpath<R: Read>(
+    fn read_symbol_slowpath<R: BufRead>(
         tree: &[HuffmanTreeNode],
         mut v: usize,
         bit_reader: &mut BitReader<R>,
@@ -211,7 +211,7 @@ impl HuffmanTree {
     ///
     /// You must call call `bit_reader.fill()` before calling this function or it may erroroneosly
     /// detect the end of the stream and return a bitstream error.
-    pub(crate) fn read_symbol<R: Read>(
+    pub(crate) fn read_symbol<R: BufRead>(
         &self,
         bit_reader: &mut BitReader<R>,
     ) -> Result<u16, DecodingError> {
