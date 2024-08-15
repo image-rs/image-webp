@@ -557,7 +557,7 @@ mod benches {
         let height = 256;
         let size_bits = 3;
         let mut data = vec![0u8; width * height * 4];
-        let mut transform_data = vec![0u8; width * height * 4 >> (size_bits * 2)];
+        let mut transform_data = vec![0u8; (width * height * 4) >> (size_bits * 2)];
         rand::thread_rng().fill(&mut data[..]);
         rand::thread_rng().fill(&mut transform_data[..]);
         b.bytes = 4 * width as u64 * height as u64;
