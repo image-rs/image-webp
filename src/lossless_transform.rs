@@ -32,14 +32,10 @@ pub(crate) fn apply_predictor_transform(
     let width = usize::from(width);
     let height = usize::from(height);
 
-    //handle top and left borders specially
-    //this involves ignoring mode and just setting prediction values like this
+    // Handle top and left borders specially. This involves ignoring mode and using specific
+    // predictors for each.
     image_data[3] = image_data[3].wrapping_add(255);
-
-    for x in 4..width * 4 {
-        image_data[x] = image_data[x].wrapping_add(image_data[x - 4]);
-    }
-
+    apply_predictor_transform_1(image_data, 4..width * 4, width);
     for y in 1..height {
         for i in 0..4 {
             image_data[y * width * 4 + i] =
@@ -169,72 +165,114 @@ pub fn apply_predictor_transform_9(image_data: &mut [u8], range: Range<usize>, w
     }
 }
 pub fn apply_predictor_transform_10(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range {
-        image_data[i] = image_data[i].wrapping_add(average2(
-            average2(image_data[i - 4], image_data[i - width * 4 - 4]),
-            average2(image_data[i - width * 4], image_data[i - width * 4 + 4]),
-        ));
+    let (old, current) = image_data[..range.end].split_at_mut(range.start);
+    let mut prev: [u8; 4] = old[range.start - 4..][..4].try_into().unwrap();
+
+    let top_left = &old[range.start - width * 4 - 4..];
+    let top = &old[range.start - width * 4..];
+    let top_right = &old[range.start - width * 4 + 4..];
+
+    for (((chunk, tl), t), tr) in current
+        .chunks_exact_mut(4)
+        .zip(top_left.chunks_exact(4))
+        .zip(top.chunks_exact(4))
+        .zip(top_right.chunks_exact(4))
+    {
+        for i in 0..4 {
+            chunk[i] =
+                chunk[i].wrapping_add(average2(average2(prev[i], tl[i]), average2(t[i], tr[i])));
+        }
+        prev.copy_from_slice(chunk);
     }
 }
 pub fn apply_predictor_transform_11(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range.step_by(4) {
-        let lred = image_data[i - 4];
-        let lgreen = image_data[i - 3];
-        let lblue = image_data[i - 2];
-        let lalpha = image_data[i - 1];
+    let (old, current) = image_data[..range.end].split_at_mut(range.start);
+    let top = &old[range.start - width * 4..];
 
-        let tred = image_data[i - width * 4];
-        let tgreen = image_data[i - width * 4 + 1];
-        let tblue = image_data[i - width * 4 + 2];
-        let talpha = image_data[i - width * 4 + 3];
+    let mut l = [
+        old[range.start - 4] as i16,
+        old[range.start - 3] as i16,
+        old[range.start - 2] as i16,
+        old[range.start - 1] as i16,
+    ];
+    let mut tl = [
+        old[range.start - width * 4 - 4] as i16,
+        old[range.start - width * 4 - 3] as i16,
+        old[range.start - width * 4 - 2] as i16,
+        old[range.start - width * 4 - 1] as i16,
+    ];
 
-        let tlred = image_data[i - width * 4 - 4];
-        let tlgreen = image_data[i - width * 4 - 3];
-        let tlblue = image_data[i - width * 4 - 2];
-        let tlalpha = image_data[i - width * 4 - 1];
+    for (chunk, top) in current.chunks_exact_mut(4).zip(top.chunks_exact(4)) {
+        let t = [top[0] as i16, top[1] as i16, top[2] as i16, top[3] as i16];
 
-        let predict_red = i16::from(lred) + i16::from(tred) - i16::from(tlred);
-        let predict_green = i16::from(lgreen) + i16::from(tgreen) - i16::from(tlgreen);
-        let predict_blue = i16::from(lblue) + i16::from(tblue) - i16::from(tlblue);
-        let predict_alpha = i16::from(lalpha) + i16::from(talpha) - i16::from(tlalpha);
-
-        let predict_left = i16::abs(predict_red - i16::from(lred))
-            + i16::abs(predict_green - i16::from(lgreen))
-            + i16::abs(predict_blue - i16::from(lblue))
-            + i16::abs(predict_alpha - i16::from(lalpha));
-        let predict_top = i16::abs(predict_red - i16::from(tred))
-            + i16::abs(predict_green - i16::from(tgreen))
-            + i16::abs(predict_blue - i16::from(tblue))
-            + i16::abs(predict_alpha - i16::from(talpha));
+        let mut predict_left = 0;
+        let mut predict_top = 0;
+        for i in 0..4 {
+            let predict = l[i] + t[i] - tl[i];
+            predict_left += i16::abs(predict - l[i]);
+            predict_top += i16::abs(predict - t[i]);
+        }
 
         if predict_left < predict_top {
-            image_data[i] = image_data[i].wrapping_add(lred);
-            image_data[i + 1] = image_data[i + 1].wrapping_add(lgreen);
-            image_data[i + 2] = image_data[i + 2].wrapping_add(lblue);
-            image_data[i + 3] = image_data[i + 3].wrapping_add(lalpha);
+            for i in 0..4 {
+                chunk[i] = chunk[i].wrapping_add(l[i] as u8);
+            }
         } else {
-            image_data[i] = image_data[i].wrapping_add(tred);
-            image_data[i + 1] = image_data[i + 1].wrapping_add(tgreen);
-            image_data[i + 2] = image_data[i + 2].wrapping_add(tblue);
-            image_data[i + 3] = image_data[i + 3].wrapping_add(talpha);
+            for i in 0..4 {
+                chunk[i] = chunk[i].wrapping_add(t[i] as u8);
+            }
         }
+
+        tl = t;
+        l = [
+            chunk[0] as i16,
+            chunk[1] as i16,
+            chunk[2] as i16,
+            chunk[3] as i16,
+        ];
     }
 }
 pub fn apply_predictor_transform_12(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range {
-        image_data[i] = image_data[i].wrapping_add(clamp_add_subtract_full(
-            i16::from(image_data[i - 4]),
-            i16::from(image_data[i - width * 4]),
-            i16::from(image_data[i - width * 4 - 4]),
-        ));
+    let (old, current) = image_data[..range.end].split_at_mut(range.start);
+    let mut prev: [u8; 4] = old[range.start - 4..][..4].try_into().unwrap();
+
+    let top_left = &old[range.start - width * 4 - 4..];
+    let top = &old[range.start - width * 4..];
+
+    for ((chunk, tl), t) in current
+        .chunks_exact_mut(4)
+        .zip(top_left.chunks_exact(4))
+        .zip(top.chunks_exact(4))
+    {
+        for i in 0..4 {
+            chunk[i] = chunk[i].wrapping_add(clamp_add_subtract_full(
+                i16::from(prev[i]),
+                i16::from(t[i]),
+                i16::from(tl[i]),
+            ));
+        }
+        prev.copy_from_slice(chunk);
     }
 }
 pub fn apply_predictor_transform_13(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range {
-        image_data[i] = image_data[i].wrapping_add(clamp_add_subtract_half(
-            i16::from(average2(image_data[i - 4], image_data[i - width * 4])),
-            i16::from(image_data[i - width * 4 - 4]),
-        ));
+    let (old, current) = image_data[..range.end].split_at_mut(range.start);
+    let mut prev: [u8; 4] = old[range.start - 4..][..4].try_into().unwrap();
+
+    let top_left = &old[range.start - width * 4 - 4..];
+    let top = &old[range.start - width * 4..];
+
+    for ((chunk, tl), t) in current
+        .chunks_exact_mut(4)
+        .zip(top_left.chunks_exact(4))
+        .zip(top.chunks_exact(4))
+    {
+        for i in 0..4 {
+            chunk[i] = chunk[i].wrapping_add(clamp_add_subtract_half(
+                (i16::from(prev[i]) + i16::from(t[i])) / 2,
+                i16::from(tl[i]),
+            ));
+        }
+        prev.copy_from_slice(chunk);
     }
 }
 
@@ -361,12 +399,16 @@ fn average2(a: u8, b: u8) -> u8 {
 
 /// Clamp add subtract full on one part
 fn clamp_add_subtract_full(a: i16, b: i16, c: i16) -> u8 {
-    (a + b - c).clamp(0, 255) as u8
+    // Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
+    #![allow(clippy::manual_clamp)]
+    (a + b - c).max(0).min(255) as u8
 }
 
 /// Clamp add subtract half on one part
 fn clamp_add_subtract_half(a: i16, b: i16) -> u8 {
-    (a + (a - b) / 2).clamp(0, 255) as u8
+    // Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
+    #![allow(clippy::manual_clamp)]
+    (a + (a - b) / 2).max(0).min(255) as u8
 }
 
 /// Does color transform on 2 numbers
