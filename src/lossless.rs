@@ -711,7 +711,7 @@ impl<R: BufRead> BitReader<R> {
             self.buffer |= lookahead << self.nbits;
             self.nbits |= 56;
         } else {
-            while buf.len() > 0 && self.nbits < 56 {
+            while !buf.is_empty() && self.nbits < 56 {
                 self.buffer |= u64::from(buf[0]) << self.nbits;
                 self.nbits += 8;
                 self.reader.consume(1);
