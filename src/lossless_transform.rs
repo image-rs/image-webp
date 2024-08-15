@@ -80,10 +80,13 @@ pub fn apply_predictor_transform_0(image_data: &mut [u8], range: Range<usize>, _
 pub fn apply_predictor_transform_1(image_data: &mut [u8], range: Range<usize>, _width: usize) {
     let mut prev: [u8; 4] = image_data[range.start - 4..][..4].try_into().unwrap();
     for chunk in image_data[range].chunks_exact_mut(4) {
-        for i in 0..4 {
-            chunk[i] = chunk[i].wrapping_add(prev[i]);
-        }
-        prev.copy_from_slice(chunk);
+        prev = [
+            chunk[0].wrapping_add(prev[0]),
+            chunk[1].wrapping_add(prev[1]),
+            chunk[2].wrapping_add(prev[2]),
+            chunk[3].wrapping_add(prev[3]),
+        ];
+        chunk.copy_from_slice(&prev);
     }
 }
 pub fn apply_predictor_transform_2(image_data: &mut [u8], range: Range<usize>, width: usize) {
@@ -139,13 +142,34 @@ pub fn apply_predictor_transform_7(image_data: &mut [u8], range: Range<usize>, w
     let (old, current) = image_data[..range.end].split_at_mut(range.start);
 
     let mut prev: [u8; 4] = old[range.start - 4..][..4].try_into().unwrap();
-    let top = &old[range.start - width * 4..];
+    let top = &old[range.start - width * 4..][..(range.end - range.start)];
 
-    for (chunk, t) in current.chunks_exact_mut(4).zip(top.chunks_exact(4)) {
-        for i in 0..4 {
-            chunk[i] = chunk[i].wrapping_add(average2(prev[i], t[i]));
+    let mut current_chunks = current.chunks_exact_mut(64);
+    let mut top_chunks = top.chunks_exact(64);
+
+    for (current, top) in (&mut current_chunks).zip(&mut top_chunks) {
+        for (chunk, t) in current.chunks_exact_mut(4).zip(top.chunks_exact(4)) {
+            prev = [
+                chunk[0].wrapping_add(average2(prev[0], t[0])),
+                chunk[1].wrapping_add(average2(prev[1], t[1])),
+                chunk[2].wrapping_add(average2(prev[2], t[2])),
+                chunk[3].wrapping_add(average2(prev[3], t[3])),
+            ];
+            chunk.copy_from_slice(&prev);
         }
-        prev.copy_from_slice(chunk);
+    }
+    for (chunk, t) in current_chunks
+        .into_remainder()
+        .chunks_exact_mut(4)
+        .zip(top_chunks.remainder().chunks_exact(4))
+    {
+        prev = [
+            chunk[0].wrapping_add(average2(prev[0], t[0])),
+            chunk[1].wrapping_add(average2(prev[1], t[1])),
+            chunk[2].wrapping_add(average2(prev[2], t[2])),
+            chunk[3].wrapping_add(average2(prev[3], t[3])),
+        ];
+        chunk.copy_from_slice(&prev);
     }
 }
 pub fn apply_predictor_transform_8(image_data: &mut [u8], range: Range<usize>, width: usize) {
@@ -178,11 +202,13 @@ pub fn apply_predictor_transform_10(image_data: &mut [u8], range: Range<usize>, 
         .zip(top.chunks_exact(4))
         .zip(top_right.chunks_exact(4))
     {
-        for i in 0..4 {
-            chunk[i] =
-                chunk[i].wrapping_add(average2(average2(prev[i], tl[i]), average2(t[i], tr[i])));
-        }
-        prev.copy_from_slice(chunk);
+        prev = [
+            chunk[0].wrapping_add(average2(average2(prev[0], tl[0]), average2(t[0], tr[0]))),
+            chunk[1].wrapping_add(average2(average2(prev[1], tl[1]), average2(t[1], tr[1]))),
+            chunk[2].wrapping_add(average2(average2(prev[2], tl[2]), average2(t[2], tr[2]))),
+            chunk[3].wrapping_add(average2(average2(prev[3], tl[3]), average2(t[3], tr[3]))),
+        ];
+        chunk.copy_from_slice(&prev);
     }
 }
 pub fn apply_predictor_transform_11(image_data: &mut [u8], range: Range<usize>, width: usize) {
@@ -214,13 +240,19 @@ pub fn apply_predictor_transform_11(image_data: &mut [u8], range: Range<usize>, 
         }
 
         if predict_left < predict_top {
-            for i in 0..4 {
-                chunk[i] = chunk[i].wrapping_add(l[i] as u8);
-            }
+            chunk.copy_from_slice(&[
+                chunk[0].wrapping_add(l[0] as u8),
+                chunk[1].wrapping_add(l[1] as u8),
+                chunk[2].wrapping_add(l[2] as u8),
+                chunk[3].wrapping_add(l[3] as u8),
+            ]);
         } else {
-            for i in 0..4 {
-                chunk[i] = chunk[i].wrapping_add(t[i] as u8);
-            }
+            chunk.copy_from_slice(&[
+                chunk[0].wrapping_add(t[0] as u8),
+                chunk[1].wrapping_add(t[1] as u8),
+                chunk[2].wrapping_add(t[2] as u8),
+                chunk[3].wrapping_add(t[3] as u8),
+            ]);
         }
 
         tl = t;
@@ -244,35 +276,62 @@ pub fn apply_predictor_transform_12(image_data: &mut [u8], range: Range<usize>, 
         .zip(top_left.chunks_exact(4))
         .zip(top.chunks_exact(4))
     {
-        for i in 0..4 {
-            chunk[i] = chunk[i].wrapping_add(clamp_add_subtract_full(
-                i16::from(prev[i]),
-                i16::from(t[i]),
-                i16::from(tl[i]),
-            ));
-        }
-        prev.copy_from_slice(chunk);
+        prev = [
+            chunk[0].wrapping_add(clamp_add_subtract_full(
+                i16::from(prev[0]),
+                i16::from(t[0]),
+                i16::from(tl[0]),
+            )),
+            chunk[1].wrapping_add(clamp_add_subtract_full(
+                i16::from(prev[1]),
+                i16::from(t[1]),
+                i16::from(tl[1]),
+            )),
+            chunk[2].wrapping_add(clamp_add_subtract_full(
+                i16::from(prev[2]),
+                i16::from(t[2]),
+                i16::from(tl[2]),
+            )),
+            chunk[3].wrapping_add(clamp_add_subtract_full(
+                i16::from(prev[3]),
+                i16::from(t[3]),
+                i16::from(tl[3]),
+            )),
+        ];
+        chunk.copy_from_slice(&prev);
     }
 }
 pub fn apply_predictor_transform_13(image_data: &mut [u8], range: Range<usize>, width: usize) {
     let (old, current) = image_data[..range.end].split_at_mut(range.start);
     let mut prev: [u8; 4] = old[range.start - 4..][..4].try_into().unwrap();
 
-    let top_left = &old[range.start - width * 4 - 4..];
-    let top = &old[range.start - width * 4..];
+    let top_left = &old[range.start - width * 4 - 4..][..(range.end - range.start)];
+    let top = &old[range.start - width * 4..][..(range.end - range.start)];
 
     for ((chunk, tl), t) in current
         .chunks_exact_mut(4)
         .zip(top_left.chunks_exact(4))
         .zip(top.chunks_exact(4))
     {
-        for i in 0..4 {
-            chunk[i] = chunk[i].wrapping_add(clamp_add_subtract_half(
-                (i16::from(prev[i]) + i16::from(t[i])) / 2,
-                i16::from(tl[i]),
-            ));
-        }
-        prev.copy_from_slice(chunk);
+        prev = [
+            chunk[0].wrapping_add(clamp_add_subtract_half(
+                (i16::from(prev[0]) + i16::from(t[0])) / 2,
+                i16::from(tl[0]),
+            )),
+            chunk[1].wrapping_add(clamp_add_subtract_half(
+                (i16::from(prev[1]) + i16::from(t[1])) / 2,
+                i16::from(tl[1]),
+            )),
+            chunk[2].wrapping_add(clamp_add_subtract_half(
+                (i16::from(prev[2]) + i16::from(t[2])) / 2,
+                i16::from(tl[2]),
+            )),
+            chunk[3].wrapping_add(clamp_add_subtract_half(
+                (i16::from(prev[3]) + i16::from(t[3])) / 2,
+                i16::from(tl[3]),
+            )),
+        ];
+        chunk.copy_from_slice(&prev);
     }
 }
 
@@ -394,7 +453,7 @@ pub(crate) fn apply_color_indexing_transform(
 
 /// Get average of 2 bytes
 fn average2(a: u8, b: u8) -> u8 {
-    ((u16::from(a) + u16::from(b)) / 2).try_into().unwrap()
+    ((u16::from(a) + u16::from(b)) / 2) as u8
 }
 
 /// Clamp add subtract full on one part
@@ -413,7 +472,7 @@ fn clamp_add_subtract_half(a: i16, b: i16) -> u8 {
 
 /// Does color transform on 2 numbers
 fn color_transform_delta(t: i8, c: i8) -> u32 {
-    (i16::from(t) * i16::from(c)) as u32 >> 5
+    (i32::from(t) * i32::from(c)) as u32 >> 5
 }
 
 #[cfg(all(test, feature = "_benchmarks"))]
@@ -512,6 +571,16 @@ mod benches {
                 black_box(size_bits),
                 black_box(&transform_data),
             );
+        });
+    }
+
+    #[bench]
+    fn subtract_green(b: &mut test::Bencher) {
+        let mut data = vec![0u8; 1024 * 4];
+        rand::thread_rng().fill(&mut data[..]);
+        b.bytes = data.len() as u64;
+        b.iter(|| {
+            super::apply_subtract_green_transform(black_box(&mut data));
         });
     }
 }
