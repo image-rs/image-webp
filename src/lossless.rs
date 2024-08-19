@@ -562,9 +562,21 @@ impl<R: BufRead> LosslessDecoder<R> {
                         color_cache.insert(value);
                     }
                 } else {
-                    for i in 0..length * 4 {
-                        data[index * 4 + i] = data[index * 4 + i - dist * 4];
+                    if index + length + 3 <= num_values {
+                        let start = (index - dist) * 4;
+                        data.copy_within(start..start + 16, index * 4);
+
+                        if length > 4 || dist < 4 {
+                            for i in (0..length * 4).step_by((dist * 4).min(16)).skip(1) {
+                                data.copy_within(start + i..start + i + 16, index * 4 + i);
+                            }
+                        }
+                    } else {
+                        for i in 0..length * 4 {
+                            data[index * 4 + i] = data[index * 4 + i - dist * 4];
+                        }
                     }
+
                     if let Some(color_cache) = huffman_info.color_cache.as_mut() {
                         for pixel in data[index * 4..][..length * 4].chunks_exact(4) {
                             color_cache.insert(pixel.try_into().unwrap());
