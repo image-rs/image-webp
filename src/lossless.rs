@@ -558,9 +558,6 @@ impl<R: BufRead> LosslessDecoder<R> {
                     for i in 0..length {
                         data[index * 4 + i * 4..][..4].copy_from_slice(&value);
                     }
-                    if let Some(color_cache) = huffman_info.color_cache.as_mut() {
-                        color_cache.insert(value);
-                    }
                 } else {
                     for i in 0..length * 4 {
                         data[index * 4 + i] = data[index * 4 + i - dist * 4];
