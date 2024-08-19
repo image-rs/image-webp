@@ -509,7 +509,7 @@ impl<R: BufRead> LosslessDecoder<R> {
                         let value = [red as u8, code as u8, blue as u8, alpha as u8];
 
                         for i in 0..n {
-                            data[index * 4+ i * 4..][..4].copy_from_slice(&value);
+                            data[index * 4 + i * 4..][..4].copy_from_slice(&value);
                         }
 
                         index += n;
