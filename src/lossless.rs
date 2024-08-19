@@ -579,7 +579,7 @@ impl<R: BufRead> LosslessDecoder<R> {
                     .color_cache
                     .as_mut()
                     .ok_or(DecodingError::BitStreamError)?;
-                data[index * 4..][..4].copy_from_slice(&color_cache.lookup(key.into())?);
+                data[index * 4..][..4].copy_from_slice(&color_cache.lookup(key.into()));
                 index += 1;
             }
         }
@@ -665,6 +665,7 @@ struct ColorCache {
 }
 
 impl ColorCache {
+    #[inline(always)]
     fn insert(&mut self, color: [u8; 4]) {
         let [r, g, b, a] = color;
         let color_u32 =
@@ -673,11 +674,9 @@ impl ColorCache {
         self.color_cache[index as usize] = color;
     }
 
-    fn lookup(&self, index: usize) -> Result<[u8; 4], DecodingError> {
-        match self.color_cache.get(index) {
-            Some(&value) => Ok(value),
-            None => Err(DecodingError::BitStreamError),
-        }
+    #[inline(always)]
+    fn lookup(&self, index: usize) -> [u8; 4] {
+        self.color_cache[index]
     }
 }
 
