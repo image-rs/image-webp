@@ -9,6 +9,7 @@ use super::lossless::BitReader;
 ///
 
 const MAX_ALLOWED_CODE_LENGTH: usize = 15;
+const MAX_TABLE_BITS: u8 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HuffmanTreeNode {
@@ -97,7 +98,7 @@ impl HuffmanTree {
         }
 
         // Populate decoding table
-        let table_bits = max_code_length.min(10);
+        let table_bits = max_code_length.min(MAX_TABLE_BITS as u16);
         let table_size = (1 << table_bits) as usize;
         let table_mask = table_size as u16 - 1;
         let mut table = vec![0; table_size];
@@ -115,38 +116,48 @@ impl HuffmanTree {
         // If the longest code is larger than the table size, build a tree as a fallback.
         let mut tree = Vec::new();
         if max_code_length > table_bits {
-            tree = vec![HuffmanTreeNode::Empty; 2 * num_symbols - 1];
+            for (symbol, (&code, &length)) in huff_codes.iter().zip(code_lengths.iter()).enumerate()
+            {
+                if length > table_bits {
+                    let table_index =
+                        ((u16::reverse_bits(code) >> (16 - length)) & table_mask) as usize;
+                    let table_value = table[table_index];
 
-            let mut num_nodes = 1;
-            for (symbol, &length) in code_lengths.iter().enumerate() {
-                let code = huff_codes[symbol];
-                let code_length = length;
-                let symbol = symbol.try_into().unwrap();
+                    debug_assert_eq!(table_value >> 16, 0);
 
-                if length > 0 {
-                    let mut node_index = 0;
+                    let mut node_index = if table_value == 0 {
+                        let node_index = tree.len();
+                        table[table_index] = (node_index + 1) as u32;
+                        tree.push(HuffmanTreeNode::Empty);
+                        node_index
+                    } else {
+                        (table_value - 1) as usize
+                    };
+
                     let code = usize::from(code);
-
-                    for length in (0..code_length).rev() {
+                    for depth in (0..length - table_bits).rev() {
                         let node = tree[node_index];
 
                         let offset = match node {
                             HuffmanTreeNode::Empty => {
                                 // Turns a node from empty into a branch and assigns its children
-                                let offset_index = num_nodes - node_index;
-                                tree[node_index] = HuffmanTreeNode::Branch(offset_index);
-                                num_nodes += 2;
-                                offset_index
+                                let offset = tree.len() - node_index;
+                                tree[node_index] = HuffmanTreeNode::Branch(offset);
+                                tree.push(HuffmanTreeNode::Empty);
+                                tree.push(HuffmanTreeNode::Empty);
+                                offset
                             }
                             HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
                             HuffmanTreeNode::Branch(offset) => offset,
                         };
 
-                        node_index += offset + ((code >> length) & 1);
+                        node_index += offset + ((code >> depth) & 1);
                     }
 
                     match tree[node_index] {
-                        HuffmanTreeNode::Empty => tree[node_index] = HuffmanTreeNode::Leaf(symbol),
+                        HuffmanTreeNode::Empty => {
+                            tree[node_index] = HuffmanTreeNode::Leaf(symbol as u16)
+                        }
                         HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
                         HuffmanTreeNode::Branch(_offset) => {
                             return Err(DecodingError::HuffmanError)
@@ -187,10 +198,11 @@ impl HuffmanTree {
     fn read_symbol_slowpath<R: BufRead>(
         tree: &[HuffmanTreeNode],
         mut v: usize,
+        start_index: usize,
         bit_reader: &mut BitReader<R>,
     ) -> Result<u16, DecodingError> {
-        let mut depth = 0;
-        let mut index = 0;
+        let mut depth = MAX_TABLE_BITS;
+        let mut index = start_index;
         loop {
             match &tree[index] {
                 HuffmanTreeNode::Branch(children_offset) => {
@@ -223,12 +235,17 @@ impl HuffmanTree {
             } => {
                 let v = bit_reader.peek_full() as u16;
                 let entry = table[(v & table_mask) as usize];
-                if entry != 0 {
+                if entry >> 16 != 0 {
                     bit_reader.consume((entry >> 16) as u8)?;
                     return Ok(entry as u16);
                 }
 
-                Self::read_symbol_slowpath(tree, v as usize, bit_reader)
+                Self::read_symbol_slowpath(
+                    tree,
+                    (v >> MAX_TABLE_BITS) as usize,
+                    ((entry & 0xffff) - 1) as usize,
+                    bit_reader,
+                )
             }
             HuffmanTreeInner::Single(symbol) => Ok(*symbol),
         }
