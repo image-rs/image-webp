@@ -219,7 +219,7 @@ impl HuffmanTree {
         }
     }
 
-    /// Reads a symbol using the bitstream.
+    /// Reads a symbol using the bit reader.
     ///
     /// You must call call `bit_reader.fill()` before calling this function or it may erroroneosly
     /// detect the end of the stream and return a bitstream error.
@@ -248,6 +248,29 @@ impl HuffmanTree {
                 )
             }
             HuffmanTreeInner::Single(symbol) => Ok(*symbol),
+        }
+    }
+
+    /// Peek at the next symbol in the bitstream if it can be read with only a primary table lookup.
+    ///
+    /// Returns a tuple of the codelength and symbol value. This function may return wrong
+    /// information if there aren't enough bits in the bit reader to read the next symbol.
+    pub(crate) fn peek_symbol<R: BufRead>(
+        &self,
+        bit_reader: &mut BitReader<R>,
+    ) -> Option<(u8, u16)> {
+        match &self.0 {
+            HuffmanTreeInner::Tree {
+                table, table_mask, ..
+            } => {
+                let v = bit_reader.peek_full() as u16;
+                let entry = table[(v & table_mask) as usize];
+                if entry >> 16 != 0 {
+                    return Some(((entry >> 16) as u8, entry as u16));
+                }
+                None
+            }
+            HuffmanTreeInner::Single(symbol) => Some((0, *symbol)),
         }
     }
 }

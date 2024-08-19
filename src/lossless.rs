@@ -583,13 +583,24 @@ impl<R: BufRead> LosslessDecoder<R> {
                 index += length;
             } else {
                 //color cache, so use previously stored pixels to get this pixel
-                let key = code - 256 - 24;
                 let color_cache = huffman_info
                     .color_cache
                     .as_mut()
                     .ok_or(DecodingError::BitStreamError)?;
-                data[index * 4..][..4].copy_from_slice(&color_cache.lookup(key.into()));
+                let color = color_cache.lookup((code - 280).into());
+                data[index * 4..][..4].copy_from_slice(&color);
                 index += 1;
+
+                if index < next_block_start {
+                    if let Some((bits, code)) = tree[GREEN].peek_symbol(&mut self.bit_reader) {
+                        if code >= 280 {
+                            self.bit_reader.consume(bits)?;
+                            data[index * 4..][..4]
+                                .copy_from_slice(&color_cache.lookup((code - 280).into()));
+                            index += 1;
+                        }
+                    }
+                }
             }
         }
 
