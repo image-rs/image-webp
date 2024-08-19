@@ -41,128 +41,104 @@ impl Default for HuffmanTree {
 impl HuffmanTree {
     /// Builds a tree implicitly, just from code lengths
     pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<HuffmanTree, DecodingError> {
+        // Count symbols and build histogram
         let mut num_symbols = 0;
-        let mut root_symbol = 0;
-
-        for (symbol, length) in code_lengths.iter().enumerate() {
-            if *length > 0 {
-                num_symbols += 1;
-                root_symbol = symbol.try_into().unwrap();
-            }
+        let mut code_length_hist = [0; MAX_ALLOWED_CODE_LENGTH + 1];
+        for &length in code_lengths.iter().filter(|&&x| x != 0) {
+            code_length_hist[usize::from(length)] += 1;
+            num_symbols += 1;
         }
 
+        // Handle special cases
         if num_symbols == 0 {
             return Err(DecodingError::HuffmanError);
         } else if num_symbols == 1 {
+            let root_symbol = code_lengths.iter().position(|&x| x != 0).unwrap() as u16;
             return Ok(Self::build_single_node(root_symbol));
         };
-
-        let max_code_length = *code_lengths
-            .iter()
-            .reduce(|a, b| if a >= b { a } else { b })
-            .unwrap();
-        if max_code_length > MAX_ALLOWED_CODE_LENGTH.try_into().unwrap() {
-            return Err(DecodingError::HuffmanError);
-        }
-
-        // Build histogram
-        let mut code_length_hist = [0; MAX_ALLOWED_CODE_LENGTH + 1];
-        for &length in code_lengths.iter() {
-            code_length_hist[usize::from(length)] += 1;
-        }
-        code_length_hist[0] = 0;
-
-        // Ensure code lengths produce a valid huffman tree
-        let mut total = 0;
-        for (code_len, &count) in code_length_hist.iter().enumerate() {
-            total += (count as u32) << (MAX_ALLOWED_CODE_LENGTH - code_len);
-        }
-        if total != 1 << MAX_ALLOWED_CODE_LENGTH {
-            return Err(DecodingError::HuffmanError);
-        }
 
         // Assign codes
         let mut curr_code = 0;
         let mut next_codes = [0; MAX_ALLOWED_CODE_LENGTH + 1];
+        let max_code_length = code_length_hist.iter().rposition(|&x| x != 0).unwrap() as u16;
         for code_len in 1..=usize::from(max_code_length) {
-            curr_code = (curr_code + code_length_hist[code_len - 1]) << 1;
             next_codes[code_len] = curr_code;
-        }
-        let mut huff_codes = vec![0u16; code_lengths.len()];
-        for (symbol, &length) in code_lengths.iter().enumerate() {
-            let length = usize::from(length);
-            if length > 0 {
-                huff_codes[symbol] = next_codes[length];
-                next_codes[length] += 1;
-            }
+            curr_code = (curr_code + code_length_hist[code_len]) << 1;
         }
 
-        // Populate decoding table
+        // Confirm that the huffman tree is valid
+        if curr_code != 2 << max_code_length {
+            return Err(DecodingError::HuffmanError);
+        }
+
+        // Calculate table/tree parameters
         let table_bits = max_code_length.min(MAX_TABLE_BITS as u16);
         let table_size = (1 << table_bits) as usize;
         let table_mask = table_size as u16 - 1;
+        let tree_size = code_length_hist[table_bits as usize + 1..=max_code_length as usize]
+            .iter()
+            .sum::<u16>() as usize;
+
+        // Populate decoding table
+        let mut tree = Vec::with_capacity(2 * tree_size);
         let mut table = vec![0; table_size];
-        for (symbol, (&code, &length)) in huff_codes.iter().zip(code_lengths.iter()).enumerate() {
-            if length != 0 && length <= table_bits {
+        for (symbol, &length) in code_lengths.iter().enumerate() {
+            if length == 0 {
+                continue;
+            }
+
+            let code = next_codes[length as usize];
+            next_codes[length as usize] += 1;
+
+            if length <= table_bits {
                 let mut j = (u16::reverse_bits(code) >> (16 - length)) as usize;
                 let entry = ((length as u32) << 16) | symbol as u32;
                 while j < table_size {
                     table[j] = entry;
                     j += 1 << length as usize;
                 }
-            }
-        }
+            } else {
+                let table_index =
+                    ((u16::reverse_bits(code) >> (16 - length)) & table_mask) as usize;
+                let table_value = table[table_index];
 
-        // If the longest code is larger than the table size, build a tree as a fallback.
-        let mut tree = Vec::new();
-        if max_code_length > table_bits {
-            for (symbol, (&code, &length)) in huff_codes.iter().zip(code_lengths.iter()).enumerate()
-            {
-                if length > table_bits {
-                    let table_index =
-                        ((u16::reverse_bits(code) >> (16 - length)) & table_mask) as usize;
-                    let table_value = table[table_index];
+                debug_assert_eq!(table_value >> 16, 0);
 
-                    debug_assert_eq!(table_value >> 16, 0);
+                let mut node_index = if table_value == 0 {
+                    let node_index = tree.len();
+                    table[table_index] = (node_index + 1) as u32;
+                    tree.push(HuffmanTreeNode::Empty);
+                    node_index
+                } else {
+                    (table_value - 1) as usize
+                };
 
-                    let mut node_index = if table_value == 0 {
-                        let node_index = tree.len();
-                        table[table_index] = (node_index + 1) as u32;
-                        tree.push(HuffmanTreeNode::Empty);
-                        node_index
-                    } else {
-                        (table_value - 1) as usize
-                    };
+                let code = usize::from(code);
+                for depth in (0..length - table_bits).rev() {
+                    let node = tree[node_index];
 
-                    let code = usize::from(code);
-                    for depth in (0..length - table_bits).rev() {
-                        let node = tree[node_index];
-
-                        let offset = match node {
-                            HuffmanTreeNode::Empty => {
-                                // Turns a node from empty into a branch and assigns its children
-                                let offset = tree.len() - node_index;
-                                tree[node_index] = HuffmanTreeNode::Branch(offset);
-                                tree.push(HuffmanTreeNode::Empty);
-                                tree.push(HuffmanTreeNode::Empty);
-                                offset
-                            }
-                            HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
-                            HuffmanTreeNode::Branch(offset) => offset,
-                        };
-
-                        node_index += offset + ((code >> depth) & 1);
-                    }
-
-                    match tree[node_index] {
+                    let offset = match node {
                         HuffmanTreeNode::Empty => {
-                            tree[node_index] = HuffmanTreeNode::Leaf(symbol as u16)
+                            // Turns a node from empty into a branch and assigns its children
+                            let offset = tree.len() - node_index;
+                            tree[node_index] = HuffmanTreeNode::Branch(offset);
+                            tree.push(HuffmanTreeNode::Empty);
+                            tree.push(HuffmanTreeNode::Empty);
+                            offset
                         }
                         HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
-                        HuffmanTreeNode::Branch(_offset) => {
-                            return Err(DecodingError::HuffmanError)
-                        }
+                        HuffmanTreeNode::Branch(offset) => offset,
+                    };
+
+                    node_index += offset + ((code >> depth) & 1);
+                }
+
+                match tree[node_index] {
+                    HuffmanTreeNode::Empty => {
+                        tree[node_index] = HuffmanTreeNode::Leaf(symbol as u16)
                     }
+                    HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
+                    HuffmanTreeNode::Branch(_offset) => return Err(DecodingError::HuffmanError),
                 }
             }
         }
