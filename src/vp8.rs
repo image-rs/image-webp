@@ -991,9 +991,11 @@ fn mulhi(v: u8, coeff: u16) -> i32 {
 ///     }
 /// }
 /// ```
+// Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
+#[allow(clippy::manual_clamp)]
 fn clip(v: i32) -> u8 {
     const YUV_FIX2: i32 = 6;
-    (v >> YUV_FIX2).clamp(0, 255) as u8
+    (v >> YUV_FIX2).max(0).min(255) as u8
 }
 
 #[derive(Clone, Copy, Default)]
@@ -2310,11 +2312,14 @@ fn avg2(this: u8, right: u8) -> u8 {
 
 // Only 16 elements from rblock are used to add residue, so it is restricted to 16 elements
 // to enable SIMD and other optimizations.
+//
+// Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
+#[allow(clippy::manual_clamp)]
 fn add_residue(pblock: &mut [u8], rblock: &[i32; 16], y0: usize, x0: usize, stride: usize) {
     let mut pos = y0 * stride + x0;
     for row in rblock.chunks(4) {
         for (p, &a) in pblock[pos..][..4].iter_mut().zip(row.iter()) {
-            *p = (a + i32::from(*p)).clamp(0, 255) as u8;
+            *p = (a + i32::from(*p)).max(0).min(255) as u8;
         }
         pos += stride;
     }
@@ -2397,6 +2402,8 @@ fn predict_dcpred(a: &mut [u8], size: usize, stride: usize, above: bool, left: b
     }
 }
 
+// Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
+#[allow(clippy::manual_clamp)]
 fn predict_tmpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
     // The formula for tmpred is:
     // X_ij = L_i + A_j - P (i, j=0, 1, 2, 3)
@@ -2426,7 +2433,7 @@ fn predict_tmpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize
         x_block[y * stride + 1..][..size]
             .iter_mut()
             .zip(above_slice)
-            .for_each(|(cur, &abv)| *cur = (left_minus_p + i32::from(abv)).clamp(0, 255) as u8);
+            .for_each(|(cur, &abv)| *cur = (left_minus_p + i32::from(abv)).max(0).min(255) as u8);
     }
 }
 
