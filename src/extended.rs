@@ -64,12 +64,12 @@ pub(crate) fn composite_frame(
                 for pixel in canvas.chunks_exact_mut(4) {
                     pixel.copy_from_slice(&clear_color);
                 }
-            },
+            }
             (true, false) => {
                 for pixel in canvas.chunks_exact_mut(3) {
                     pixel.copy_from_slice(&clear_color[..3]);
                 }
-            },
+            }
             (false, true) => {
                 for y in 0..previous_frame_height as usize {
                     for x in 0..previous_frame_width as usize {
@@ -81,7 +81,7 @@ pub(crate) fn composite_frame(
                         output.copy_from_slice(&clear_color);
                     }
                 }
-            },
+            }
             (false, false) => {
                 for y in 0..previous_frame_height as usize {
                     for x in 0..previous_frame_width as usize {
@@ -94,7 +94,7 @@ pub(crate) fn composite_frame(
                         output.copy_from_slice(&clear_color[..3]);
                     }
                 }
-            },
+            }
         }
     }
 

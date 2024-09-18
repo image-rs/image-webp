@@ -812,7 +812,9 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         if self.animation.canvas.is_none() {
             self.animation.canvas = {
                 let mut canvas = vec![0; (self.width * self.height * 4) as usize];
-                canvas.chunks_exact_mut(4).for_each(|c| c.copy_from_slice(&info.background_color));
+                canvas
+                    .chunks_exact_mut(4)
+                    .for_each(|c| c.copy_from_slice(&info.background_color));
                 Some(canvas)
             }
         }
