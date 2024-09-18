@@ -43,6 +43,13 @@ quick_error! {
             display("Invalid Chunk header: {err:x?}")
         }
 
+        #[allow(deprecated)]
+        #[deprecated]
+        /// Some bits were invalid
+        ReservedBitSet {
+            display("Reserved bits set")
+        }
+
         /// The ALPH chunk preprocessing info flag was invalid
         InvalidAlphaPreprocessing {
             display("Alpha chunk preprocessing flag invalid")
