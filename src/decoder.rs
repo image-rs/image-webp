@@ -234,6 +234,10 @@ struct AnimationState {
     next_frame: u32,
     next_frame_start: u64,
     dispose_next_frame: bool,
+    previous_frame_width: u32,
+    previous_frame_height: u32,
+    previous_frame_x_offset: u32,
+    previous_frame_y_offset: u32,
     canvas: Option<Vec<u8>>,
 }
 impl Default for AnimationState {
@@ -242,6 +246,10 @@ impl Default for AnimationState {
             next_frame: 0,
             next_frame_start: 0,
             dispose_next_frame: true,
+            previous_frame_width: 0,
+            previous_frame_height: 0,
+            previous_frame_x_offset: 0,
+            previous_frame_y_offset: 0,
             canvas: None,
         }
     }
@@ -800,8 +808,13 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc())),
         };
 
+        // fill starting canvas with clear color
         if self.animation.canvas.is_none() {
-            self.animation.canvas = Some(vec![0; (self.width * self.height * 4) as usize]);
+            self.animation.canvas = {
+                let mut canvas = vec![0; (self.width * self.height * 4) as usize];
+                canvas.chunks_exact_mut(4).for_each(|c| c.copy_from_slice(&info.background_color));
+                Some(canvas)
+            }
         }
         extended::composite_frame(
             self.animation.canvas.as_mut().unwrap(),
@@ -815,7 +828,16 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             frame_height,
             frame_has_alpha,
             use_alpha_blending,
+            self.animation.previous_frame_width,
+            self.animation.previous_frame_height,
+            self.animation.previous_frame_x_offset,
+            self.animation.previous_frame_y_offset,
         );
+
+        self.animation.previous_frame_width = frame_width;
+        self.animation.previous_frame_height = frame_height;
+        self.animation.previous_frame_x_offset = frame_x;
+        self.animation.previous_frame_y_offset = frame_y;
 
         self.animation.dispose_next_frame = dispose;
         self.animation.next_frame_start += anmf_size + 8;
