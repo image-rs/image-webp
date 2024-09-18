@@ -20,8 +20,8 @@ pub(crate) struct WebPExtendedInfo {
 
 /// Composites a frame onto a canvas.
 ///
-/// Starts by filling the canvas with the background color, if provided. Then copies or blends the
-/// frame onto the canvas.
+/// Starts by filling the rectangle occupied by the previous frame with the background
+/// color, if provided. Then copies or blends the frame onto the canvas.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn composite_frame(
     canvas: &mut [u8],
@@ -35,13 +35,17 @@ pub(crate) fn composite_frame(
     frame_height: u32,
     frame_has_alpha: bool,
     frame_use_alpha_blending: bool,
+    previous_frame_width: u32,
+    previous_frame_height: u32,
+    previous_frame_offset_x: u32,
+    previous_frame_offset_y: u32,
 ) {
-    if frame_offset_x == 0
+    let frame_is_full_size = frame_offset_x == 0
         && frame_offset_y == 0
         && frame_width == canvas_width
-        && frame_height == canvas_height
-        && !frame_use_alpha_blending
-    {
+        && frame_height == canvas_height;
+
+    if frame_is_full_size && !frame_use_alpha_blending {
         if frame_has_alpha {
             canvas.copy_from_slice(frame);
         } else {
@@ -53,14 +57,43 @@ pub(crate) fn composite_frame(
         return;
     }
 
+    // clear rectangle occupied by previous frame
     if let Some(clear_color) = clear_color {
-        if frame_has_alpha {
-            for pixel in canvas.chunks_exact_mut(4) {
-                pixel.copy_from_slice(&clear_color);
+        match (frame_is_full_size, frame_has_alpha) {
+            (true, true) => {
+                for pixel in canvas.chunks_exact_mut(4) {
+                    pixel.copy_from_slice(&clear_color);
+                }
             }
-        } else {
-            for pixel in canvas.chunks_exact_mut(3) {
-                pixel.copy_from_slice(&clear_color[..3]);
+            (true, false) => {
+                for pixel in canvas.chunks_exact_mut(3) {
+                    pixel.copy_from_slice(&clear_color[..3]);
+                }
+            }
+            (false, true) => {
+                for y in 0..previous_frame_height as usize {
+                    for x in 0..previous_frame_width as usize {
+                        let canvas_index = ((x + previous_frame_offset_x as usize)
+                            + (y + previous_frame_offset_y as usize) * canvas_width as usize)
+                            * 4;
+
+                        let output = &mut canvas[canvas_index..][..4];
+                        output.copy_from_slice(&clear_color);
+                    }
+                }
+            }
+            (false, false) => {
+                for y in 0..previous_frame_height as usize {
+                    for x in 0..previous_frame_width as usize {
+                        // let frame_index = (x + y * frame_width as usize) * 4;
+                        let canvas_index = ((x + previous_frame_offset_x as usize)
+                            + (y + previous_frame_offset_y as usize) * canvas_width as usize)
+                            * 3;
+
+                        let output = &mut canvas[canvas_index..][..3];
+                        output.copy_from_slice(&clear_color[..3]);
+                    }
+                }
             }
         }
     }
