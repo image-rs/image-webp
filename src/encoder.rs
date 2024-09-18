@@ -789,45 +789,67 @@ mod tests {
 
     #[test]
     fn roundtrip_libwebp() {
+        roundtrip_libwebp_params(EncoderParams::default());
+        roundtrip_libwebp_params(EncoderParams {
+            use_predictor_transform: false,
+            ..Default::default()
+        });
+    }
+
+    fn roundtrip_libwebp_params(params: EncoderParams) {
+        println!("Testing {params:?}");
+
         let mut img = vec![0; 256 * 256 * 4];
         rand::thread_rng().fill_bytes(&mut img);
 
         let mut output = Vec::new();
-        WebPEncoder::new(&mut output)
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
+        encoder
             .encode(&img[..256 * 256 * 3], 256, 256, crate::ColorType::Rgb8)
             .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
-
-        let mut output = Vec::new();
-        WebPEncoder::new(&mut output)
-            .encode(&img, 256, 256, crate::ColorType::Rgba8)
-            .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img[..256 * 256 * 3] == &*decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
+        encoder
+            .encode(&img, 256, 256, crate::ColorType::Rgba8)
+            .unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img == &*decoded);
+
+        let mut output = Vec::new();
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
         encoder.set_icc_profile(vec![0; 10]);
         encoder
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img == &*decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
         encoder.set_exif_metadata(vec![0; 10]);
         encoder
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img == &*decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
         encoder.set_xmp_metadata(vec![0; 7]);
         encoder.set_icc_profile(vec![0; 8]);
         encoder.set_icc_profile(vec![0; 9]);
         encoder
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img == &*decoded);
     }
 }
