@@ -43,9 +43,9 @@ quick_error! {
             display("Invalid Chunk header: {err:x?}")
         }
 
-        /// Some bits were invalid
-        ReservedBitSet {
-            display("Reserved bits set")
+        /// The ALPH chunk preprocessing info flag was invalid
+        InvalidAlphaPreprocessing {
+            display("Alpha chunk preprocessing flag invalid")
         }
 
         /// Invalid compression method
@@ -713,10 +713,6 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         }
         let duration = extended::read_3_bytes(&mut self.r)?;
         let frame_info = self.r.read_u8()?;
-        let reserved = frame_info & 0b11111100;
-        if reserved != 0 {
-            return Err(DecodingError::ReservedBitSet);
-        }
         let use_alpha_blending = frame_info & 0b00000010 == 0;
         let dispose = frame_info & 0b00000001 != 0;
 

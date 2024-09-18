@@ -205,19 +205,11 @@ pub(crate) fn read_extended_header<R: Read>(
 ) -> Result<WebPExtendedInfo, DecodingError> {
     let chunk_flags = reader.read_u8()?;
 
-    let reserved_first = chunk_flags & 0b11000000;
     let icc_profile = chunk_flags & 0b00100000 != 0;
     let alpha = chunk_flags & 0b00010000 != 0;
     let exif_metadata = chunk_flags & 0b00001000 != 0;
     let xmp_metadata = chunk_flags & 0b00000100 != 0;
     let animation = chunk_flags & 0b00000010 != 0;
-    let reserved_second = chunk_flags & 0b00000001;
-
-    let reserved_third = read_3_bytes(reader)?;
-
-    if reserved_first != 0 || reserved_second != 0 || reserved_third != 0 {
-        return Err(DecodingError::ReservedBitSet);
-    }
 
     let canvas_width = read_3_bytes(reader)? + 1;
     let canvas_height = read_3_bytes(reader)? + 1;
@@ -271,19 +263,14 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
 ) -> Result<AlphaChunk, DecodingError> {
     let info_byte = reader.read_u8()?;
 
-    let reserved = info_byte & 0b11000000;
     let preprocessing = (info_byte & 0b00110000) >> 4;
     let filtering = (info_byte & 0b00001100) >> 2;
     let compression = info_byte & 0b00000011;
 
-    if reserved != 0 {
-        return Err(DecodingError::ReservedBitSet);
-    }
-
     let preprocessing = match preprocessing {
         0 => false,
         1 => true,
-        _ => return Err(DecodingError::ReservedBitSet),
+        _ => return Err(DecodingError::InvalidAlphaPreprocessing),
     };
 
     let filtering_method = match filtering {
