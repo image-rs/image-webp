@@ -211,6 +211,9 @@ pub(crate) fn read_extended_header<R: Read>(
     let xmp_metadata = chunk_flags & 0b00000100 != 0;
     let animation = chunk_flags & 0b00000010 != 0;
 
+    // reserved bytes are ignored
+    let _reserved_bytes = read_3_bytes(reader)?;
+
     let canvas_width = read_3_bytes(reader)? + 1;
     let canvas_height = read_3_bytes(reader)? + 1;
 
