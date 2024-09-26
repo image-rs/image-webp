@@ -10,7 +10,7 @@
 extern crate test;
 
 pub use self::decoder::{DecodingError, LoopCount, WebPDecoder};
-pub use self::encoder::{ColorType, EncodingError, WebPEncoder};
+pub use self::encoder::{ColorType, EncoderParams, EncodingError, WebPEncoder};
 
 mod decoder;
 mod encoder;

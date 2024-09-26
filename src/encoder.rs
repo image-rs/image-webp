@@ -347,6 +347,24 @@ fn write_run<W: Write>(
     Ok(())
 }
 
+/// Allows fine-tuning some encoder parameters.
+///
+/// Pass to [`WebPEncoder::set_params()`].
+#[non_exhaustive]
+#[derive(Clone, Debug)]
+pub struct EncoderParams {
+    /// Use a predictor transform. Enabled by default.
+    pub use_predictor_transform: bool,
+}
+
+impl Default for EncoderParams {
+    fn default() -> Self {
+        Self {
+            use_predictor_transform: true,
+        }
+    }
+}
+
 /// Encode image data with the indicated color type.
 ///
 /// # Panics
@@ -358,6 +376,7 @@ fn encode_frame<W: Write>(
     width: u32,
     height: u32,
     color: ColorType,
+    params: EncoderParams,
 ) -> Result<(), EncodingError> {
     let w = &mut BitWriter {
         writer,
@@ -392,11 +411,13 @@ fn encode_frame<W: Write>(
     w.write_bits(0b101, 3)?;
 
     // predictor transform
-    w.write_bits(0b111001, 6)?;
-    w.write_bits(0x0, 1)?; // no color cache
-    write_single_entry_huffman_tree(w, 2)?;
-    for _ in 0..4 {
-        write_single_entry_huffman_tree(w, 0)?;
+    if params.use_predictor_transform {
+        w.write_bits(0b111001, 6)?;
+        w.write_bits(0x0, 1)?; // no color cache
+        write_single_entry_huffman_tree(w, 2)?;
+        for _ in 0..4 {
+            write_single_entry_huffman_tree(w, 0)?;
+        }
     }
 
     // transforms done
@@ -429,18 +450,20 @@ fn encode_frame<W: Write>(
     }
 
     // compute predictor transform
-    let row_bytes = width as usize * 4;
-    for y in (1..height as usize).rev() {
-        let (prev, current) =
-            pixels[(y - 1) * row_bytes..][..row_bytes * 2].split_at_mut(row_bytes);
-        for (c, p) in current.iter_mut().zip(prev) {
-            *c = c.wrapping_sub(*p);
+    if params.use_predictor_transform {
+        let row_bytes = width as usize * 4;
+        for y in (1..height as usize).rev() {
+            let (prev, current) =
+                pixels[(y - 1) * row_bytes..][..row_bytes * 2].split_at_mut(row_bytes);
+            for (c, p) in current.iter_mut().zip(prev) {
+                *c = c.wrapping_sub(*p);
+            }
         }
+        for i in (4..row_bytes).rev() {
+            pixels[i] = pixels[i].wrapping_sub(pixels[i - 4]);
+        }
+        pixels[3] = pixels[3].wrapping_sub(255);
     }
-    for i in (4..row_bytes).rev() {
-        pixels[i] = pixels[i].wrapping_sub(pixels[i - 4]);
-    }
-    pixels[3] = pixels[3].wrapping_sub(255);
 
     // compute frequencies
     let mut frequencies0 = [0u32; 256];
@@ -506,8 +529,10 @@ fn encode_frame<W: Write>(
     }
     if is_alpha {
         write_huffman_tree(w, &frequencies3, &mut lengths3, &mut codes3)?;
-    } else {
+    } else if params.use_predictor_transform {
         write_single_entry_huffman_tree(w, 0)?;
+    } else {
+        write_single_entry_huffman_tree(w, 255)?;
     }
     write_single_entry_huffman_tree(w, 1)?;
 
@@ -597,6 +622,7 @@ pub struct WebPEncoder<W> {
     icc_profile: Vec<u8>,
     exif_metadata: Vec<u8>,
     xmp_metadata: Vec<u8>,
+    params: EncoderParams,
 }
 
 impl<W: Write> WebPEncoder<W> {
@@ -609,6 +635,7 @@ impl<W: Write> WebPEncoder<W> {
             icc_profile: Vec::new(),
             exif_metadata: Vec::new(),
             xmp_metadata: Vec::new(),
+            params: EncoderParams::default(),
         }
     }
 
@@ -627,6 +654,11 @@ impl<W: Write> WebPEncoder<W> {
         self.xmp_metadata = xmp_metadata;
     }
 
+    /// Set the `EncoderParams` to use.
+    pub fn set_params(&mut self, params: EncoderParams) {
+        self.params = params;
+    }
+
     /// Encode image data with the indicated color type.
     ///
     /// # Panics
@@ -640,7 +672,7 @@ impl<W: Write> WebPEncoder<W> {
         color: ColorType,
     ) -> Result<(), EncodingError> {
         let mut frame = Vec::new();
-        encode_frame(&mut frame, data, width, height, color)?;
+        encode_frame(&mut frame, data, width, height, color, self.params)?;
 
         // If the image has no metadata, it can be encoded with the "simple" WebP container format.
         if self.icc_profile.is_empty()
@@ -757,45 +789,67 @@ mod tests {
 
     #[test]
     fn roundtrip_libwebp() {
+        roundtrip_libwebp_params(EncoderParams::default());
+        roundtrip_libwebp_params(EncoderParams {
+            use_predictor_transform: false,
+            ..Default::default()
+        });
+    }
+
+    fn roundtrip_libwebp_params(params: EncoderParams) {
+        println!("Testing {params:?}");
+
         let mut img = vec![0; 256 * 256 * 4];
         rand::thread_rng().fill_bytes(&mut img);
 
         let mut output = Vec::new();
-        WebPEncoder::new(&mut output)
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
+        encoder
             .encode(&img[..256 * 256 * 3], 256, 256, crate::ColorType::Rgb8)
             .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
-
-        let mut output = Vec::new();
-        WebPEncoder::new(&mut output)
-            .encode(&img, 256, 256, crate::ColorType::Rgba8)
-            .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img[..256 * 256 * 3] == &*decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
+        encoder
+            .encode(&img, 256, 256, crate::ColorType::Rgba8)
+            .unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img == &*decoded);
+
+        let mut output = Vec::new();
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
         encoder.set_icc_profile(vec![0; 10]);
         encoder
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img == &*decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
         encoder.set_exif_metadata(vec![0; 10]);
         encoder
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img == &*decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(params.clone());
         encoder.set_xmp_metadata(vec![0; 7]);
         encoder.set_icc_profile(vec![0; 8]);
         encoder.set_icc_profile(vec![0; 9]);
         encoder
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
-        webp::Decoder::new(&output).decode().unwrap();
+        let decoded = webp::Decoder::new(&output).decode().unwrap();
+        assert!(&img == &*decoded);
     }
 }
