@@ -1,6 +1,23 @@
 # Release Notes
 
-### Versios 0.1.3
+### Version 0.2.0
+
+Breaking Changes:
+- `WebPDecoder` now requires the passed reader implement `BufRead`.
+
+Changes:
+- Add `EncoderParams` to make predictor transform optional.
+
+Bug Fixes:
+- Several bug fixes in animation compositing.
+- Fix indexing for filling image regions with tivial huffman codes.
+- Properly update the color cache when trivial huffman codes are used.
+
+Optimizations:
+- Substantially faster decoding of lossless images, by switching to a
+  table-based Huffman decoder and a variety of smaller optimizations.
+
+### Version 0.1.3
 
 Changes:
 - Accept files with out-of-order "unknown" chunks.
