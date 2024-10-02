@@ -512,6 +512,10 @@ impl<R: BufRead> LosslessDecoder<R> {
                             data[index * 4 + i * 4..][..4].copy_from_slice(&value);
                         }
 
+                        if let Some(color_cache) = huffman_info.color_cache.as_mut() {
+                            color_cache.insert(value);
+                        }
+
                         index += n;
                         continue;
                     }
