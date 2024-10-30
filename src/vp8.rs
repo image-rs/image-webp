@@ -1658,6 +1658,7 @@ impl<R: Read> Vp8Decoder<R> {
         // perform bounds checks once up front,
         // so that the compiler doesn't have to insert them in the hot loop below
         let block = &mut block[..16];
+        assert!(complexity <= 2);
 
         let first = if plane == 0 { 1usize } else { 0usize };
         let probs = &self.token_probs[plane];
@@ -1668,7 +1669,7 @@ impl<R: Read> Vp8Decoder<R> {
         let mut skip = false;
 
         for i in first..16usize {
-            let table = &probs[COEFF_BANDS[i] as usize][complexity];
+            let table = &probs[(COEFF_BANDS[i] % 8) as usize][complexity];
 
             let token = if !skip {
                 self.partitions[p].read_with_tree(tree, table, 0)?
