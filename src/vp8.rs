@@ -1645,6 +1645,7 @@ impl<R: Read> Vp8Decoder<R> {
         }
     }
 
+    #[inline(never)]
     fn read_coefficients(
         &mut self,
         block: &mut [i32],
@@ -1654,6 +1655,10 @@ impl<R: Read> Vp8Decoder<R> {
         dcq: i16,
         acq: i16,
     ) -> Result<bool, DecodingError> {
+        // perform bounds checks once up front,
+        // so that the compiler doesn't have to insert them in the hot loop below
+        let block = &mut block[..16];
+
         let first = if plane == 0 { 1usize } else { 0usize };
         let probs = &self.token_probs[plane];
         let tree = &DCT_TOKEN_TREE;
@@ -1714,7 +1719,9 @@ impl<R: Read> Vp8Decoder<R> {
                 abs_value = -abs_value;
             }
 
-            block[ZIGZAG[i] as usize] =
+            // % 16 is added to eliminate a bounds check.
+            // as of rustc 1.82 it's not smart enough to realize all the constant indices are below 16.
+            block[(ZIGZAG[i] % 16) as usize] =
                 abs_value * i32::from(if ZIGZAG[i] > 0 { acq } else { dcq });
 
             has_coefficients = true;
