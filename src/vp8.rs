@@ -1663,6 +1663,7 @@ impl<R: Read> Vp8Decoder<R> {
         let first = if plane == 0 { 1usize } else { 0usize };
         let probs = &self.token_probs[plane];
         let tree = &DCT_TOKEN_TREE;
+        let reader = &mut self.partitions[p];
 
         let mut complexity = complexity;
         let mut has_coefficients = false;
@@ -1674,9 +1675,9 @@ impl<R: Read> Vp8Decoder<R> {
             let table = &probs[(COEFF_BANDS[i] % 8) as usize][complexity];
 
             let token = if !skip {
-                self.partitions[p].read_with_tree(tree, table, 0)?
+                reader.read_with_tree(tree, table, 0)?
             } else {
-                self.partitions[p].read_with_tree(tree, table, 2)?
+                reader.read_with_tree(tree, table, 2)?
             };
 
             let mut abs_value = i32::from(match token {
@@ -1698,7 +1699,7 @@ impl<R: Read> Vp8Decoder<R> {
                     let mut j = 0;
 
                     while t[j] > 0 {
-                        extra = extra + extra + self.partitions[p].read_bool(t[j])? as i16;
+                        extra = extra + extra + reader.read_bool(t[j])? as i16;
                         j += 1;
                     }
 
@@ -1718,7 +1719,7 @@ impl<R: Read> Vp8Decoder<R> {
                 2
             };
 
-            if self.partitions[p].read_bool(128)? {
+            if reader.read_bool(128)? {
                 abs_value = -abs_value;
             }
 
