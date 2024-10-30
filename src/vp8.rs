@@ -1645,7 +1645,6 @@ impl<R: Read> Vp8Decoder<R> {
         }
     }
 
-    #[inline(never)]
     fn read_coefficients(
         &mut self,
         block: &mut [i32],
