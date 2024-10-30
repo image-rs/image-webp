@@ -1692,14 +1692,15 @@ impl<R: Read> Vp8Decoder<R> {
                 literal @ DCT_1..=DCT_4 => i16::from(literal),
 
                 category @ DCT_CAT1..=DCT_CAT6 => {
-                    let t = PROB_DCT_CAT[(category - DCT_CAT1) as usize];
+                    let probs = PROB_DCT_CAT[(category - DCT_CAT1) as usize];
 
                     let mut extra = 0i16;
-                    let mut j = 0;
 
-                    while t[j] > 0 {
-                        extra = extra + extra + reader.read_bool(t[j])? as i16;
-                        j += 1;
+                    for t in probs.iter().copied() {
+                        if t == 0 {
+                            break;
+                        }
+                        extra = extra + extra + reader.read_bool(t)? as i16;
                     }
 
                     i16::from(DCT_CAT_BASE[(category - DCT_CAT1) as usize]) + extra
