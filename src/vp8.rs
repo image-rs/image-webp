@@ -1647,7 +1647,7 @@ impl<R: Read> Vp8Decoder<R> {
 
     fn read_coefficients(
         &mut self,
-        block: &mut [i32],
+        block: &mut [i32; 16],
         p: usize,
         plane: usize,
         complexity: usize,
@@ -1656,7 +1656,6 @@ impl<R: Read> Vp8Decoder<R> {
     ) -> Result<bool, DecodingError> {
         // perform bounds checks once up front,
         // so that the compiler doesn't have to insert them in the hot loop below
-        let block = &mut block[..16];
         assert!(complexity <= 2);
 
         let first = if plane == 0 { 1usize } else { 0usize };
@@ -1763,7 +1762,8 @@ impl<R: Read> Vp8Decoder<R> {
             let mut left = self.left.complexity[y + 1];
             for x in 0usize..4 {
                 let i = x + y * 4;
-                let block = &mut blocks[i * 16..i * 16 + 16];
+                let block = &mut blocks[i * 16..][..16];
+                let block: &mut [i32; 16] = block.try_into().unwrap();
 
                 let complexity = self.top[mbx].complexity[x + 1] + left;
                 let dcq = self.segment[sindex].ydc;
@@ -1790,7 +1790,8 @@ impl<R: Read> Vp8Decoder<R> {
 
                 for x in 0usize..2 {
                     let i = x + y * 2 + if j == 5 { 16 } else { 20 };
-                    let block = &mut blocks[i * 16..i * 16 + 16];
+                    let block = &mut blocks[i * 16..][..16];
+                    let block: &mut [i32; 16] = block.try_into().unwrap();
 
                     let complexity = self.top[mbx].complexity[x + j] + left;
                     let dcq = self.segment[sindex].uvdc;
