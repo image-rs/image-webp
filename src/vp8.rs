@@ -1669,9 +1669,7 @@ impl<R: Read> Vp8Decoder<R> {
         let mut skip = false;
 
         for i in first..16usize {
-            // `% 8` is added to eliminate a bounds check.
-            // as of rustc 1.82 it's not smart enough to realize all the constant indices are below 8.
-            let table = &probs[(COEFF_BANDS[i] % 8) as usize][complexity];
+            let table = &probs[COEFF_BANDS[i] as usize][complexity];
 
             let token = if !skip {
                 reader.read_with_tree(tree, table, 0)?
@@ -1723,8 +1721,7 @@ impl<R: Read> Vp8Decoder<R> {
                 abs_value = -abs_value;
             }
 
-            // % 16 is added to eliminate a bounds check. Same as above.
-            block[(ZIGZAG[i] % 16) as usize] =
+            block[ZIGZAG[i] as usize] =
                 abs_value * i32::from(if ZIGZAG[i] > 0 { acq } else { dcq });
 
             has_coefficients = true;
