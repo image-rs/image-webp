@@ -1647,16 +1647,21 @@ impl<R: Read> Vp8Decoder<R> {
 
     fn read_coefficients(
         &mut self,
-        block: &mut [i32],
+        block: &mut [i32; 16],
         p: usize,
         plane: usize,
         complexity: usize,
         dcq: i16,
         acq: i16,
     ) -> Result<bool, DecodingError> {
+        // perform bounds checks once up front,
+        // so that the compiler doesn't have to insert them in the hot loop below
+        assert!(complexity <= 2);
+
         let first = if plane == 0 { 1usize } else { 0usize };
         let probs = &self.token_probs[plane];
         let tree = &DCT_TOKEN_TREE;
+        let reader = &mut self.partitions[p];
 
         let mut complexity = complexity;
         let mut has_coefficients = false;
@@ -1666,9 +1671,9 @@ impl<R: Read> Vp8Decoder<R> {
             let table = &probs[COEFF_BANDS[i] as usize][complexity];
 
             let token = if !skip {
-                self.partitions[p].read_with_tree(tree, table, 0)?
+                reader.read_with_tree(tree, table, 0)?
             } else {
-                self.partitions[p].read_with_tree(tree, table, 2)?
+                reader.read_with_tree(tree, table, 2)?
             };
 
             let mut abs_value = i32::from(match token {
@@ -1684,14 +1689,15 @@ impl<R: Read> Vp8Decoder<R> {
                 literal @ DCT_1..=DCT_4 => i16::from(literal),
 
                 category @ DCT_CAT1..=DCT_CAT6 => {
-                    let t = PROB_DCT_CAT[(category - DCT_CAT1) as usize];
+                    let probs = PROB_DCT_CAT[(category - DCT_CAT1) as usize];
 
                     let mut extra = 0i16;
-                    let mut j = 0;
 
-                    while t[j] > 0 {
-                        extra = extra + extra + self.partitions[p].read_bool(t[j])? as i16;
-                        j += 1;
+                    for t in probs.iter().copied() {
+                        if t == 0 {
+                            break;
+                        }
+                        extra = extra + extra + reader.read_bool(t)? as i16;
                     }
 
                     i16::from(DCT_CAT_BASE[(category - DCT_CAT1) as usize]) + extra
@@ -1710,7 +1716,7 @@ impl<R: Read> Vp8Decoder<R> {
                 2
             };
 
-            if self.partitions[p].read_bool(128)? {
+            if reader.read_bool(128)? {
                 abs_value = -abs_value;
             }
 
@@ -1756,7 +1762,8 @@ impl<R: Read> Vp8Decoder<R> {
             let mut left = self.left.complexity[y + 1];
             for x in 0usize..4 {
                 let i = x + y * 4;
-                let block = &mut blocks[i * 16..i * 16 + 16];
+                let block = &mut blocks[i * 16..][..16];
+                let block: &mut [i32; 16] = block.try_into().unwrap();
 
                 let complexity = self.top[mbx].complexity[x + 1] + left;
                 let dcq = self.segment[sindex].ydc;
@@ -1783,7 +1790,8 @@ impl<R: Read> Vp8Decoder<R> {
 
                 for x in 0usize..2 {
                     let i = x + y * 2 + if j == 5 { 16 } else { 20 };
-                    let block = &mut blocks[i * 16..i * 16 + 16];
+                    let block = &mut blocks[i * 16..][..16];
+                    let block: &mut [i32; 16] = block.try_into().unwrap();
 
                     let complexity = self.top[mbx].complexity[x + j] + left;
                     let dcq = self.segment[sindex].uvdc;
