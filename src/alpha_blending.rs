@@ -1,5 +1,5 @@
 //! Optimized alpha blending routines based on libwebp
-//! 
+//!
 //! https://github.com/webmproject/libwebp/blob/e4f7a9f0c7c9fbfae1568bc7fa5c94b989b50872/src/demux/anim_decode.c#L215-L267
 
 const fn channel_shift(i: u32) -> u32 {
@@ -18,8 +18,7 @@ fn blend_channel_nonpremult(
 ) -> u8 {
     let src_channel = ((src >> shift) & 0xff) as u8;
     let dst_channel = ((dst >> shift) & 0xff) as u8;
-    let blend_unscaled = (src_channel as u32 * src_a as u32)
-        + (dst_channel as u32 * dst_a as u32);
+    let blend_unscaled = (src_channel as u32 * src_a as u32) + (dst_channel as u32 * dst_a as u32);
     // debug_assert!(blend_unscaled < (1u64 << 32) as u32 / scale); // TODO: fails for some reason?
     ((blend_unscaled * scale) >> channel_shift(3)) as u8
 }
@@ -37,15 +36,12 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
         let blend_a = src_a as u32 + dst_factor_a as u32;
         let scale = (1u32 << 24) / blend_a;
 
-        let blend_r = blend_channel_nonpremult(
-            src, src_a, dst, dst_factor_a as u8, scale, channel_shift(0),
-        );
-        let blend_g = blend_channel_nonpremult(
-            src, src_a, dst, dst_factor_a as u8, scale, channel_shift(1),
-        );
-        let blend_b = blend_channel_nonpremult(
-            src, src_a, dst, dst_factor_a as u8, scale, channel_shift(2),
-        );
+        let blend_r =
+            blend_channel_nonpremult(src, src_a, dst, dst_factor_a as u8, scale, channel_shift(0));
+        let blend_g =
+            blend_channel_nonpremult(src, src_a, dst, dst_factor_a as u8, scale, channel_shift(1));
+        let blend_b =
+            blend_channel_nonpremult(src, src_a, dst, dst_factor_a as u8, scale, channel_shift(2));
         assert!(src_a as u32 + dst_factor_a < 256);
 
         ((blend_r as u32) << channel_shift(0))
@@ -69,7 +65,7 @@ mod tests {
         let blend_alpha_f64 = buffer_alpha + canvas_alpha * (1.0 - buffer_alpha / 255.0);
         //value should be between 0 and 255, this truncates the fractional part
         let blend_alpha: u8 = blend_alpha_f64 as u8;
-    
+
         let blend_rgb: [u8; 3] = if blend_alpha == 0 {
             [0, 0, 0]
         } else {
@@ -77,17 +73,17 @@ mod tests {
             for i in 0..3 {
                 let canvas_f64 = f64::from(canvas[i]);
                 let buffer_f64 = f64::from(buffer[i]);
-    
+
                 let val = (buffer_f64 * buffer_alpha
                     + canvas_f64 * canvas_alpha * (1.0 - buffer_alpha / 255.0))
                     / blend_alpha_f64;
                 //value should be between 0 and 255, this truncates the fractional part
                 rgb[i] = val as u8;
             }
-    
+
             rgb
         };
-    
+
         [blend_rgb[0], blend_rgb[1], blend_rgb[2], blend_alpha]
     }
 

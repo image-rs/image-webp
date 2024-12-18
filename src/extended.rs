@@ -145,8 +145,6 @@ pub(crate) fn composite_frame(
     }
 }
 
-
-
 pub(crate) fn get_alpha_predictor(
     x: usize,
     y: usize,
