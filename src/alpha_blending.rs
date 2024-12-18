@@ -2,7 +2,14 @@
 //!
 //! https://github.com/webmproject/libwebp/blob/e4f7a9f0c7c9fbfae1568bc7fa5c94b989b50872/src/demux/anim_decode.c#L215-L267
 
-const fn channel_shift(i: u32) -> u32 {
+
+#[cfg(target_endian = "big")]
+fn channel_shift(i: u32) -> u32 {
+    24 - (i) * 8
+}
+
+#[cfg(target_endian = "little")]
+fn channel_shift(i: u32) -> u32 {
     i * 8
 }
 
