@@ -42,7 +42,7 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
             blend_channel_nonpremult(src, src_a, dst, dst_factor_a as u8, scale, channel_shift(1));
         let blend_b =
             blend_channel_nonpremult(src, src_a, dst, dst_factor_a as u8, scale, channel_shift(2));
-        assert!(src_a as u32 + dst_factor_a < 256);
+        debug_assert!(src_a as u32 + dst_factor_a < 256);
 
         ((blend_r as u32) << channel_shift(0))
             | ((blend_g as u32) << channel_shift(1))
