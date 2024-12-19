@@ -2,7 +2,6 @@
 //!
 //! https://github.com/webmproject/libwebp/blob/e4f7a9f0c7c9fbfae1568bc7fa5c94b989b50872/src/demux/anim_decode.c#L215-L267
 
-
 #[cfg(target_endian = "big")]
 fn channel_shift(i: u32) -> u32 {
     24 - (i) * 8
@@ -109,6 +108,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // takes too long to run on CI. Run this locally when changing the function.
     fn alpha_blending_optimization() {
         for r1 in 0..u8::MAX {
             for a1 in 11..u8::MAX {
