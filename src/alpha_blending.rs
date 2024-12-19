@@ -111,9 +111,9 @@ mod tests {
     #[test]
     fn alpha_blending_optimization() {
         for r1 in 0..u8::MAX {
-            for a1 in 15..u8::MAX {
+            for a1 in 11..u8::MAX {
                 for r2 in 0..u8::MAX {
-                    for a2 in 15..u8::MAX {
+                    for a2 in 11..u8::MAX {
                         let opt = do_alpha_blending([r1, 0, 0, a1], [r2, 0, 0, a2]);
                         let slow = do_alpha_blending_reference([r1, 0, 0, a1], [r2, 0, 0, a2]);
                         // libwebp doesn't do exact blending and so we don't either
