@@ -920,46 +920,79 @@ impl Frame {
 
     /// Fills an rgba buffer by skipping the alpha values
     pub(crate) fn fill_rgba(&self, buf: &mut [u8]) {
+        const BPP: usize = 4;
+
         let mut index = 0_usize;
 
         for (y, row) in buf
-            .chunks_exact_mut(usize::from(self.width) * 4)
+            .chunks_exact_mut(usize::from(self.width) * BPP)
             .enumerate()
         {
-            let chroma_index_row = usize::from(self.chroma_width()) * (y / 2);
+            let chroma_index = usize::from(self.chroma_width()) * (y / 2);
 
-            for (x, rgb_chunk) in row.chunks_exact_mut(4).enumerate() {
-                let chroma_index = chroma_index_row + x / 2;
+            let next_index = index + usize::from(self.width);
+            Frame::fill_rgba_row(
+                &self.ybuf[index..next_index],
+                &self.ubuf[chroma_index..],
+                &self.vbuf[chroma_index..],
+                row,
+            );
 
-                Frame::fill_single(
-                    self.ybuf[index],
-                    self.ubuf[chroma_index],
-                    self.vbuf[chroma_index],
-                    rgb_chunk,
-                );
-
-                index += 1;
-            }
+            index = next_index;
         }
     }
 
-    fn fill_single(y: u8, u: u8, v: u8, rgb: &mut [u8]) {
-        // // Conversion values from https://docs.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#converting-8-bit-yuv-to-rgb888
-        // let c: i32 = i32::from(y) - 16;
-        // let d: i32 = i32::from(u) - 128;
-        // let e: i32 = i32::from(v) - 128;
-        // let r: u8 = clamp((298 * c + 409 * e + 128) >> 8, 0, 255)
-        //     .try_into()
-        //     .unwrap();
-        // let g: u8 = clamp((298 * c - 100 * d - 208 * e + 128) >> 8, 0, 255)
-        //     .try_into()
-        //     .unwrap();
-        // let b: u8 = clamp((298 * c + 516 * d + 128) >> 8, 0, 255)
-        //     .try_into()
-        //     .unwrap();
-        rgb[0] = clip(mulhi(y, 19077) + mulhi(v, 26149) - 14234);
-        rgb[1] = clip(mulhi(y, 19077) - mulhi(u, 6419) - mulhi(v, 13320) + 8708);
-        rgb[2] = clip(mulhi(y, 19077) + mulhi(u, 33050) - 17685);
+    fn fill_rgba_row(y_vec: &[u8], u_vec: &[u8], v_vec: &[u8], rgba: &mut [u8]) {
+        // Fill 2 pixels per iteration: these pixels share `u` and `v` components
+        let mut rgb_chunks = rgba.chunks_exact_mut(8);
+        let mut y_chunks = y_vec.chunks_exact(2);
+        let mut u_iter = u_vec.iter();
+        let mut v_iter = v_vec.iter();
+
+        for (((rgb, y), &u), &v) in (&mut rgb_chunks)
+            .zip(&mut y_chunks)
+            .zip(&mut u_iter)
+            .zip(&mut v_iter)
+        {
+            let coeffs = [
+                mulhi(v, 26149),
+                mulhi(u, 6419),
+                mulhi(v, 13320),
+                mulhi(u, 33050),
+            ];
+
+            let to_copy = [
+                clip(mulhi(y[0], 19077) + coeffs[0] - 14234),
+                clip(mulhi(y[0], 19077) - coeffs[1] - coeffs[2] + 8708),
+                clip(mulhi(y[0], 19077) + coeffs[3] - 17685),
+                rgb[3],
+                clip(mulhi(y[1], 19077) + coeffs[0] - 14234),
+                clip(mulhi(y[1], 19077) - coeffs[1] - coeffs[2] + 8708),
+                clip(mulhi(y[1], 19077) + coeffs[3] - 17685),
+                rgb[7],
+            ];
+            rgb.copy_from_slice(&to_copy);
+        }
+
+        let remainder = rgb_chunks.into_remainder();
+        if remainder.len() >= 4 {
+            if let (Some(&y), Some(&u), Some(&v)) = (
+                y_chunks.remainder().iter().next(),
+                u_iter.next(),
+                v_iter.next(),
+            ) {
+                let coeffs = [
+                    mulhi(v, 26149),
+                    mulhi(u, 6419),
+                    mulhi(v, 13320),
+                    mulhi(u, 33050),
+                ];
+
+                remainder[0] = clip(mulhi(y, 19077) + coeffs[0] - 14234);
+                remainder[1] = clip(mulhi(y, 19077) - coeffs[1] - coeffs[2] + 8708);
+                remainder[2] = clip(mulhi(y, 19077) + coeffs[3] - 17685);
+            }
+        }
     }
 
     /// Gets the buffer size
