@@ -55,6 +55,10 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
 }
 
 pub(crate) fn do_alpha_blending(buffer: [u8; 4], canvas: [u8; 4]) -> [u8; 4] {
+    // The original C code contained different shift functions for different endianness,
+    // but they didn't work when ported to Rust directly (and probably didn't work in C either).
+    // So instead we reverse the order of bytes on big-endian here, at the interface.
+    // `from_le_bytes` is a no-op on little endian (most systems) and a cheap shuffle on big endian.
     blend_pixel_nonpremult(u32::from_le_bytes(buffer), u32::from_le_bytes(canvas)).to_le_bytes()
 }
 
