@@ -2,12 +2,6 @@
 //!
 //! https://github.com/webmproject/libwebp/blob/e4f7a9f0c7c9fbfae1568bc7fa5c94b989b50872/src/demux/anim_decode.c#L215-L267
 
-#[cfg(target_endian = "big")]
-fn channel_shift(i: u32) -> u32 {
-    24 - (i) * 8
-}
-
-#[cfg(target_endian = "little")]
 fn channel_shift(i: u32) -> u32 {
     i * 8
 }
@@ -61,7 +55,7 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
 }
 
 pub(crate) fn do_alpha_blending(buffer: [u8; 4], canvas: [u8; 4]) -> [u8; 4] {
-    blend_pixel_nonpremult(u32::from_ne_bytes(buffer), u32::from_ne_bytes(canvas)).to_ne_bytes()
+    blend_pixel_nonpremult(u32::from_le_bytes(buffer), u32::from_le_bytes(canvas)).to_le_bytes()
 }
 
 /// Divides by 255, rounding to nearest (as opposed to down, like regular integer division does).
