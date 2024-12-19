@@ -25,7 +25,7 @@ fn blend_channel_nonpremult(
     let src_channel = ((src >> shift) & 0xff) as u8;
     let dst_channel = ((dst >> shift) & 0xff) as u8;
     let blend_unscaled = (src_channel as u32 * src_a as u32) + (dst_channel as u32 * dst_a as u32);
-    // debug_assert!(blend_unscaled < (1u64 << 32) as u32 / scale); // TODO: fails for some reason?
+    debug_assert!(u64::from(blend_unscaled) < (1u64 << 32) / scale as u64);
     ((blend_unscaled * scale) >> channel_shift(3)) as u8
 }
 
