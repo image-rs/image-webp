@@ -39,7 +39,10 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
     } else {
         let dst_a = ((dst >> channel_shift(3)) & 0xff) as u8;
         // Approximate integer arithmetic for: dst_factor_a = (dst_a * (255 - src_a)) / 255
-        let dst_factor_a = (dst_a as u32 * (256 - src_a as u32)) >> 8;
+        // libwebp used the following formula here:
+        //let dst_factor_a = (dst_a as u32 * (256 - src_a as u32)) >> 8;
+        // however, we've found that we can use a more precise approximation without losing performance:
+        let dst_factor_a = div_by_255(dst_a as u32 * (255 - src_a as u32));
         let blend_a = src_a as u32 + dst_factor_a as u32;
         let scale = (1u32 << 24) / blend_a;
 
@@ -60,6 +63,17 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
 
 pub(crate) fn do_alpha_blending(buffer: [u8; 4], canvas: [u8; 4]) -> [u8; 4] {
     blend_pixel_nonpremult(u32::from_le_bytes(buffer), u32::from_le_bytes(canvas)).to_le_bytes()
+}
+
+/// Divides by 255, rounding to nearest (as opposed to down, like regular integer division does).
+/// TODO: cannot output 256, so the output is effecitively u8. Plumb that through the code.
+//
+// Sources:
+// https://arxiv.org/pdf/2202.02864
+// https://github.com/image-rs/image-webp/issues/119#issuecomment-2544007820
+#[inline]
+fn div_by_255(v: u32) -> u32 {
+    (((v + 0x80) >> 8) + v + 0x80) >> 8
 }
 
 #[cfg(test)]
@@ -104,7 +118,7 @@ mod tests {
                         let slow = do_alpha_blending_reference([r1, 0, 0, a1], [r2, 0, 0, a2]);
                         // libwebp doesn't do exact blending and so we don't either
                         for (o, s) in opt.iter().zip(slow.iter()) {
-                            if o.abs_diff(*s) > 5 {
+                            if o.abs_diff(*s) > 3 {
                                 panic!("Mismatch in results! opt: {opt:?}, slow: {slow:?}, blended values: [{r1}, 0, 0, {a1}], [{r2}, 0, 0, {a2}]");
                             }
                         }
