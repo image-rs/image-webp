@@ -42,7 +42,7 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
         //let dst_factor_a = (dst_a as u32 * (256 - src_a as u32)) >> 8;
         // however, we've found that we can use a more precise approximation without losing performance:
         let dst_factor_a = div_by_255(dst_a as u32 * (255 - src_a as u32));
-        let blend_a = src_a as u32 + dst_factor_a as u32;
+        let blend_a = src_a as u32 + dst_factor_a;
         let scale = (1u32 << 24) / blend_a;
 
         let blend_r =
@@ -56,7 +56,7 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
         ((blend_r as u32) << channel_shift(0))
             | ((blend_g as u32) << channel_shift(1))
             | ((blend_b as u32) << channel_shift(2))
-            | ((blend_a as u32) << channel_shift(3))
+            | (blend_a << channel_shift(3))
     }
 }
 
