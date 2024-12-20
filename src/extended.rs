@@ -3,6 +3,8 @@ use crate::decoder::DecodingError;
 use byteorder_lite::ReadBytesExt;
 use std::io::{BufRead, Read};
 
+use crate::alpha_blending::do_alpha_blending;
+
 #[derive(Debug, Clone)]
 pub(crate) struct WebPExtendedInfo {
     pub(crate) alpha: bool,
@@ -141,34 +143,6 @@ pub(crate) fn composite_frame(
             }
         }
     }
-}
-
-fn do_alpha_blending(buffer: [u8; 4], canvas: [u8; 4]) -> [u8; 4] {
-    let canvas_alpha = f64::from(canvas[3]);
-    let buffer_alpha = f64::from(buffer[3]);
-    let blend_alpha_f64 = buffer_alpha + canvas_alpha * (1.0 - buffer_alpha / 255.0);
-    //value should be between 0 and 255, this truncates the fractional part
-    let blend_alpha: u8 = blend_alpha_f64 as u8;
-
-    let blend_rgb: [u8; 3] = if blend_alpha == 0 {
-        [0, 0, 0]
-    } else {
-        let mut rgb = [0u8; 3];
-        for i in 0..3 {
-            let canvas_f64 = f64::from(canvas[i]);
-            let buffer_f64 = f64::from(buffer[i]);
-
-            let val = (buffer_f64 * buffer_alpha
-                + canvas_f64 * canvas_alpha * (1.0 - buffer_alpha / 255.0))
-                / blend_alpha_f64;
-            //value should be between 0 and 255, this truncates the fractional part
-            rgb[i] = val as u8;
-        }
-
-        rgb
-    };
-
-    [blend_rgb[0], blend_rgb[1], blend_rgb[2], blend_alpha]
 }
 
 pub(crate) fn get_alpha_predictor(
