@@ -316,7 +316,7 @@ impl<R: BufRead> LosslessDecoder<R> {
             entropy_image = data
                 .chunks_exact(4)
                 .map(|pixel| {
-                    let meta_huff_code = u16::from(pixel[0]) << 8 | u16::from(pixel[1]);
+                    let meta_huff_code = (u16::from(pixel[0]) << 8) | u16::from(pixel[1]);
                     if u32::from(meta_huff_code) >= num_huff_groups {
                         num_huff_groups = u32::from(meta_huff_code) + 1;
                     }

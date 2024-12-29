@@ -158,11 +158,21 @@ impl BoolReader {
     // Do not inline this because inlining seems to worsen performance.
     #[inline(never)]
     pub(crate) fn read_bool(&mut self, probability: u8) -> BitResult<bool> {
-        if let Some(b) = self.fast().read_bit(probability) {
+        if let Some(b) = self.fast().read_bool(probability) {
             return BitResult::ok(b);
         }
 
         self.cold_read_bool(probability)
+    }
+
+    // Do not inline this because inlining seems to worsen performance.
+    #[inline(never)]
+    pub(crate) fn read_flag(&mut self) -> BitResult<bool> {
+        if let Some(b) = self.fast().read_flag() {
+            return BitResult::ok(b);
+        }
+
+        self.cold_read_flag()
     }
 
     // Do not inline this because inlining seems to worsen performance.
@@ -204,13 +214,6 @@ impl BoolReader {
         }
 
         self.cold_read_with_tree(tree, usize::from(first_node.index))
-    }
-
-    // This should be inlined to allow it to share the instruction cache with
-    // `read_bool`, as both functions are short and called often.
-    #[inline]
-    pub(crate) fn read_flag(&mut self) -> BitResult<bool> {
-        self.read_bool(128)
     }
 
     // As a similar (but different) speedup to BitResult, the FastReader reads
@@ -314,13 +317,19 @@ impl BoolReader {
 
     #[cold]
     #[inline(never)]
+    fn cold_read_flag(&mut self) -> BitResult<bool> {
+        self.cold_read_bit(128)
+    }
+
+    #[cold]
+    #[inline(never)]
     fn cold_read_literal(&mut self, n: u8) -> BitResult<u8> {
         let mut v = 0u8;
         let mut res = self.start_accumulated_result();
 
         for _ in 0..n {
-            let b = self.cold_read_bit(128).or_accumulate(&mut res);
-            v = (v << 1) + b as u8;
+            let b = self.cold_read_flag().or_accumulate(&mut res);
+            v = (v << 1) + u8::from(b);
         }
 
         self.keep_accumulating(res, v)
@@ -330,13 +339,13 @@ impl BoolReader {
     #[inline(never)]
     fn cold_read_optional_signed_value(&mut self, n: u8) -> BitResult<i32> {
         let mut res = self.start_accumulated_result();
-        let flag = self.cold_read_bool(128).or_accumulate(&mut res);
+        let flag = self.cold_read_flag().or_accumulate(&mut res);
         if !flag {
             // We should not read further bits if the flag is not set.
             return self.keep_accumulating(res, 0);
         }
         let magnitude = self.cold_read_literal(n).or_accumulate(&mut res);
-        let sign = self.cold_read_bool(128).or_accumulate(&mut res);
+        let sign = self.cold_read_flag().or_accumulate(&mut res);
 
         let value = if sign {
             -i32::from(magnitude)
@@ -380,9 +389,14 @@ impl FastReader<'_> {
         }
     }
 
-    fn read_bit(mut self, probability: u8) -> Option<bool> {
+    fn read_bool(mut self, probability: u8) -> Option<bool> {
         let bit = self.fast_read_bit(probability);
         self.commit_if_valid(bit)
+    }
+
+    fn read_flag(mut self) -> Option<bool> {
+        let value = self.fast_read_flag();
+        self.commit_if_valid(value)
     }
 
     fn read_literal(mut self, n: u8) -> Option<u8> {
@@ -391,13 +405,13 @@ impl FastReader<'_> {
     }
 
     fn read_optional_signed_value(mut self, n: u8) -> Option<i32> {
-        let flag = self.fast_read_bit(128);
+        let flag = self.fast_read_flag();
         if !flag {
             // We should not read further bits if the flag is not set.
             return self.commit_if_valid(0);
         }
         let magnitude = self.fast_read_literal(n);
-        let sign = self.fast_read_bit(128);
+        let sign = self.fast_read_flag();
         let value = if sign {
             -i32::from(magnitude)
         } else {
@@ -467,11 +481,67 @@ impl FastReader<'_> {
         retval
     }
 
+    fn fast_read_flag(&mut self) -> bool {
+        let State {
+            mut chunk_index,
+            mut value,
+            mut range,
+            mut bit_count,
+        } = self.uncommitted_state;
+
+        if bit_count < 0 {
+            let chunk = self.chunks.get(chunk_index).copied();
+            // We ignore invalid data inside the `fast_` functions,
+            // but we increase `chunk_index` below, so we can check
+            // whether we read invalid data in `commit_if_valid`.
+            let chunk = chunk.unwrap_or_default();
+
+            let v = u32::from_be_bytes(chunk);
+            chunk_index += 1;
+            value <<= 32;
+            value |= u64::from(v);
+            bit_count += 32;
+        }
+        debug_assert!(bit_count >= 0);
+
+        let half_range = range / 2;
+        let split = range - half_range;
+        let bigsplit = u64::from(split) << bit_count;
+
+        let retval = if let Some(new_value) = value.checked_sub(bigsplit) {
+            range = half_range;
+            value = new_value;
+            true
+        } else {
+            range = split;
+            false
+        };
+        debug_assert!(range > 0);
+
+        // Compute shift required to satisfy `range >= 128`.
+        // Apply that shift to `range` and `self.bitcount`.
+        //
+        // Subtract 24 because we only care about leading zeros in the
+        // lowest byte of `range` which is a `u32`.
+        let shift = range.leading_zeros().saturating_sub(24);
+        range <<= shift;
+        bit_count -= shift as i32;
+        debug_assert!(range >= 128);
+
+        self.uncommitted_state = State {
+            chunk_index,
+            value,
+            range,
+            bit_count,
+        };
+        retval
+    }
+
     fn fast_read_literal(&mut self, n: u8) -> u8 {
         let mut v = 0u8;
         for _ in 0..n {
-            let b = self.fast_read_bit(128);
-            v = (v << 1) + b as u8;
+            let b = self.fast_read_flag();
+            v = (v << 1) + u8::from(b);
         }
         v
     }
@@ -502,7 +572,7 @@ mod tests {
         buf.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data[..]);
         reader.init(buf, size).unwrap();
         let mut res = reader.start_accumulated_result();
-        assert_eq!(false, reader.read_bool(128).or_accumulate(&mut res));
+        assert_eq!(false, reader.read_flag().or_accumulate(&mut res));
         assert_eq!(true, reader.read_bool(10).or_accumulate(&mut res));
         assert_eq!(false, reader.read_bool(250).or_accumulate(&mut res));
         assert_eq!(1, reader.read_literal(1).or_accumulate(&mut res));
@@ -521,7 +591,7 @@ mod tests {
         buf.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data[..]);
         reader.init(buf, size).unwrap();
         let mut res = reader.start_accumulated_result();
-        assert_eq!(false, reader.read_bool(128).or_accumulate(&mut res));
+        assert_eq!(false, reader.read_flag().or_accumulate(&mut res));
         assert_eq!(true, reader.read_bool(10).or_accumulate(&mut res));
         assert_eq!(false, reader.read_bool(250).or_accumulate(&mut res));
         assert_eq!(1, reader.read_literal(1).or_accumulate(&mut res));
