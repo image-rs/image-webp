@@ -36,7 +36,7 @@ impl<T: Default> BitResult<T> {
 }
 
 #[cfg_attr(test, derive(Debug))]
-pub(crate) struct BoolReader {
+pub(crate) struct ArithmeticDecoder {
     chunks: Box<[[u8; 4]]>,
     state: State,
     final_bytes: [u8; 3],
@@ -53,21 +53,21 @@ struct State {
 }
 
 #[cfg_attr(test, derive(Debug))]
-struct FastReader<'a> {
+struct FastDecoder<'a> {
     chunks: &'a [[u8; 4]],
     uncommitted_state: State,
     save_state: &'a mut State,
 }
 
-impl BoolReader {
-    pub(crate) fn new() -> BoolReader {
+impl ArithmeticDecoder {
+    pub(crate) fn new() -> ArithmeticDecoder {
         let state = State {
             chunk_index: 0,
             value: 0,
             range: 255,
             bit_count: -8,
         };
-        BoolReader {
+        ArithmeticDecoder {
             chunks: Box::new([]),
             state,
             final_bytes: [0; 3],
@@ -117,7 +117,7 @@ impl BoolReader {
     /// discarded anyway.
     ///
     /// Each call to `start_accumulated_result` must be followed by a call to
-    /// `check` on the *same* `BoolReader`.
+    /// `check` on the *same* `ArithmeticDecoder`.
     #[inline(always)]
     pub(crate) fn start_accumulated_result(&mut self) -> BitResultAccumulator {
         BitResultAccumulator
@@ -216,7 +216,7 @@ impl BoolReader {
         self.cold_read_with_tree(tree, usize::from(first_node.index))
     }
 
-    // As a similar (but different) speedup to BitResult, the FastReader reads
+    // As a similar (but different) speedup to BitResult, the FastDecoder reads
     // bits under an assumption and validates it at the end.
     //
     // The idea here is that for normal-sized webp images, the vast majority
@@ -228,8 +228,8 @@ impl BoolReader {
     // work for those last few bytes -- in fact we even keep retrying the fast
     // method to save an if-statement --, but more than make up for that by
     // speeding up reading from the other thousands or millions of bytes.
-    fn fast(&mut self) -> FastReader<'_> {
-        FastReader {
+    fn fast(&mut self) -> FastDecoder<'_> {
+        FastDecoder {
             chunks: &self.chunks,
             uncommitted_state: self.state,
             save_state: &mut self.state,
@@ -377,7 +377,7 @@ impl BoolReader {
     }
 }
 
-impl FastReader<'_> {
+impl FastDecoder<'_> {
     fn commit_if_valid<T>(self, value_if_not_past_eof: T) -> Option<T> {
         // If `chunk_index > self.chunks.len()`, it means we used zeroes
         // instead of an actual chunk and `value_if_not_past_eof` is nonsense.
@@ -564,50 +564,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bool_reader_hello_short() {
-        let mut reader = BoolReader::new();
+    fn test_arithmetic_decoder_hello_short() {
+        let mut decoder = ArithmeticDecoder::new();
         let data = b"hel";
         let size = data.len();
         let mut buf = vec![[0u8; 4]; 1];
         buf.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data[..]);
-        reader.init(buf, size).unwrap();
-        let mut res = reader.start_accumulated_result();
-        assert_eq!(false, reader.read_flag().or_accumulate(&mut res));
-        assert_eq!(true, reader.read_bool(10).or_accumulate(&mut res));
-        assert_eq!(false, reader.read_bool(250).or_accumulate(&mut res));
-        assert_eq!(1, reader.read_literal(1).or_accumulate(&mut res));
-        assert_eq!(5, reader.read_literal(3).or_accumulate(&mut res));
-        assert_eq!(64, reader.read_literal(8).or_accumulate(&mut res));
-        assert_eq!(185, reader.read_literal(8).or_accumulate(&mut res));
-        reader.check(res, ()).unwrap();
+        decoder.init(buf, size).unwrap();
+        let mut res = decoder.start_accumulated_result();
+        assert_eq!(false, decoder.read_flag().or_accumulate(&mut res));
+        assert_eq!(true, decoder.read_bool(10).or_accumulate(&mut res));
+        assert_eq!(false, decoder.read_bool(250).or_accumulate(&mut res));
+        assert_eq!(1, decoder.read_literal(1).or_accumulate(&mut res));
+        assert_eq!(5, decoder.read_literal(3).or_accumulate(&mut res));
+        assert_eq!(64, decoder.read_literal(8).or_accumulate(&mut res));
+        assert_eq!(185, decoder.read_literal(8).or_accumulate(&mut res));
+        decoder.check(res, ()).unwrap();
     }
 
     #[test]
-    fn test_bool_reader_hello_long() {
-        let mut reader = BoolReader::new();
+    fn test_arithmetic_decoder_hello_long() {
+        let mut decoder = ArithmeticDecoder::new();
         let data = b"hello world";
         let size = data.len();
         let mut buf = vec![[0u8; 4]; (size + 3) / 4];
         buf.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&data[..]);
-        reader.init(buf, size).unwrap();
-        let mut res = reader.start_accumulated_result();
-        assert_eq!(false, reader.read_flag().or_accumulate(&mut res));
-        assert_eq!(true, reader.read_bool(10).or_accumulate(&mut res));
-        assert_eq!(false, reader.read_bool(250).or_accumulate(&mut res));
-        assert_eq!(1, reader.read_literal(1).or_accumulate(&mut res));
-        assert_eq!(5, reader.read_literal(3).or_accumulate(&mut res));
-        assert_eq!(64, reader.read_literal(8).or_accumulate(&mut res));
-        assert_eq!(185, reader.read_literal(8).or_accumulate(&mut res));
-        assert_eq!(31, reader.read_literal(8).or_accumulate(&mut res));
-        reader.check(res, ()).unwrap();
+        decoder.init(buf, size).unwrap();
+        let mut res = decoder.start_accumulated_result();
+        assert_eq!(false, decoder.read_flag().or_accumulate(&mut res));
+        assert_eq!(true, decoder.read_bool(10).or_accumulate(&mut res));
+        assert_eq!(false, decoder.read_bool(250).or_accumulate(&mut res));
+        assert_eq!(1, decoder.read_literal(1).or_accumulate(&mut res));
+        assert_eq!(5, decoder.read_literal(3).or_accumulate(&mut res));
+        assert_eq!(64, decoder.read_literal(8).or_accumulate(&mut res));
+        assert_eq!(185, decoder.read_literal(8).or_accumulate(&mut res));
+        assert_eq!(31, decoder.read_literal(8).or_accumulate(&mut res));
+        decoder.check(res, ()).unwrap();
     }
 
     #[test]
-    fn test_bool_reader_uninit() {
-        let mut reader = BoolReader::new();
-        let mut res = reader.start_accumulated_result();
-        let _ = reader.read_flag().or_accumulate(&mut res);
-        let result = reader.check(res, ());
+    fn test_arithmetic_decoder_uninit() {
+        let mut decoder = ArithmeticDecoder::new();
+        let mut res = decoder.start_accumulated_result();
+        let _ = decoder.read_flag().or_accumulate(&mut res);
+        let result = decoder.check(res, ());
         assert!(result.is_err());
     }
 }
