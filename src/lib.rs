@@ -13,7 +13,6 @@ pub use self::decoder::{DecodingError, LoopCount, WebPDecoder};
 pub use self::encoder::{ColorType, EncoderParams, EncodingError, WebPEncoder};
 
 mod alpha_blending;
-mod bool_reader;
 mod decoder;
 mod encoder;
 mod extended;
@@ -22,5 +21,6 @@ mod loop_filter;
 mod lossless;
 mod lossless_transform;
 mod transform;
+mod vp8_arithmetic_decoder;
 
 pub mod vp8;

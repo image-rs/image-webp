@@ -17,9 +17,8 @@ use std::io::Read;
 
 use crate::decoder::DecodingError;
 
-use super::bool_reader::BoolReader;
-use super::loop_filter;
-use super::transform;
+use super::vp8_arithmetic_decoder::ArithmeticDecoder;
+use super::{loop_filter, transform};
 
 const MAX_SEGMENTS: usize = 4;
 const NUM_DCT_TOKENS: usize = 12;
@@ -1021,7 +1020,7 @@ struct Segment {
 /// Only decodes keyframes
 pub struct Vp8Decoder<R> {
     r: R,
-    b: BoolReader,
+    b: ArithmeticDecoder,
 
     mbwidth: u16,
     mbheight: u16,
@@ -1036,7 +1035,7 @@ pub struct Vp8Decoder<R> {
     ref_delta: [i32; 4],
     mode_delta: [i32; 4],
 
-    partitions: [BoolReader; 8],
+    partitions: [ArithmeticDecoder; 8],
     num_partitions: u8,
 
     segment_tree_nodes: [TreeNode; 3],
@@ -1065,7 +1064,7 @@ impl<R: Read> Vp8Decoder<R> {
 
         Self {
             r,
-            b: BoolReader::new(),
+            b: ArithmeticDecoder::new(),
 
             mbwidth: 0,
             mbheight: 0,
@@ -1080,14 +1079,14 @@ impl<R: Read> Vp8Decoder<R> {
             mode_delta: [0; 4],
 
             partitions: [
-                BoolReader::new(),
-                BoolReader::new(),
-                BoolReader::new(),
-                BoolReader::new(),
-                BoolReader::new(),
-                BoolReader::new(),
-                BoolReader::new(),
-                BoolReader::new(),
+                ArithmeticDecoder::new(),
+                ArithmeticDecoder::new(),
+                ArithmeticDecoder::new(),
+                ArithmeticDecoder::new(),
+                ArithmeticDecoder::new(),
+                ArithmeticDecoder::new(),
+                ArithmeticDecoder::new(),
+                ArithmeticDecoder::new(),
             ],
 
             num_partitions: 1,
@@ -1631,9 +1630,9 @@ impl<R: Read> Vp8Decoder<R> {
 
         let first = if plane == 0 { 1usize } else { 0usize };
         let probs = &self.token_probs[plane];
-        let reader = &mut self.partitions[p];
+        let decoder = &mut self.partitions[p];
 
-        let mut res = reader.start_accumulated_result();
+        let mut res = decoder.start_accumulated_result();
 
         let mut complexity = complexity;
         let mut has_coefficients = false;
@@ -1643,7 +1642,7 @@ impl<R: Read> Vp8Decoder<R> {
             let band = COEFF_BANDS[i] as usize;
             let tree = &probs[band][complexity];
 
-            let token = reader
+            let token = decoder
                 .read_with_tree_with_first_node(tree, tree[skip as usize])
                 .or_accumulate(&mut res);
 
@@ -1668,8 +1667,8 @@ impl<R: Read> Vp8Decoder<R> {
                         if t == 0 {
                             break;
                         }
-                        let b = reader.read_bool(t).or_accumulate(&mut res);
-                        extra = extra + extra + b as i16;
+                        let b = decoder.read_bool(t).or_accumulate(&mut res);
+                        extra = extra + extra + i16::from(b);
                     }
 
                     i16::from(DCT_CAT_BASE[(category - DCT_CAT1) as usize]) + extra
@@ -1688,7 +1687,7 @@ impl<R: Read> Vp8Decoder<R> {
                 2
             };
 
-            if reader.read_flag().or_accumulate(&mut res) {
+            if decoder.read_flag().or_accumulate(&mut res) {
                 abs_value = -abs_value;
             }
 
@@ -1698,7 +1697,7 @@ impl<R: Read> Vp8Decoder<R> {
             has_coefficients = true;
         }
 
-        reader.check(res, has_coefficients)
+        decoder.check(res, has_coefficients)
     }
 
     fn read_residual_data(
