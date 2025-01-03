@@ -8,21 +8,16 @@
 //!
 //! # Related Links
 //! * [rfc-6386](http://tools.ietf.org/html/rfc6386) - The VP8 Data Format and Decoding Guide
-//! * [VP8.pdf](http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/37073.pdf) - An overview of
-//!   of the VP8 format
-//!
+//! * [VP8.pdf](http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/37073.pdf) - An overview of of the VP8 format
 
-use byteorder_lite::BigEndian;
-use byteorder_lite::{LittleEndian, ReadBytesExt};
+use byteorder_lite::{BigEndian, LittleEndian, ReadBytesExt};
 use std::cmp;
 use std::default::Default;
-use std::io::Read;
-use std::io::{Cursor, ErrorKind};
+use std::io::{Cursor, ErrorKind, Read};
 
 use crate::decoder::DecodingError;
 
-use super::loop_filter;
-use super::transform;
+use super::{loop_filter, transform};
 
 const MAX_SEGMENTS: usize = 4;
 const NUM_DCT_TOKENS: usize = 12;
@@ -676,8 +671,8 @@ struct BoolReader {
 }
 
 impl BoolReader {
-    pub(crate) fn new() -> BoolReader {
-        BoolReader {
+    pub(crate) fn new() -> Self {
+        Self {
             reader: Default::default(),
             range: 0,
             value: 0,
@@ -692,7 +687,7 @@ impl BoolReader {
         }
 
         self.reader = Cursor::new(buf);
-        self.value = self.reader.read_u16::<BigEndian>()? as u32;
+        self.value = u32::from(self.reader.read_u16::<BigEndian>()?);
         self.range = 255;
         self.bit_count = 0;
 
@@ -744,7 +739,7 @@ impl BoolReader {
         let mut n = n;
 
         while n != 0 {
-            v = (v << 1) + self.read_bool(128u8)? as u8;
+            v = (v << 1) + u8::from(self.read_bool(128u8)?);
             n -= 1;
         }
 
@@ -772,7 +767,7 @@ impl BoolReader {
 
         loop {
             let a = self.read_bool(probs[index as usize >> 1])?;
-            let b = index + a as isize;
+            let b = index + isize::from(a);
             index = tree[b as usize] as isize;
 
             if index <= 0 {
@@ -837,11 +832,11 @@ pub struct Frame {
 
 impl Frame {
     /// Chroma plane is half the size of the Luma plane
-    fn chroma_width(&self) -> u16 {
+    const fn chroma_width(&self) -> u16 {
         (self.width + 1) / 2
     }
 
-    fn chroma_height(&self) -> u16 {
+    const fn chroma_height(&self) -> u16 {
         (self.height + 1) / 2
     }
 
@@ -858,7 +853,7 @@ impl Frame {
             let chroma_index = usize::from(self.chroma_width()) * (y / 2);
 
             let next_index = index + usize::from(self.width);
-            Frame::fill_rgb_row(
+            Self::fill_rgb_row(
                 &self.ybuf[index..next_index],
                 &self.ubuf[chroma_index..],
                 &self.vbuf[chroma_index..],
@@ -931,7 +926,7 @@ impl Frame {
             let chroma_index = usize::from(self.chroma_width()) * (y / 2);
 
             let next_index = index + usize::from(self.width);
-            Frame::fill_rgba_row(
+            Self::fill_rgba_row(
                 &self.ybuf[index..next_index],
                 &self.ubuf[chroma_index..],
                 &self.vbuf[chroma_index..],
@@ -996,6 +991,7 @@ impl Frame {
     }
 
     /// Gets the buffer size
+    #[must_use]
     pub fn get_buf_size(&self) -> usize {
         self.ybuf.len() * 3
     }
@@ -1090,12 +1086,12 @@ pub struct Vp8Decoder<R> {
 impl<R: Read> Vp8Decoder<R> {
     /// Create a new decoder.
     /// The reader must present a raw vp8 bitstream to the decoder
-    pub fn new(r: R) -> Vp8Decoder<R> {
+    pub fn new(r: R) -> Self {
         let f = Frame::default();
         let s = Segment::default();
         let m = MacroBlock::default();
 
-        Vp8Decoder {
+        Self {
             r,
             b: BoolReader::new(),
 
@@ -1229,10 +1225,10 @@ impl<R: Read> Vp8Decoder<R> {
         };
         for i in 0usize..n {
             let base = i32::from(if self.segments_enabled {
-                if !self.segment[i].delta_values {
-                    i16::from(self.segment[i].quantizer_level)
-                } else {
+                if self.segment[i].delta_values {
                     i16::from(self.segment[i].quantizer_level) + i16::from(yac_abs)
+                } else {
+                    i16::from(self.segment[i].quantizer_level)
                 }
             } else {
                 i16::from(yac_abs)
@@ -1355,7 +1351,7 @@ impl<R: Read> Vp8Decoder<R> {
 
             self.top = init_top_macroblocks(self.frame.width as usize);
             // Almost always the first macro block, except when non exists (i.e. `width == 0`)
-            self.left = self.top.first().cloned().unwrap_or_default();
+            self.left = self.top.first().copied().unwrap_or_default();
 
             self.mbwidth = (self.frame.width + 15) / 16;
             self.mbheight = (self.frame.height + 15) / 16;
@@ -1411,10 +1407,10 @@ impl<R: Read> Vp8Decoder<R> {
             return Err(DecodingError::UnsupportedFeature(
                 "Non-keyframe frames".to_owned(),
             ));
-        } else {
-            // Refresh entropy probs ?????
-            let _ = self.b.read_literal(1);
         }
+
+        // Refresh entropy probs ?????
+        let _ = self.b.read_literal(1);
 
         self.update_token_probabilities()?;
 
@@ -1730,13 +1726,13 @@ impl<R: Read> Vp8Decoder<R> {
                         if t == 0 {
                             break;
                         }
-                        extra = extra + extra + reader.read_bool(t)? as i16;
+                        extra = extra + extra + i16::from(reader.read_bool(t)?);
                     }
 
                     i16::from(DCT_CAT_BASE[(category - DCT_CAT1) as usize]) + extra
                 }
 
-                c => panic!("unknown token: {}", c),
+                c => panic!("unknown token: {c}"),
             });
 
             skip = false;
@@ -2115,7 +2111,7 @@ impl<R: Read> Vp8Decoder<R> {
     //return values are the filter level, interior limit and hev threshold
     fn calculate_filter_parameters(&self, macroblock: &MacroBlock) -> (u8, u8, u8) {
         let segment = self.segment[macroblock.segmentid as usize];
-        let mut filter_level = self.frame.filter_level as i32;
+        let mut filter_level = i32::from(self.frame.filter_level);
 
         if self.segments_enabled {
             if segment.delta_values {
@@ -2219,53 +2215,53 @@ impl<R: Read> Vp8Decoder<R> {
 }
 
 impl LumaMode {
-    fn from_i8(val: i8) -> Option<Self> {
+    const fn from_i8(val: i8) -> Option<Self> {
         Some(match val {
-            DC_PRED => LumaMode::DC,
-            V_PRED => LumaMode::V,
-            H_PRED => LumaMode::H,
-            TM_PRED => LumaMode::TM,
-            B_PRED => LumaMode::B,
+            DC_PRED => Self::DC,
+            V_PRED => Self::V,
+            H_PRED => Self::H,
+            TM_PRED => Self::TM,
+            B_PRED => Self::B,
             _ => return None,
         })
     }
 
-    fn into_intra(self) -> Option<IntraMode> {
+    const fn into_intra(self) -> Option<IntraMode> {
         Some(match self {
-            LumaMode::DC => IntraMode::DC,
-            LumaMode::V => IntraMode::VE,
-            LumaMode::H => IntraMode::HE,
-            LumaMode::TM => IntraMode::TM,
-            LumaMode::B => return None,
+            Self::DC => IntraMode::DC,
+            Self::V => IntraMode::VE,
+            Self::H => IntraMode::HE,
+            Self::TM => IntraMode::TM,
+            Self::B => return None,
         })
     }
 }
 
 impl ChromaMode {
-    fn from_i8(val: i8) -> Option<Self> {
+    const fn from_i8(val: i8) -> Option<Self> {
         Some(match val {
-            DC_PRED => ChromaMode::DC,
-            V_PRED => ChromaMode::V,
-            H_PRED => ChromaMode::H,
-            TM_PRED => ChromaMode::TM,
+            DC_PRED => Self::DC,
+            V_PRED => Self::V,
+            H_PRED => Self::H,
+            TM_PRED => Self::TM,
             _ => return None,
         })
     }
 }
 
 impl IntraMode {
-    fn from_i8(val: i8) -> Option<Self> {
+    const fn from_i8(val: i8) -> Option<Self> {
         Some(match val {
-            B_DC_PRED => IntraMode::DC,
-            B_TM_PRED => IntraMode::TM,
-            B_VE_PRED => IntraMode::VE,
-            B_HE_PRED => IntraMode::HE,
-            B_LD_PRED => IntraMode::LD,
-            B_RD_PRED => IntraMode::RD,
-            B_VR_PRED => IntraMode::VR,
-            B_VL_PRED => IntraMode::VL,
-            B_HD_PRED => IntraMode::HD,
-            B_HU_PRED => IntraMode::HU,
+            B_DC_PRED => Self::DC,
+            B_TM_PRED => Self::TM,
+            B_VE_PRED => Self::VE,
+            B_HE_PRED => Self::HE,
+            B_LD_PRED => Self::LD,
+            B_RD_PRED => Self::RD,
+            B_VR_PRED => Self::VR,
+            B_VL_PRED => Self::VL,
+            B_HD_PRED => Self::HD,
+            B_HU_PRED => Self::HU,
             _ => return None,
         })
     }
@@ -2301,7 +2297,7 @@ fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8
             }
 
             if mbx == mbw - 1 {
-                for above in above[16..].iter_mut() {
+                for above in &mut above[16..] {
                     *above = top[mbx * 16 + 15];
                 }
             } else {
@@ -2491,7 +2487,7 @@ fn predict_bdcpred(a: &mut [u8], x0: usize, y0: usize, stride: usize) {
 
     v >>= 3;
     for chunk in a.chunks_exact_mut(stride).skip(y0).take(4) {
-        for ch in chunk[x0..][..4].iter_mut() {
+        for ch in &mut chunk[x0..][..4] {
             *ch = v as u8;
         }
     }
@@ -2548,7 +2544,7 @@ fn edge_pixels(
 
 fn predict_bvepred(a: &mut [u8], x0: usize, y0: usize, stride: usize) {
     let p = topleft_pixel(a, x0, y0, stride);
-    let (a0, a1, a2, a3, a4, _, _, _) = top_pixels(a, x0, y0, stride);
+    let (a0, a1, a2, a3, a4, ..) = top_pixels(a, x0, y0, stride);
     let avg_1 = avg3(p, a0, a1);
     let avg_2 = avg3(a0, a1, a2);
     let avg_3 = avg3(a1, a2, a3);
@@ -2575,8 +2571,8 @@ fn predict_bhepred(a: &mut [u8], x0: usize, y0: usize, stride: usize) {
     ];
 
     let mut pos = y0 * stride + x0;
-    for &avg in avgs.iter() {
-        for a_p in a[pos..=pos + 3].iter_mut() {
+    for avg in avgs {
+        for a_p in &mut a[pos..=pos + 3] {
             *a_p = avg;
         }
         pos += stride;
@@ -2821,7 +2817,7 @@ mod tests {
     fn test_avg2() {
         for i in 0u8..=255 {
             for j in 0u8..=255 {
-                let ceil_avg = ((i as f32) + (j as f32)) / 2.0;
+                let ceil_avg = (f32::from(i) + f32::from(j)) / 2.0;
                 let ceil_avg = ceil_avg.ceil() as u8;
                 assert_eq!(
                     ceil_avg,
@@ -2853,7 +2849,8 @@ mod tests {
         for i in 0u8..=255 {
             for j in 0u8..=255 {
                 for k in 0u8..=255 {
-                    let floor_avg = ((i as f32) + 2.0 * (j as f32) + { k as f32 } + 2.0) / 4.0;
+                    let floor_avg =
+                        (2.0f32.mul_add(f32::from(j), f32::from(i)) + { f32::from(k) } + 2.0) / 4.0;
                     let floor_avg = floor_avg.floor() as u8;
                     assert_eq!(
                         floor_avg,
