@@ -186,7 +186,7 @@ pub(crate) enum WebPRiffChunk {
 }
 
 impl WebPRiffChunk {
-    pub(crate) fn from_fourcc(chunk_fourcc: [u8; 4]) -> Self {
+    pub(crate) const fn from_fourcc(chunk_fourcc: [u8; 4]) -> Self {
         match &chunk_fourcc {
             b"RIFF" => Self::RIFF,
             b"WEBP" => Self::WEBP,
@@ -203,7 +203,7 @@ impl WebPRiffChunk {
         }
     }
 
-    pub(crate) fn to_fourcc(self) -> [u8; 4] {
+    pub(crate) const fn to_fourcc(self) -> [u8; 4] {
         match self {
             Self::RIFF => *b"RIFF",
             Self::WEBP => *b"WEBP",
@@ -220,7 +220,7 @@ impl WebPRiffChunk {
         }
     }
 
-    pub(crate) fn is_unknown(&self) -> bool {
+    pub(crate) const fn is_unknown(self) -> bool {
         matches!(self, Self::Unknown(_))
     }
 }
@@ -292,10 +292,10 @@ pub struct WebPDecoder<R> {
 }
 
 impl<R: BufRead + Seek> WebPDecoder<R> {
-    /// Create a new WebPDecoder from the reader `r`. The decoder performs many small reads, so the
+    /// Create a new `WebPDecoder` from the reader `r`. The decoder performs many small reads, so the
     /// reader should be buffered.
-    pub fn new(r: R) -> Result<WebPDecoder<R>, DecodingError> {
-        let mut decoder = WebPDecoder {
+    pub fn new(r: R) -> Result<Self, DecodingError> {
+        let mut decoder = Self {
             r,
             width: 0,
             height: 0,
@@ -346,8 +346,8 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 let w = self.r.read_u16::<LittleEndian>()?;
                 let h = self.r.read_u16::<LittleEndian>()?;
 
-                self.width = (w & 0x3FFF) as u32;
-                self.height = (h & 0x3FFF) as u32;
+                self.width = u32::from(w & 0x3FFF);
+                self.height = u32::from(h & 0x3FFF);
                 if self.width == 0 || self.height == 0 {
                     return Err(DecodingError::InconsistentImageSizes);
                 }
@@ -402,7 +402,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                                 self.chunks.entry(chunk).or_insert(range);
                             }
 
-                            if let WebPRiffChunk::ANMF = chunk {
+                            if chunk == WebPRiffChunk::ANMF {
                                 self.num_frames += 1;
                                 if chunk_size < 24 {
                                     return Err(DecodingError::InvalidChunkSize);
@@ -603,7 +603,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
     }
 
     /// Returns the number of bytes required to store the image or a single frame, or None if that
-    /// would take more than usize::MAX bytes.
+    /// would take more than `usize::MAX` bytes.
     pub fn output_buffer_size(&self) -> Option<usize> {
         let bytes_per_pixel = if self.has_alpha() { 4 } else { 3 };
         (self.width as usize)
@@ -656,7 +656,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     .ok_or(DecodingError::ChunkMissing)?
                     .clone();
                 let alpha_chunk = read_alpha_chunk(
-                    &mut range_reader(&mut self.r, range.start..range.end)?,
+                    &mut range_reader(&mut self.r, range)?,
                     self.width as u16,
                     self.height as u16,
                 )?;
@@ -748,7 +748,8 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 let reader = (&mut self.r).take(chunk_size);
                 let mut vp8_decoder = Vp8Decoder::new(reader);
                 let raw_frame = vp8_decoder.decode_frame()?;
-                if raw_frame.width as u32 != frame_width || raw_frame.height as u32 != frame_height
+                if u32::from(raw_frame.width) != frame_width
+                    || u32::from(raw_frame.height) != frame_height
                 {
                     return Err(DecodingError::InconsistentImageSizes);
                 }

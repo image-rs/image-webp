@@ -1,5 +1,5 @@
 //! Rudimentary utility for reading Canonical Huffman Codes.
-//! Based off https://github.com/webmproject/libwebp/blob/7f8472a610b61ec780ef0a8873cd954ac512a505/src/utils/huffman.c
+//! Based off <https://github.com/webmproject/libwebp/blob/7f8472a610b61ec780ef0a8873cd954ac512a505/src/utils/huffman.c>
 
 use std::io::BufRead;
 
@@ -39,7 +39,7 @@ impl Default for HuffmanTree {
 
 impl HuffmanTree {
     /// Builds a tree implicitly, just from code lengths
-    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<HuffmanTree, DecodingError> {
+    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<Self, DecodingError> {
         // Count symbols and build histogram
         let mut num_symbols = 0;
         let mut code_length_hist = [0; MAX_ALLOWED_CODE_LENGTH + 1];
@@ -60,7 +60,7 @@ impl HuffmanTree {
         let mut curr_code = 0;
         let mut next_codes = [0; MAX_ALLOWED_CODE_LENGTH + 1];
         let max_code_length = code_length_hist.iter().rposition(|&x| x != 0).unwrap() as u16;
-        for code_len in 1..=usize::from(max_code_length) {
+        for code_len in 1..usize::from(max_code_length) + 1 {
             next_codes[code_len] = curr_code;
             curr_code = (curr_code + code_length_hist[code_len]) << 1;
         }
@@ -71,7 +71,7 @@ impl HuffmanTree {
         }
 
         // Calculate table/tree parameters
-        let table_bits = max_code_length.min(MAX_TABLE_BITS as u16);
+        let table_bits = max_code_length.min(u16::from(MAX_TABLE_BITS));
         let table_size = (1 << table_bits) as usize;
         let table_mask = table_size as u16 - 1;
         let tree_size = code_length_hist[table_bits as usize + 1..=max_code_length as usize]
@@ -91,7 +91,7 @@ impl HuffmanTree {
 
             if length <= table_bits {
                 let mut j = (u16::reverse_bits(code) >> (16 - length)) as usize;
-                let entry = ((length as u32) << 16) | symbol as u32;
+                let entry = (u32::from(length) << 16) | symbol as u32;
                 while j < table_size {
                     table[j] = entry;
                     j += 1 << length as usize;
@@ -134,7 +134,7 @@ impl HuffmanTree {
 
                 match tree[node_index] {
                     HuffmanTreeNode::Empty => {
-                        tree[node_index] = HuffmanTreeNode::Leaf(symbol as u16)
+                        tree[node_index] = HuffmanTreeNode::Leaf(symbol as u16);
                     }
                     HuffmanTreeNode::Leaf(_) => return Err(DecodingError::HuffmanError),
                     HuffmanTreeNode::Branch(_offset) => return Err(DecodingError::HuffmanError),
@@ -149,23 +149,23 @@ impl HuffmanTree {
         }))
     }
 
-    pub(crate) fn build_single_node(symbol: u16) -> HuffmanTree {
+    pub(crate) const fn build_single_node(symbol: u16) -> Self {
         Self(HuffmanTreeInner::Single(symbol))
     }
 
-    pub(crate) fn build_two_node(zero: u16, one: u16) -> HuffmanTree {
+    pub(crate) fn build_two_node(zero: u16, one: u16) -> Self {
         Self(HuffmanTreeInner::Tree {
             tree: vec![
                 HuffmanTreeNode::Leaf(zero),
                 HuffmanTreeNode::Leaf(one),
                 HuffmanTreeNode::Empty,
             ],
-            table: vec![1 << 16 | zero as u32, 1 << 16 | one as u32],
+            table: vec![(1 << 16) | u32::from(zero), (1 << 16) | u32::from(one)],
             table_mask: 0x1,
         })
     }
 
-    pub(crate) fn is_single_node(&self) -> bool {
+    pub(crate) const fn is_single_node(&self) -> bool {
         matches!(self.0, HuffmanTreeInner::Single(_))
     }
 
@@ -230,10 +230,7 @@ impl HuffmanTree {
     ///
     /// Returns a tuple of the codelength and symbol value. This function may return wrong
     /// information if there aren't enough bits in the bit reader to read the next symbol.
-    pub(crate) fn peek_symbol<R: BufRead>(
-        &self,
-        bit_reader: &mut BitReader<R>,
-    ) -> Option<(u8, u16)> {
+    pub(crate) fn peek_symbol<R: BufRead>(&self, bit_reader: &BitReader<R>) -> Option<(u8, u16)> {
         match &self.0 {
             HuffmanTreeInner::Tree {
                 table, table_mask, ..

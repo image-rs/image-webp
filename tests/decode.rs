@@ -1,8 +1,6 @@
-use std::{
-    fs::create_dir_all,
-    io::{Cursor, Write},
-    path::PathBuf,
-};
+use std::fs::create_dir_all;
+use std::io::{Cursor, Write};
+use std::path::PathBuf;
 
 // Write images to `out/` directory on test failure - useful for diffing with reference images.
 const WRITE_IMAGES_ON_FAILURE: bool = false;
@@ -128,12 +126,7 @@ fn reference_test(file: &str) {
             let mut data = vec![0; width as usize * height as usize * bytes_per_pixel];
             decoder.read_frame(&mut data).unwrap();
 
-            if !decoder.is_lossy() {
-                if data != reference_data {
-                    save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
-                    panic!("Pixel mismatch")
-                }
-            } else {
+            if decoder.is_lossy() {
                 let num_bytes_different = data
                     .iter()
                     .zip(reference_data.iter())
@@ -144,6 +137,9 @@ fn reference_test(file: &str) {
                     save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
                 }
                 assert!(percentage_different < 10, "More than 10% of pixels differ");
+            } else if data != reference_data {
+                save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
+                panic!("Pixel mismatch")
             }
         }
     }
