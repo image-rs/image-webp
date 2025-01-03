@@ -301,7 +301,7 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
         let mut decoder = LosslessDecoder::new(reader);
 
         let mut data = vec![0; usize::from(width) * usize::from(height) * 4];
-        decoder.decode_frame(width as u32, height as u32, true, &mut data)?;
+        decoder.decode_frame(u32::from(width), u32::from(height), true, &mut data)?;
 
         let mut green = vec![0; usize::from(width) * usize::from(height)];
         for (rgba_val, green_val) in data.chunks_exact(4).zip(green.iter_mut()) {
