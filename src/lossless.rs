@@ -787,10 +787,10 @@ impl<R: BufRead> BitReader<R> {
         let value = self.peek(num) as u32;
         self.consume(num)?;
 
-        match value.try_into() {
-            Ok(value) => Ok(value),
-            Err(_) => unreachable!("Value too large to fit in type"),
-        }
+        value.try_into().map_err(|_| {
+            debug_assert!(false, "Value too large to fit in type");
+            DecodingError::BitStreamError
+        })
     }
 }
 
