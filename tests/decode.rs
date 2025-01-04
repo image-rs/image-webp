@@ -1,8 +1,6 @@
-use std::{
-    fs::create_dir_all,
-    io::{Cursor, Write},
-    path::PathBuf,
-};
+use std::fs::create_dir_all;
+use std::io::{Cursor, Write};
+use std::path::PathBuf;
 
 // Write images to `out/` directory on test failure - useful for diffing with reference images.
 const WRITE_IMAGES_ON_FAILURE: bool = false;

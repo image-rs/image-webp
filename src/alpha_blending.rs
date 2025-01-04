@@ -1,8 +1,8 @@
 //! Optimized alpha blending routines based on libwebp
 //!
-//! https://github.com/webmproject/libwebp/blob/e4f7a9f0c7c9fbfae1568bc7fa5c94b989b50872/src/demux/anim_decode.c#L215-L267
+//! <https://github.com/webmproject/libwebp/blob/e4f7a9f0c7c9fbfae1568bc7fa5c94b989b50872/src/demux/anim_decode.c#L215-L267>
 
-fn channel_shift(i: u32) -> u32 {
+const fn channel_shift(i: u32) -> u32 {
     i * 8
 }
 
@@ -18,8 +18,9 @@ fn blend_channel_nonpremult(
 ) -> u8 {
     let src_channel = ((src >> shift) & 0xff) as u8;
     let dst_channel = ((dst >> shift) & 0xff) as u8;
-    let blend_unscaled = (src_channel as u32 * src_a as u32) + (dst_channel as u32 * dst_a as u32);
-    debug_assert!(u64::from(blend_unscaled) < (1u64 << 32) / scale as u64);
+    let blend_unscaled =
+        (u32::from(src_channel) * u32::from(src_a)) + (u32::from(dst_channel) * u32::from(dst_a));
+    debug_assert!(u64::from(blend_unscaled) < (1u64 << 32) / u64::from(scale));
     ((blend_unscaled * scale) >> channel_shift(3)) as u8
 }
 
@@ -35,8 +36,8 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
         // libwebp used the following formula here:
         //let dst_factor_a = (dst_a as u32 * (256 - src_a as u32)) >> 8;
         // however, we've found that we can use a more precise approximation without losing performance:
-        let dst_factor_a = div_by_255(dst_a as u32 * (255 - src_a as u32));
-        let blend_a = src_a as u32 + dst_factor_a;
+        let dst_factor_a = div_by_255(u32::from(dst_a) * (255 - u32::from(src_a)));
+        let blend_a = u32::from(src_a) + dst_factor_a;
         let scale = (1u32 << 24) / blend_a;
 
         let blend_r =
@@ -45,11 +46,11 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
             blend_channel_nonpremult(src, src_a, dst, dst_factor_a as u8, scale, channel_shift(1));
         let blend_b =
             blend_channel_nonpremult(src, src_a, dst, dst_factor_a as u8, scale, channel_shift(2));
-        debug_assert!(src_a as u32 + dst_factor_a < 256);
+        debug_assert!(u32::from(src_a) + dst_factor_a < 256);
 
-        ((blend_r as u32) << channel_shift(0))
-            | ((blend_g as u32) << channel_shift(1))
-            | ((blend_b as u32) << channel_shift(2))
+        (u32::from(blend_r) << channel_shift(0))
+            | (u32::from(blend_g) << channel_shift(1))
+            | (u32::from(blend_b) << channel_shift(2))
             | (blend_a << channel_shift(3))
     }
 }
@@ -69,7 +70,7 @@ pub(crate) fn do_alpha_blending(buffer: [u8; 4], canvas: [u8; 4]) -> [u8; 4] {
 // https://arxiv.org/pdf/2202.02864
 // https://github.com/image-rs/image-webp/issues/119#issuecomment-2544007820
 #[inline]
-fn div_by_255(v: u32) -> u32 {
+const fn div_by_255(v: u32) -> u32 {
     (((v + 0x80) >> 8) + v + 0x80) >> 8
 }
 
@@ -116,9 +117,10 @@ mod tests {
                         let slow = do_alpha_blending_reference([r1, 0, 0, a1], [r2, 0, 0, a2]);
                         // libwebp doesn't do exact blending and so we don't either
                         for (o, s) in opt.iter().zip(slow.iter()) {
-                            if o.abs_diff(*s) > 3 {
-                                panic!("Mismatch in results! opt: {opt:?}, slow: {slow:?}, blended values: [{r1}, 0, 0, {a1}], [{r2}, 0, 0, {a2}]");
-                            }
+                            assert!(
+                                o.abs_diff(*s) <= 3,
+                                "Mismatch in results! opt: {opt:?}, slow: {slow:?}, blended values: [{r1}, 0, 0, {a1}], [{r2}, 0, 0, {a2}]"
+                            );
                         }
                     }
                 }
