@@ -612,8 +612,12 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
     }
 
     /// Returns the raw bytes of the image. For animated images, this is the first frame.
+    ///
+    /// Fails with `ImageTooLarge` if `buf` has length different than `output_buffer_size()`
     pub fn read_image(&mut self, buf: &mut [u8]) -> Result<(), DecodingError> {
-        assert_eq!(Some(buf.len()), self.output_buffer_size());
+        if Some(buf.len()) != self.output_buffer_size() {
+            return Err(DecodingError::ImageTooLarge);
+        }
 
         if self.is_animated() {
             let saved = std::mem::take(&mut self.animation);
