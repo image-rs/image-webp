@@ -1,7 +1,6 @@
 //! Decoding of lossless WebP images
 //!
 //! [Lossless spec](https://developers.google.com/speed/webp/docs/webp_lossless_bitstream_specification)
-//!
 
 use std::io::BufRead;
 use std::mem;
@@ -72,8 +71,8 @@ pub(crate) struct LosslessDecoder<R> {
 
 impl<R: BufRead> LosslessDecoder<R> {
     /// Create a new decoder
-    pub(crate) fn new(r: R) -> LosslessDecoder<R> {
-        LosslessDecoder {
+    pub(crate) const fn new(r: R) -> Self {
+        Self {
             bit_reader: BitReader::new(r),
             transforms: [None, None, None, None],
             transform_order: Vec::new(),
@@ -144,10 +143,15 @@ impl<R: BufRead> LosslessDecoder<R> {
                     size_bits,
                     transform_data,
                 } => {
-                    apply_color_transform(&mut buf[..image_size], width, *size_bits, transform_data)
+                    apply_color_transform(
+                        &mut buf[..image_size],
+                        width,
+                        *size_bits,
+                        transform_data,
+                    );
                 }
                 TransformType::SubtractGreen => {
-                    apply_subtract_green_transform(&mut buf[..image_size])
+                    apply_subtract_green_transform(&mut buf[..image_size]);
                 }
                 TransformType::ColorIndexingTransform {
                     table_size,
@@ -155,7 +159,13 @@ impl<R: BufRead> LosslessDecoder<R> {
                 } => {
                     width = self.width;
                     image_size = usize::from(width) * usize::from(self.height) * 4;
-                    apply_color_indexing_transform(buf, width, self.height, *table_size, table_data)
+                    apply_color_indexing_transform(
+                        buf,
+                        width,
+                        self.height,
+                        *table_size,
+                        table_data,
+                    );
                 }
             }
         }
@@ -448,13 +458,13 @@ impl<R: BufRead> LosslessDecoder<R> {
 
                 if symbol + repeat > num_symbols {
                     return Err(DecodingError::BitStreamError);
-                } else {
-                    let length = if use_prev { prev_code_len } else { 0 };
-                    while repeat > 0 {
-                        repeat -= 1;
-                        code_lengths[usize::from(symbol)] = length;
-                        symbol += 1;
-                    }
+                }
+
+                let length = if use_prev { prev_code_len } else { 0 };
+                while repeat > 0 {
+                    repeat -= 1;
+                    code_lengths[usize::from(symbol)] = length;
+                    symbol += 1;
                 }
             }
         }
@@ -596,7 +606,7 @@ impl<R: BufRead> LosslessDecoder<R> {
                 index += 1;
 
                 if index < next_block_start {
-                    if let Some((bits, code)) = tree[GREEN].peek_symbol(&mut self.bit_reader) {
+                    if let Some((bits, code)) = tree[GREEN].peek_symbol(&self.bit_reader) {
                         if code >= 280 {
                             self.bit_reader.consume(bits)?;
                             data[index * 4..][..4]
@@ -712,7 +722,7 @@ pub(crate) struct BitReader<R> {
 }
 
 impl<R: BufRead> BitReader<R> {
-    fn new(reader: R) -> Self {
+    const fn new(reader: R) -> Self {
         Self {
             reader,
             buffer: 0,
@@ -746,12 +756,12 @@ impl<R: BufRead> BitReader<R> {
     }
 
     /// Peeks at the next `num` bits in the buffer.
-    pub(crate) fn peek(&self, num: u8) -> u64 {
+    pub(crate) const fn peek(&self, num: u8) -> u64 {
         self.buffer & ((1 << num) - 1)
     }
 
     /// Peeks at the full buffer.
-    pub(crate) fn peek_full(&self) -> u64 {
+    pub(crate) const fn peek_full(&self) -> u64 {
         self.buffer
     }
 
@@ -777,10 +787,10 @@ impl<R: BufRead> BitReader<R> {
         let value = self.peek(num) as u32;
         self.consume(num)?;
 
-        match value.try_into() {
-            Ok(value) => Ok(value),
-            Err(_) => unreachable!("Value too large to fit in type"),
-        }
+        value.try_into().map_err(|_| {
+            debug_assert!(false, "Value too large to fit in type");
+            DecodingError::BitStreamError
+        })
     }
 }
 

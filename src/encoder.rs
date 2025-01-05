@@ -57,7 +57,7 @@ impl<W: Write> BitWriter<W> {
         if self.nbits >= 64 {
             self.writer.write_all(&self.buffer.to_le_bytes())?;
             self.nbits -= 64;
-            self.buffer = bits.checked_shr((nbits - self.nbits) as u32).unwrap_or(0);
+            self.buffer = bits.checked_shr(u32::from(nbits - self.nbits)).unwrap_or(0);
         }
         debug_assert!(self.nbits < 64);
         Ok(())
@@ -82,10 +82,10 @@ fn write_single_entry_huffman_tree<W: Write>(w: &mut BitWriter<W>, symbol: u8) -
     w.write_bits(1, 2)?;
     if symbol <= 1 {
         w.write_bits(0, 1)?;
-        w.write_bits(symbol as u64, 1)?;
+        w.write_bits(u64::from(symbol), 1)?;
     } else {
         w.write_bits(1, 1)?;
-        w.write_bits(symbol as u64, 8)?;
+        w.write_bits(u64::from(symbol), 8)?;
     }
     Ok(())
 }
@@ -188,7 +188,7 @@ fn build_huffman_tree(
         let mut len = length_limit;
         let mut indexes = frequencies.iter().copied().enumerate().collect::<Vec<_>>();
         indexes.sort_unstable_by_key(|&(_, frequency)| frequency);
-        for &(i, frequency) in indexes.iter() {
+        for &(i, frequency) in &indexes {
             if frequency > 0 {
                 while counts[len as usize] == 0 {
                     len -= 1;
@@ -251,13 +251,13 @@ fn write_huffman_tree<W: Write>(
     w.write_bits(0, 1)?; // normal huffman tree
     w.write_bits(19 - 4, 4)?; // num_code_lengths - 4
 
-    for &i in CODE_LENGTH_ORDER.iter() {
+    for i in CODE_LENGTH_ORDER {
         if i > 15 || code_length_frequencies[i] == 0 {
             w.write_bits(0, 3)?;
         } else if single_code_length_length {
             w.write_bits(1, 3)?;
         } else {
-            w.write_bits(code_length_lengths[i] as u64, 3)?;
+            w.write_bits(u64::from(code_length_lengths[i]), 3)?;
         }
     }
 
@@ -275,7 +275,7 @@ fn write_huffman_tree<W: Write>(
     if !single_code_length_length {
         for &len in lengths.iter() {
             w.write_bits(
-                code_length_codes[len as usize] as u64,
+                u64::from(code_length_codes[len as usize]),
                 code_length_lengths[len as usize],
             )?;
         }
@@ -284,7 +284,7 @@ fn write_huffman_tree<W: Write>(
     Ok(())
 }
 
-fn length_to_symbol(len: u16) -> (u16, u8) {
+const fn length_to_symbol(len: u16) -> (u16, u8) {
     let len = len - 1;
     let highest_bit = 15 - len.leading_zeros() as u16; // TODO: use ilog2 once MSRV >= 1.67
     let second_highest_bit = (len >> (highest_bit - 1)) & 1;
@@ -331,11 +331,11 @@ fn write_run<W: Write>(
     if run_length > 0 {
         if run_length <= 4 {
             let symbol = 256 + run_length - 1;
-            w.write_bits(codes1[symbol] as u64, lengths1[symbol])?;
+            w.write_bits(u64::from(codes1[symbol]), lengths1[symbol])?;
         } else {
             let (symbol, extra_bits) = length_to_symbol(run_length as u16);
             w.write_bits(
-                codes1[256 + symbol as usize] as u64,
+                u64::from(codes1[256 + symbol as usize]),
                 lengths1[256 + symbol as usize],
             )?;
             w.write_bits(
@@ -392,7 +392,7 @@ fn encode_frame<W: Write>(
     };
 
     assert_eq!(
-        (width as u64 * height as u64).saturating_mul(bytes_per_pixel),
+        (u64::from(width) * u64::from(height)).saturating_mul(bytes_per_pixel),
         data.len() as u64
     );
 
@@ -401,10 +401,10 @@ fn encode_frame<W: Write>(
     }
 
     w.write_bits(0x2f, 8)?; // signature
-    w.write_bits(width as u64 - 1, 14)?;
-    w.write_bits(height as u64 - 1, 14)?;
+    w.write_bits(u64::from(width) - 1, 14)?;
+    w.write_bits(u64::from(height) - 1, 14)?;
 
-    w.write_bits(is_alpha as u64, 1)?; // alpha used
+    w.write_bits(u64::from(is_alpha), 1)?; // alpha used
     w.write_bits(0x0, 3)?; // version
 
     // subtract green transform
@@ -542,7 +542,7 @@ fn encode_frame<W: Write>(
         ColorType::L8 => {
             while let Some(pixel) = it.next() {
                 w.write_bits(
-                    codes1[pixel[1] as usize] as u64,
+                    u64::from(codes1[pixel[1] as usize]),
                     lengths1[pixel[1] as usize],
                 )?;
                 write_run(w, pixel, &mut it, &codes1, &lengths1)?;
@@ -553,8 +553,8 @@ fn encode_frame<W: Write>(
                 let len1 = lengths1[pixel[1] as usize];
                 let len3 = lengths3[pixel[3] as usize];
 
-                let code =
-                    codes1[pixel[1] as usize] as u64 | (codes3[pixel[3] as usize] as u64) << len1;
+                let code = u64::from(codes1[pixel[1] as usize])
+                    | (u64::from(codes3[pixel[3] as usize]) << len1);
 
                 w.write_bits(code, len1 + len3)?;
                 write_run(w, pixel, &mut it, &codes1, &lengths1)?;
@@ -566,9 +566,9 @@ fn encode_frame<W: Write>(
                 let len0 = lengths0[pixel[0] as usize];
                 let len2 = lengths2[pixel[2] as usize];
 
-                let code = codes1[pixel[1] as usize] as u64
-                    | (codes0[pixel[0] as usize] as u64) << len1
-                    | (codes2[pixel[2] as usize] as u64) << (len1 + len0);
+                let code = u64::from(codes1[pixel[1] as usize])
+                    | (u64::from(codes0[pixel[0] as usize]) << len1)
+                    | (u64::from(codes2[pixel[2] as usize]) << (len1 + len0));
 
                 w.write_bits(code, len1 + len0 + len2)?;
                 write_run(w, pixel, &mut it, &codes1, &lengths1)?;
@@ -581,10 +581,10 @@ fn encode_frame<W: Write>(
                 let len2 = lengths2[pixel[2] as usize];
                 let len3 = lengths3[pixel[3] as usize];
 
-                let code = codes1[pixel[1] as usize] as u64
-                    | (codes0[pixel[0] as usize] as u64) << len1
-                    | (codes2[pixel[2] as usize] as u64) << (len1 + len0)
-                    | (codes3[pixel[3] as usize] as u64) << (len1 + len0 + len2);
+                let code = u64::from(codes1[pixel[1] as usize])
+                    | (u64::from(codes0[pixel[0] as usize]) << len1)
+                    | (u64::from(codes2[pixel[2] as usize]) << (len1 + len0))
+                    | (u64::from(codes3[pixel[3] as usize]) << (len1 + len0 + len2));
 
                 w.write_bits(code, len1 + len0 + len2 + len3)?;
                 write_run(w, pixel, &mut it, &codes1, &lengths1)?;
@@ -596,7 +596,7 @@ fn encode_frame<W: Write>(
     Ok(())
 }
 
-fn chunk_size(inner_bytes: usize) -> u32 {
+const fn chunk_size(inner_bytes: usize) -> u32 {
     if inner_bytes % 2 == 1 {
         (inner_bytes + 1) as u32 + 8
     } else {
@@ -809,7 +809,7 @@ mod tests {
             .encode(&img[..256 * 256 * 3], 256, 256, crate::ColorType::Rgb8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
-        assert!(&img[..256 * 256 * 3] == &*decoded);
+        assert_eq!(img[..256 * 256 * 3], *decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
@@ -818,7 +818,7 @@ mod tests {
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
-        assert!(&img == &*decoded);
+        assert_eq!(img, *decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
@@ -828,7 +828,7 @@ mod tests {
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
-        assert!(&img == &*decoded);
+        assert_eq!(img, *decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
@@ -838,11 +838,11 @@ mod tests {
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
-        assert!(&img == &*decoded);
+        assert_eq!(img, *decoded);
 
         let mut output = Vec::new();
         let mut encoder = WebPEncoder::new(&mut output);
-        encoder.set_params(params.clone());
+        encoder.set_params(params);
         encoder.set_xmp_metadata(vec![0; 7]);
         encoder.set_icc_profile(vec![0; 8]);
         encoder.set_icc_profile(vec![0; 9]);
@@ -850,6 +850,6 @@ mod tests {
             .encode(&img, 256, 256, crate::ColorType::Rgba8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
-        assert!(&img == &*decoded);
+        assert_eq!(img, *decoded);
     }
 }

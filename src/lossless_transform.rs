@@ -216,20 +216,25 @@ pub fn apply_predictor_transform_11(image_data: &mut [u8], range: Range<usize>, 
     let top = &old[range.start - width * 4..];
 
     let mut l = [
-        old[range.start - 4] as i16,
-        old[range.start - 3] as i16,
-        old[range.start - 2] as i16,
-        old[range.start - 1] as i16,
+        i16::from(old[range.start - 4]),
+        i16::from(old[range.start - 3]),
+        i16::from(old[range.start - 2]),
+        i16::from(old[range.start - 1]),
     ];
     let mut tl = [
-        old[range.start - width * 4 - 4] as i16,
-        old[range.start - width * 4 - 3] as i16,
-        old[range.start - width * 4 - 2] as i16,
-        old[range.start - width * 4 - 1] as i16,
+        i16::from(old[range.start - width * 4 - 4]),
+        i16::from(old[range.start - width * 4 - 3]),
+        i16::from(old[range.start - width * 4 - 2]),
+        i16::from(old[range.start - width * 4 - 1]),
     ];
 
     for (chunk, top) in current.chunks_exact_mut(4).zip(top.chunks_exact(4)) {
-        let t = [top[0] as i16, top[1] as i16, top[2] as i16, top[3] as i16];
+        let t = [
+            i16::from(top[0]),
+            i16::from(top[1]),
+            i16::from(top[2]),
+            i16::from(top[3]),
+        ];
 
         let mut predict_left = 0;
         let mut predict_top = 0;
@@ -257,10 +262,10 @@ pub fn apply_predictor_transform_11(image_data: &mut [u8], range: Range<usize>, 
 
         tl = t;
         l = [
-            chunk[0] as i16,
-            chunk[1] as i16,
-            chunk[2] as i16,
-            chunk[3] as i16,
+            i16::from(chunk[0]),
+            i16::from(chunk[1]),
+            i16::from(chunk[2]),
+            i16::from(chunk[3]),
         ];
     }
 }
@@ -382,7 +387,7 @@ pub(crate) fn apply_color_indexing_transform(
     table_data: &[u8],
 ) {
     // TODO: Replace with built-in div_ceil when MSRV is 1.73+
-    fn div_ceil(a: u16, b: u16) -> u16 {
+    const fn div_ceil(a: u16, b: u16) -> u16 {
         let d = a / b;
         let r = a % b;
         if r > 0 && b > 0 {
@@ -416,7 +421,7 @@ pub(crate) fn apply_color_indexing_transform(
             .flat_map(|i| {
                 let mut entry = Vec::new();
                 for j in 0..(1 << width_bits) {
-                    let k = i >> (j * bits_per_entry) & mask;
+                    let k = (i >> (j * bits_per_entry)) & mask;
                     if k < table_size {
                         entry.extend_from_slice(&table_data[usize::from(k) * 4..][..4]);
                     } else {
