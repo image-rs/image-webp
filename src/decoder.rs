@@ -749,7 +749,8 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             WebPRiffChunk::VP8 => {
                 let reader = (&mut self.r).take(chunk_size);
                 let raw_frame = Vp8Decoder::decode_frame(reader)?;
-                if raw_frame.width as u32 != frame_width || raw_frame.height as u32 != frame_height
+                if u32::from(raw_frame.width) != frame_width
+                    || u32::from(raw_frame.height) != frame_height
                 {
                     return Err(DecodingError::InconsistentImageSizes);
                 }
