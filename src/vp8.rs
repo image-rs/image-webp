@@ -1090,7 +1090,7 @@ pub struct Vp8Decoder<R> {
 impl<R: Read> Vp8Decoder<R> {
     /// Create a new decoder.
     /// The reader must present a raw vp8 bitstream to the decoder
-    pub fn new(r: R) -> Vp8Decoder<R> {
+    fn new(r: R) -> Vp8Decoder<R> {
         let f = Frame::default();
         let s = Segment::default();
         let m = MacroBlock::default();
@@ -2172,7 +2172,12 @@ impl<R: Read> Vp8Decoder<R> {
     }
 
     /// Decodes the current frame
-    pub fn decode_frame(&mut self) -> Result<&Frame, DecodingError> {
+    pub fn decode_frame(r: R) -> Result<Frame, DecodingError> {
+        let decoder = Self::new(r);
+        decoder.decode_frame_()
+    }
+
+    fn decode_frame_(mut self) -> Result<Frame, DecodingError> {
         self.read_frame_header()?;
 
         for mby in 0..self.mbheight as usize {
@@ -2214,7 +2219,7 @@ impl<R: Read> Vp8Decoder<R> {
             }
         }
 
-        Ok(&self.frame)
+        Ok(self.frame)
     }
 }
 

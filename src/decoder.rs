@@ -639,10 +639,8 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 .chunks
                 .get(&WebPRiffChunk::VP8)
                 .ok_or(DecodingError::ChunkMissing)?;
-            // TODO: avoid cloning frame
-            let frame = Vp8Decoder::new(range_reader(&mut self.r, range.start..range.end)?)
-                .decode_frame()?
-                .clone();
+            let reader = range_reader(&mut self.r, range.start..range.end)?;
+            let frame = Vp8Decoder::decode_frame(reader)?;
             if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
                 return Err(DecodingError::InconsistentImageSizes);
             }
@@ -746,8 +744,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         let (frame, frame_has_alpha): (Vec<u8>, bool) = match chunk {
             WebPRiffChunk::VP8 => {
                 let reader = (&mut self.r).take(chunk_size);
-                let mut vp8_decoder = Vp8Decoder::new(reader);
-                let raw_frame = vp8_decoder.decode_frame()?;
+                let raw_frame = Vp8Decoder::decode_frame(reader)?;
                 if raw_frame.width as u32 != frame_width || raw_frame.height as u32 != frame_height
                 {
                     return Err(DecodingError::InconsistentImageSizes);
@@ -781,8 +778,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     return Err(DecodingError::ChunkHeaderInvalid(next_chunk.to_fourcc()));
                 }
 
-                let mut vp8_decoder = Vp8Decoder::new((&mut self.r).take(next_chunk_size));
-                let frame = vp8_decoder.decode_frame()?;
+                let frame = Vp8Decoder::decode_frame((&mut self.r).take(next_chunk_size))?;
 
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
                 frame.fill_rgba(&mut rgba_frame);
