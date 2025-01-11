@@ -1,5 +1,17 @@
 # Release Notes
 
+### Version 0.2.1
+
+Changes:
+ - Increased the required Rust compiler version to v1.80
+
+Optimizations:
+ - Removed bounds checks from hot loops in `read_coefficients()` (#121)
+ - Faster YUV -> RGBA conversion for a 7% speedup on lossy RGBA images (#122)
+ - Faster alpha blending for up to 20% speedup on animated images (#123)
+ - Much faster arithmetic decoding for up to 30% speedup on lossy images (#124)
+ - Avoid unnecessarily cloning image data for a 4% speedup (#126)
+
 ### Version 0.2.0
 
 Breaking Changes:
