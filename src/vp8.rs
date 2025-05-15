@@ -804,11 +804,11 @@ pub struct Frame {
 impl Frame {
     /// Chroma plane is half the size of the Luma plane
     const fn chroma_width(&self) -> u16 {
-        (self.width + 1) / 2
+        self.width.div_ceil(2)
     }
 
     const fn chroma_height(&self) -> u16 {
-        (self.height + 1) / 2
+        self.height.div_ceil(2)
     }
 
     /// Fills an rgb buffer with the image
@@ -1136,7 +1136,7 @@ impl<R: Read> Vp8Decoder<R> {
                     .expect("Reading from &[u8] can't fail and the chunk is complete");
 
                 let size = size as usize;
-                let mut buf = vec![[0; 4]; (size + 3) / 4];
+                let mut buf = vec![[0; 4]; size.div_ceil(4)];
                 let bytes: &mut [u8] = buf.as_mut_slice().as_flattened_mut();
                 self.r.read_exact(&mut bytes[..size])?;
                 self.partitions[i].init(buf, size)?;
@@ -1146,7 +1146,7 @@ impl<R: Read> Vp8Decoder<R> {
         let mut buf = Vec::new();
         self.r.read_to_end(&mut buf)?;
         let size = buf.len();
-        let mut chunks = vec![[0; 4]; (size + 3) / 4];
+        let mut chunks = vec![[0; 4]; size.div_ceil(4)];
         chunks.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&buf);
         self.partitions[n - 1].init(chunks, size)?;
 
@@ -1293,8 +1293,8 @@ impl<R: Read> Vp8Decoder<R> {
             // Almost always the first macro block, except when non exists (i.e. `width == 0`)
             self.left = self.top.first().copied().unwrap_or_default();
 
-            self.mbwidth = (self.frame.width + 15) / 16;
-            self.mbheight = (self.frame.height + 15) / 16;
+            self.mbwidth = self.frame.width.div_ceil(16);
+            self.mbheight = self.frame.height.div_ceil(16);
 
             self.frame.ybuf = vec![0u8; self.frame.width as usize * self.frame.height as usize];
             self.frame.ubuf =
@@ -1307,7 +1307,7 @@ impl<R: Read> Vp8Decoder<R> {
         }
 
         let size = first_partition_size as usize;
-        let mut buf = vec![[0; 4]; (size + 3) / 4];
+        let mut buf = vec![[0; 4]; size.div_ceil(4)];
         let bytes: &mut [u8] = buf.as_mut_slice().as_flattened_mut();
         self.r.read_exact(&mut bytes[..size])?;
 
@@ -2215,7 +2215,7 @@ impl IntraMode {
 }
 
 fn init_top_macroblocks(width: usize) -> Vec<MacroBlock> {
-    let mb_width = (width + 15) / 16;
+    let mb_width = width.div_ceil(16);
 
     let mb = MacroBlock {
         // Section 11.3 #3
