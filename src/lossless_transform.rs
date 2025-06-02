@@ -387,11 +387,12 @@ pub(crate) fn apply_color_indexing_transform(
     table_data: &[u8],
 ) {
     if table_size > 16 {
-        let mut table = table_data.chunks_exact(4).collect::<Vec<_>>();
-        table.resize(256, &[0; 4]);
+        let mut table: Vec<[u8; 4]> = table_data.chunks_exact(4).map(|c| TryInto::<[u8; 4]>::try_into(c).unwrap()).collect();
+        table.resize(256, [0; 4]);
+        let table: &[[u8; 4]; 256] = table.as_slice().try_into().unwrap();
 
         for pixel in image_data.chunks_exact_mut(4) {
-            pixel.copy_from_slice(table[pixel[1] as usize]);
+            pixel.copy_from_slice(&table[pixel[1] as usize]);
         }
     } else {
         let width_bits: u8 = if table_size <= 2 {
