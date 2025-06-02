@@ -387,8 +387,12 @@ pub(crate) fn apply_color_indexing_transform(
     table_data: &[u8],
 ) {
     if table_size > 16 {
-        // convert the table of colors into a Vec of color values that can be directly indexed, and that the compiler knows are always 4 bytes in size
-        let mut table: Vec<[u8; 4]> = table_data.chunks_exact(4).map(|c| TryInto::<[u8; 4]>::try_into(c).unwrap()).collect();
+        // convert the table of colors into a Vec of color values that can be directly indexed
+        let mut table: Vec<[u8; 4]> = table_data
+            .chunks_exact(4)
+            // convince the compiler that each chunk is 4 bytes long, important for optimizations in the loop below
+            .map(|c| TryInto::<[u8; 4]>::try_into(c).unwrap())
+            .collect();
         // pad the table to 256 values if it's smaller than that so we could index into it by u8 without bounds checks
         table.resize(256, [0; 4]);
         // convince the compiler that the length of the table is 256 to avoid bounds checks in the loop below
