@@ -350,9 +350,9 @@ pub(crate) fn apply_color_transform(
     let width = usize::from(width);
 
     for (y, row) in image_data.chunks_exact_mut(width * 4).enumerate() {
-        let block_index_base = (y >> size_bits) * block_xsize;
-        let block_tf_data = &transform_data[block_index_base..];
-        for (block, transform) in row.chunks_exact_mut(4 << size_bits).zip(block_tf_data.chunks_exact(4)) {
+        let transform_data_start = (y >> size_bits) * block_xsize * 4;
+        let block_tf_data = &transform_data[transform_data_start ..];
+        for (block, transform) in row.chunks_mut(4 << size_bits).zip(block_tf_data.chunks_exact(4)) {
             let red_to_blue = transform[0];
             let green_to_blue = transform[1];
             let green_to_red = transform[2];
