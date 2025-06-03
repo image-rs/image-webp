@@ -170,5 +170,6 @@ reftest!(
     dark,
     tiny,
     lossless_indexed_1bit_palette,
-    lossless_indexed_2bit_palette
+    lossless_indexed_2bit_palette,
+    lossless_indexed_4bit_palette
 );
