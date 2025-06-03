@@ -402,6 +402,7 @@ pub(crate) fn apply_color_indexing_transform(
             .map(|c| TryInto::<[u8; 4]>::try_into(c).unwrap())
             .collect();
         // pad the table to 256 values if it's smaller than that so we could index into it by u8 without bounds checks
+        // also required for correctness: WebP spec requires out-of-bounds indices to be treated as [0,0,0,0]
         table.resize(256, [0; 4]);
         // convince the compiler that the length of the table is 256 to avoid bounds checks in the loop below
         let table: &[[u8; 4]; 256] = table.as_slice().try_into().unwrap();
