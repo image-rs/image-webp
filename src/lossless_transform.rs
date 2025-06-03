@@ -354,8 +354,12 @@ pub(crate) fn apply_color_transform(
         // the length of block_tf_data should be `block_xsize * 4`, so we could slice it with [..block_xsize * 4]
         // but there is no point - `.zip()` runs until either of the iterators is consumed,
         // so the extra slicing operation would be doing more work for no reason
-        let row_tf_data = &transform_data[row_transform_data_start ..];
-        for (block, transform) in row.chunks_mut(4 << size_bits).zip(row_tf_data.chunks_exact(4)) {
+        let row_tf_data = &transform_data[row_transform_data_start..];
+        
+        for (block, transform) in row
+            .chunks_mut(4 << size_bits)
+            .zip(row_tf_data.chunks_exact(4))
+        {
             let red_to_blue = transform[0];
             let green_to_blue = transform[1];
             let green_to_red = transform[2];
