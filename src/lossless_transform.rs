@@ -422,21 +422,24 @@ pub(crate) fn apply_color_indexing_transform(
         // Dispatch to specialized implementation for each table size band for performance.
         // Otherwise the compiler doesn't know the size of our copies
         // and ends up calling out to memmove for every pixel even though a single load is sufficient.
-        if table_size <= 2 { // Max 2 colors, 1 bit per pixel index -> W_BITS = 3
+        if table_size <= 2 {
+            // Max 2 colors, 1 bit per pixel index -> W_BITS = 3
             const W_BITS_VAL: u8 = 3;
             // EXP_ENTRY_SIZE is 4 bytes/pixel * (1 << W_BITS_VAL) pixels/entry
             const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 8 = 32
             apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
                 image_data, width, height, table_size, table_data,
             );
-        } else if table_size <= 4 { // Max 4 colors, 2 bits per pixel index -> W_BITS = 2
+        } else if table_size <= 4 {
+            // Max 4 colors, 2 bits per pixel index -> W_BITS = 2
             const W_BITS_VAL: u8 = 2;
             const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 4 = 16
             apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
                 image_data, width, height, table_size, table_data,
             );
-        } else { // Max 16 colors (5 to 16), 4 bits per pixel index -> W_BITS = 1
-                 // table_size_u16 must be <= 16 here
+        } else {
+            // Max 16 colors (5 to 16), 4 bits per pixel index -> W_BITS = 1
+            // table_size_u16 must be <= 16 here
             const W_BITS_VAL: u8 = 1;
             const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 2 = 8
             apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
@@ -459,12 +462,16 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
     let pixels_per_packed_byte_u8: u8 = 1 << W_BITS;
     let bits_per_entry_u8: u8 = 8 / pixels_per_packed_byte_u8;
     let mask_u8: u8 = (1 << bits_per_entry_u8) - 1;
-    
+
     // This is also effectively a compile-time constant for each instantiation.
     let pixels_per_packed_byte_usize: usize = pixels_per_packed_byte_u8 as usize;
 
     // Verify that the passed EXP_ENTRY_SIZE matches our calculation based on W_BITS, just as a sanity check.
-    debug_assert_eq!(EXP_ENTRY_SIZE, 4 * pixels_per_packed_byte_usize, "Mismatch in EXP_ENTRY_SIZE");
+    debug_assert_eq!(
+        EXP_ENTRY_SIZE,
+        4 * pixels_per_packed_byte_usize,
+        "Mismatch in EXP_ENTRY_SIZE"
+    );
 
     // Precompute the full lookup table.
     // Each of the 256 possible packed byte values maps to an array of RGBA pixels.
@@ -487,16 +494,16 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
                 } else {
                     [0u8; 4] // WebP spec: out-of-bounds indices are [0,0,0,0]
                 };
-                
+
                 let array_fill_offset = pixel_sub_index * 4;
-                entry_pixels_array[array_fill_offset .. array_fill_offset + 4]
+                entry_pixels_array[array_fill_offset..array_fill_offset + 4]
                     .copy_from_slice(&color_source_array);
             }
             entry_pixels_array
         })
         .collect();
-    
-    let expanded_lookup_table_array: &[[u8; EXP_ENTRY_SIZE]; 256] = 
+
+    let expanded_lookup_table_array: &[[u8; EXP_ENTRY_SIZE]; 256] =
         expanded_lookup_table_storage.as_slice().try_into().unwrap();
 
     let packed_image_width_in_blocks = width.div_ceil(pixels_per_packed_byte_u8.into()) as usize;
@@ -517,37 +524,45 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
         let y = height as usize - 1 - y_rev_idx;
 
         let packed_row_input_global_offset = y * input_stride_bytes_packed;
-        let packed_argb_row_slice = &image_data[packed_row_input_global_offset..][..input_stride_bytes_packed];
+        let packed_argb_row_slice =
+            &image_data[packed_row_input_global_offset..][..input_stride_bytes_packed];
 
         for (x_block, packed_argb_chunk) in packed_argb_row_slice.chunks_exact(4).enumerate() {
-            packed_indices_for_row[x_block] = packed_argb_chunk[1]; 
+            packed_indices_for_row[x_block] = packed_argb_chunk[1];
         }
 
         let output_row_global_offset = y * output_stride_bytes_expanded;
-        let output_row_slice_mut = &mut image_data[output_row_global_offset .. output_row_global_offset + output_stride_bytes_expanded];
-        
-        let num_full_blocks = if packed_image_width_in_blocks > 0 { packed_image_width_in_blocks - 1 } else { 0 };
-        
-        let (full_blocks_part, final_block_part) = 
+        let output_row_slice_mut = &mut image_data
+            [output_row_global_offset..output_row_global_offset + output_stride_bytes_expanded];
+
+        let num_full_blocks = if packed_image_width_in_blocks > 0 {
+            packed_image_width_in_blocks - 1
+        } else {
+            0
+        };
+
+        let (full_blocks_part, final_block_part) =
             output_row_slice_mut.split_at_mut(num_full_blocks * EXP_ENTRY_SIZE);
 
         for (output_chunk_slice, &packed_index_byte) in full_blocks_part
             .chunks_exact_mut(EXP_ENTRY_SIZE) // Uses const generic to avoid expensive memmove call
             .zip(packed_indices_for_row.iter().take(num_full_blocks))
         {
-            let output_chunk_array: &mut [u8; EXP_ENTRY_SIZE] = 
-                output_chunk_slice.try_into().unwrap(); 
-            
+            let output_chunk_array: &mut [u8; EXP_ENTRY_SIZE] =
+                output_chunk_slice.try_into().unwrap();
+
             let colors_data_array = &expanded_lookup_table_array[packed_index_byte as usize];
-            
-            *output_chunk_array = *colors_data_array; 
+
+            *output_chunk_array = *colors_data_array;
         }
-        
+
         if packed_image_width_in_blocks > 0 {
             let final_packed_index_byte = packed_indices_for_row[packed_image_width_in_blocks - 1];
-            let colors_data_full_array = &expanded_lookup_table_array[final_packed_index_byte as usize];
-            
-            final_block_part.copy_from_slice(&colors_data_full_array[..final_block_expanded_size_bytes]);
+            let colors_data_full_array =
+                &expanded_lookup_table_array[final_packed_index_byte as usize];
+
+            final_block_part
+                .copy_from_slice(&colors_data_full_array[..final_block_expanded_size_bytes]);
         }
     }
 }
