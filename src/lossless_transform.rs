@@ -527,8 +527,11 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
         let packed_argb_row_slice =
             &image_data[packed_row_input_global_offset..][..input_stride_bytes_packed];
 
-        for (x_block, packed_argb_chunk) in packed_argb_row_slice.chunks_exact(4).enumerate() {
-            packed_indices_for_row[x_block] = packed_argb_chunk[1];
+        for (packed_argb_chunk, packed_idx) in packed_argb_row_slice
+            .chunks_exact(4)
+            .zip(packed_indices_for_row.iter_mut())
+        {
+            *packed_idx = packed_argb_chunk[1];
         }
 
         let output_row_global_offset = y * output_stride_bytes_expanded;
