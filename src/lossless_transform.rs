@@ -355,7 +355,7 @@ pub(crate) fn apply_color_transform(
         // but there is no point - `.zip()` runs until either of the iterators is consumed,
         // so the extra slicing operation would be doing more work for no reason
         let row_tf_data = &transform_data[row_transform_data_start..];
-        
+
         for (block, transform) in row
             .chunks_mut(4 << size_bits)
             .zip(row_tf_data.chunks_exact(4))
