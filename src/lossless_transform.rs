@@ -394,6 +394,10 @@ pub(crate) fn apply_color_indexing_transform(
     table_size: u16,
     table_data: &[u8],
 ) {
+    if table_size == 0 {
+        // An explicit table_size of 0 is invalid, means no palette.
+        return;
+    }
     if table_size > 16 {
         // convert the table of colors into a Vec of color values that can be directly indexed
         let mut table: Vec<[u8; 4]> = table_data
@@ -408,53 +412,121 @@ pub(crate) fn apply_color_indexing_transform(
         let table: &[[u8; 4]; 256] = table.as_slice().try_into().unwrap();
 
         for pixel in image_data.chunks_exact_mut(4) {
+            // Input image_data has ARGB pixels. Index is in G channel.
             pixel.copy_from_slice(&table[pixel[1] as usize]);
         }
     } else {
-        let width_bits: u8 = if table_size <= 2 {
-            3
+        if table_size <= 2 {
+            // Max 2 colors, 1 bit per pixel index
+            apply_color_indexing_transform_small_table::<3>(
+                image_data,
+                width,
+                height,
+                table_size as u8,
+                table_data,
+            );
         } else if table_size <= 4 {
-            2
-        } else if table_size <= 16 {
-            1
+            // Max 4 colors, 2 bits per pixel index
+            apply_color_indexing_transform_small_table::<2>(
+                image_data,
+                width,
+                height,
+                table_size as u8,
+                table_data,
+            );
         } else {
-            unreachable!()
-        };
+            // Max 16 colors (actually 5 to 16), 4 bits per pixel index
+            apply_color_indexing_transform_small_table::<1>(
+                image_data,
+                width,
+                height,
+                table_size as u8,
+                table_data,
+            );
+        }
+    }
+}
 
-        let bits_per_entry = 8 / (1 << width_bits);
-        let mask = (1 << bits_per_entry) - 1;
-        let table = (0..256)
-            .flat_map(|i| {
-                let mut entry = Vec::new();
-                for j in 0..(1 << width_bits) {
-                    let k = (i >> (j * bits_per_entry)) & mask;
-                    if k < table_size {
-                        entry.extend_from_slice(&table_data[usize::from(k) * 4..][..4]);
-                    } else {
-                        entry.extend_from_slice(&[0; 4]);
-                    }
-                }
-                entry
-            })
-            .collect::<Vec<_>>();
-        let table = table.chunks_exact(4 << width_bits).collect::<Vec<_>>();
+// Helper function with const generic for width_bits
+fn apply_color_indexing_transform_small_table<const W_BITS: u8>(
+    image_data: &mut [u8],
+    width: u16,
+    height: u16,
+    table_size: u8, // Still needed for bounds check on k
+    table_data: &[u8],
+) {
+    let pixels_per_packed_byte: u8 = 1 << W_BITS;
+    let bits_per_entry: u8 = 8 / pixels_per_packed_byte;
+    let mask: u8 = (1 << bits_per_entry) - 1;
 
-        let entry_size = 4 << width_bits;
-        let index_image_width = width.div_ceil(1 << width_bits) as usize;
-        let final_entry_size = width as usize * 4 - entry_size * (index_image_width - 1);
+    // Precompute the full lookup table: for each possible packed byte value (0-255),
+    // determine the sequence of RGBA colors it expands to.
+    let expanded_lookup_table_data = (0..256u16) // Iterate all possible u8 values for a packed byte
+        .flat_map(|packed_byte_value_u16| {
+            let mut entry_pixels = Vec::with_capacity(4 * pixels_per_packed_byte as usize);
+            let packed_byte_value = packed_byte_value_u16 as u8;
 
-        for y in (0..height as usize).rev() {
-            for x in (0..index_image_width).rev() {
-                let input_index = y * index_image_width * 4 + x * 4 + 1;
-                let output_index = y * width as usize * 4 + x * entry_size;
-                let table_index = image_data[input_index] as usize;
+            for pixel_sub_index in 0..pixels_per_packed_byte {
+                // pixel_sub_index is 'j' in original
+                // Extract individual color index 'k' from the packed_byte_value
+                let k = (packed_byte_value >> (pixel_sub_index * bits_per_entry)) & mask;
 
-                if x == index_image_width - 1 {
-                    image_data[output_index..][..final_entry_size]
-                        .copy_from_slice(&table[table_index][..final_entry_size]);
+                if k < table_size as u8 {
+                    let color_data_offset = usize::from(k) * 4;
+                    entry_pixels.extend_from_slice(&table_data[color_data_offset..][..4]);
                 } else {
-                    image_data[output_index..][..entry_size].copy_from_slice(table[table_index]);
+                    // WebP spec: out-of-bounds indices are treated as [0,0,0,0]
+                    entry_pixels.extend_from_slice(&[0u8; 4]);
                 }
+            }
+            entry_pixels
+        })
+        .collect::<Vec<u8>>();
+
+    // `expanded_lookup_table_slices` provides convenient slices into `expanded_lookup_table_data`.
+    // Each slice corresponds to one fully expanded packed byte.
+    let expanded_lookup_table_slices: Vec<&[u8]> = expanded_lookup_table_data
+        .chunks_exact(4 * pixels_per_packed_byte as usize)
+        .collect();
+
+    // Bytes per fully expanded entry (e.g., if 4 pixels are packed, this is 4*4=16 bytes)
+    let expanded_entry_size_bytes = 4 * pixels_per_packed_byte as usize;
+
+    // Width of the image in terms of blocks of packed pixels
+    let packed_image_width_in_blocks = width.div_ceil(pixels_per_packed_byte.into()) as usize;
+
+    // Size of the last entry in a row if it's not a full block
+    let final_block_expanded_size_bytes =
+        (width as usize * 4) - expanded_entry_size_bytes * (packed_image_width_in_blocks - 1);
+
+    // The input packed indices are read from image_data (at specific G-channel locations),
+    // and the output expanded RGBA pixels are written back to image_data.
+    for y in (0..height as usize).rev() {
+        for x_block in (0..packed_image_width_in_blocks).rev() {
+            // According to WebP spec for color indexed images with palette_size <= 16:
+            // "The color indexed image is stored in the image_data_ array by packing
+            // green channel values of ARGB image."
+            // The `input_packed_byte_offset` calculates the G-channel byte for the x_block-th block.
+            let input_packed_byte_offset = y * packed_image_width_in_blocks * 4  // Row offset (stride is packed_image_width_in_blocks * 4 bytes)
+                + x_block * 4                         // Column offset for the block (each block "header" is 4 bytes)
+                + 1; // Green channel offset within that 4-byte header
+
+            let packed_byte_value = image_data[input_packed_byte_offset] as usize;
+
+            // Calculate the starting output position in image_data for this block of pixels
+            let output_pixel_start_col = x_block * pixels_per_packed_byte as usize;
+            let output_byte_offset = (y * width as usize + output_pixel_start_col) * 4;
+
+            let colors_to_write_slice = expanded_lookup_table_slices[packed_byte_value];
+
+            if x_block == packed_image_width_in_blocks - 1 {
+                // This is the last block in the row, may be partially filled
+                image_data[output_byte_offset..][..final_block_expanded_size_bytes]
+                    .copy_from_slice(&colors_to_write_slice[..final_block_expanded_size_bytes]);
+            } else {
+                // This is a full block
+                image_data[output_byte_offset..][..expanded_entry_size_bytes]
+                    .copy_from_slice(colors_to_write_slice);
             }
         }
     }
