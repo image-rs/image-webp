@@ -17,7 +17,8 @@ pub(crate) struct WebPExtendedInfo {
     pub(crate) xmp_metadata: bool,
     pub(crate) animation: bool,
 
-    pub(crate) background_color: [u8; 4],
+    pub(crate) background_color: Option<[u8; 4]>,
+    pub(crate) background_color_hint: [u8; 4],
 }
 
 /// Composites a frame onto a canvas.
@@ -237,7 +238,8 @@ pub(crate) fn read_extended_header<R: Read>(
         animation,
         canvas_width,
         canvas_height,
-        background_color: [0; 4],
+        background_color_hint: [0; 4],
+        background_color: None,
     };
 
     Ok(info)
