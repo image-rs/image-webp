@@ -419,29 +419,17 @@ pub(crate) fn apply_color_indexing_transform(
         if table_size <= 2 {
             // Max 2 colors, 1 bit per pixel index
             apply_color_indexing_transform_small_table::<3>(
-                image_data,
-                width,
-                height,
-                table_size as u8,
-                table_data,
+                image_data, width, height, table_size, table_data,
             );
         } else if table_size <= 4 {
             // Max 4 colors, 2 bits per pixel index
             apply_color_indexing_transform_small_table::<2>(
-                image_data,
-                width,
-                height,
-                table_size as u8,
-                table_data,
+                image_data, width, height, table_size, table_data,
             );
         } else {
             // Max 16 colors (actually 5 to 16), 4 bits per pixel index
             apply_color_indexing_transform_small_table::<1>(
-                image_data,
-                width,
-                height,
-                table_size as u8,
-                table_data,
+                image_data, width, height, table_size, table_data,
             );
         }
     }
@@ -452,9 +440,10 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8>(
     image_data: &mut [u8],
     width: u16,
     height: u16,
-    table_size: u8, // Still needed for bounds check on k
+    table_size: u16, // Still needed for bounds check on k
     table_data: &[u8],
 ) {
+    let table_size = table_size as u8;
     let pixels_per_packed_byte: u8 = 1 << W_BITS;
     let bits_per_entry: u8 = 8 / pixels_per_packed_byte;
     let mask: u8 = (1 << bits_per_entry) - 1;
@@ -471,7 +460,7 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8>(
                 // Extract individual color index 'k' from the packed_byte_value
                 let k = (packed_byte_value >> (pixel_sub_index * bits_per_entry)) & mask;
 
-                if k < table_size as u8 {
+                if k < table_size {
                     let color_data_offset = usize::from(k) * 4;
                     entry_pixels.extend_from_slice(&table_data[color_data_offset..][..4]);
                 } else {
