@@ -532,8 +532,8 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
         }
 
         let output_row_global_offset = y * output_stride_bytes_expanded;
-        let output_row_slice_mut = &mut image_data
-            [output_row_global_offset..output_row_global_offset + output_stride_bytes_expanded];
+        let output_row_slice_mut =
+            &mut image_data[output_row_global_offset..][..output_stride_bytes_expanded];
 
         let num_full_blocks = if packed_image_width_in_blocks > 0 {
             packed_image_width_in_blocks - 1
@@ -546,7 +546,7 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
 
         for (output_chunk_slice, &packed_index_byte) in full_blocks_part
             .chunks_exact_mut(EXP_ENTRY_SIZE) // Uses const generic to avoid expensive memmove call
-            .zip(packed_indices_for_row.iter().take(num_full_blocks))
+            .zip(packed_indices_for_row.iter())
         {
             let output_chunk_array: &mut [u8; EXP_ENTRY_SIZE] =
                 output_chunk_slice.try_into().unwrap();
