@@ -538,11 +538,7 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
         let output_row_slice_mut =
             &mut image_data[output_row_global_offset..][..output_stride_bytes_expanded];
 
-        let num_full_blocks = if packed_image_width_in_blocks > 0 {
-            packed_image_width_in_blocks - 1
-        } else {
-            0
-        };
+        let num_full_blocks = packed_image_width_in_blocks.saturating_sub(1);
 
         let (full_blocks_part, final_block_part) =
             output_row_slice_mut.split_at_mut(num_full_blocks * EXP_ENTRY_SIZE);
