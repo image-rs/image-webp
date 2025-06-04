@@ -506,13 +506,11 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
     }
 
     /// Get the background color specified in the image file if the image is extended and animated webp.
-    pub fn get_background_color_hint(&self) -> Result<[u8; 4], DecodingError> {
+    pub fn background_color_hint(&self) -> Option<[u8; 4]> {
         if let ImageKind::Extended(info) = &self.kind {
-            Ok(info.background_color_hint)
+            Some(info.background_color_hint)
         } else {
-            Err(DecodingError::InvalidParameter(
-                "Background color hist is only available for animated webp".to_owned(),
-            ))
+            None
         }
     }
 
