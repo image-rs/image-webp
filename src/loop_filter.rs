@@ -62,13 +62,15 @@ fn should_filter(
     stride: usize,
 ) -> bool {
     simple_threshold(i32::from(edge_limit), pixels, point, stride)
+        // this looks like an erroneous way to compute differences between 8 points, but isn't:
+        // there are actually only 6 diff comparisons required as per the spec:
+        // https://www.rfc-editor.org/rfc/rfc6386#section-20.6
         && diff(pixels[point - 4 * stride], pixels[point - 3 * stride]) <= interior_limit
         && diff(pixels[point - 3 * stride], pixels[point - 2 * stride]) <= interior_limit
         && diff(pixels[point - 2 * stride], pixels[point - stride]) <= interior_limit
         && diff(pixels[point + 3 * stride], pixels[point + 2 * stride]) <= interior_limit
         && diff(pixels[point + 2 * stride], pixels[point + stride]) <= interior_limit
         && diff(pixels[point + stride], pixels[point]) <= interior_limit
-        && diff(pixels[point - stride], pixels[point]) <= interior_limit
 }
 
 fn high_edge_variance(threshold: u8, pixels: &[u8], point: usize, stride: usize) -> bool {
