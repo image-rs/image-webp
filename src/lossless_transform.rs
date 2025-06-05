@@ -394,6 +394,7 @@ pub(crate) fn apply_color_indexing_transform(
     table_size: u16,
     table_data: &[u8],
 ) {
+    assert!(table_size > 0);
     if table_size > 16 {
         // convert the table of colors into a Vec of color values that can be directly indexed
         let mut table: Vec<[u8; 4]> = table_data
@@ -402,59 +403,163 @@ pub(crate) fn apply_color_indexing_transform(
             .map(|c| TryInto::<[u8; 4]>::try_into(c).unwrap())
             .collect();
         // pad the table to 256 values if it's smaller than that so we could index into it by u8 without bounds checks
+        // also required for correctness: WebP spec requires out-of-bounds indices to be treated as [0,0,0,0]
         table.resize(256, [0; 4]);
         // convince the compiler that the length of the table is 256 to avoid bounds checks in the loop below
         let table: &[[u8; 4]; 256] = table.as_slice().try_into().unwrap();
 
         for pixel in image_data.chunks_exact_mut(4) {
+            // Index is in G channel.
+            // WebP format encodes ARGB pixels, but we permute to RGBA immediately after reading from the bitstream.
             pixel.copy_from_slice(&table[pixel[1] as usize]);
         }
     } else {
-        let width_bits: u8 = if table_size <= 2 {
-            3
+        // table_size_u16 is 1 to 16
+        let table_size = table_size as u8;
+
+        // Dispatch to specialized implementation for each table size band for performance.
+        // Otherwise the compiler doesn't know the size of our copies
+        // and ends up calling out to memmove for every pixel even though a single load is sufficient.
+        if table_size <= 2 {
+            // Max 2 colors, 1 bit per pixel index -> W_BITS = 3
+            const W_BITS_VAL: u8 = 3;
+            // EXP_ENTRY_SIZE is 4 bytes/pixel * (1 << W_BITS_VAL) pixels/entry
+            const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 8 = 32
+            apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
+                image_data, width, height, table_size, table_data,
+            );
         } else if table_size <= 4 {
-            2
-        } else if table_size <= 16 {
-            1
+            // Max 4 colors, 2 bits per pixel index -> W_BITS = 2
+            const W_BITS_VAL: u8 = 2;
+            const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 4 = 16
+            apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
+                image_data, width, height, table_size, table_data,
+            );
         } else {
-            unreachable!()
-        };
+            // Max 16 colors (5 to 16), 4 bits per pixel index -> W_BITS = 1
+            // table_size_u16 must be <= 16 here
+            const W_BITS_VAL: u8 = 1;
+            const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 2 = 8
+            apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
+                image_data, width, height, table_size, table_data,
+            );
+        }
+    }
+}
 
-        let bits_per_entry = 8 / (1 << width_bits);
-        let mask = (1 << bits_per_entry) - 1;
-        let table = (0..256)
-            .flat_map(|i| {
-                let mut entry = Vec::new();
-                for j in 0..(1 << width_bits) {
-                    let k = (i >> (j * bits_per_entry)) & mask;
-                    if k < table_size {
-                        entry.extend_from_slice(&table_data[usize::from(k) * 4..][..4]);
-                    } else {
-                        entry.extend_from_slice(&[0; 4]);
-                    }
-                }
-                entry
-            })
-            .collect::<Vec<_>>();
-        let table = table.chunks_exact(4 << width_bits).collect::<Vec<_>>();
+// Helper function with const generics for W_BITS and EXP_ENTRY_SIZE
+fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_SIZE: usize>(
+    image_data: &mut [u8],
+    width: u16,
+    height: u16,
+    table_size: u8, // Max 16
+    table_data: &[u8],
+) {
+    // As of Rust 1.87 we cannot use `const` here. The compiler can still optimize them heavily
+    // because W_BITS is a const generic for each instantiation of this function.
+    let pixels_per_packed_byte_u8: u8 = 1 << W_BITS;
+    let bits_per_entry_u8: u8 = 8 / pixels_per_packed_byte_u8;
+    let mask_u8: u8 = (1 << bits_per_entry_u8) - 1;
 
-        let entry_size = 4 << width_bits;
-        let index_image_width = width.div_ceil(1 << width_bits) as usize;
-        let final_entry_size = width as usize * 4 - entry_size * (index_image_width - 1);
+    // This is also effectively a compile-time constant for each instantiation.
+    let pixels_per_packed_byte_usize: usize = pixels_per_packed_byte_u8 as usize;
 
-        for y in (0..height as usize).rev() {
-            for x in (0..index_image_width).rev() {
-                let input_index = y * index_image_width * 4 + x * 4 + 1;
-                let output_index = y * width as usize * 4 + x * entry_size;
-                let table_index = image_data[input_index] as usize;
+    // Verify that the passed EXP_ENTRY_SIZE matches our calculation based on W_BITS, just as a sanity check.
+    debug_assert_eq!(
+        EXP_ENTRY_SIZE,
+        4 * pixels_per_packed_byte_usize,
+        "Mismatch in EXP_ENTRY_SIZE"
+    );
 
-                if x == index_image_width - 1 {
-                    image_data[output_index..][..final_entry_size]
-                        .copy_from_slice(&table[table_index][..final_entry_size]);
+    // Precompute the full lookup table.
+    // Each of the 256 possible packed byte values maps to an array of RGBA pixels.
+    // The array type uses the const generic EXP_ENTRY_SIZE.
+    let expanded_lookup_table_storage: Vec<[u8; EXP_ENTRY_SIZE]> = (0..256u16)
+        .map(|packed_byte_value_u16| {
+            let mut entry_pixels_array = [0u8; EXP_ENTRY_SIZE]; // Uses const generic
+            let packed_byte_value = packed_byte_value_u16 as u8;
+
+            // Loop bound is effectively constant for each instantiation.
+            for pixel_sub_index in 0..pixels_per_packed_byte_usize {
+                let shift_amount = (pixel_sub_index as u8) * bits_per_entry_u8;
+                let k = (packed_byte_value >> shift_amount) & mask_u8;
+
+                let color_source_array: [u8; 4] = if k < table_size {
+                    let color_data_offset = usize::from(k) * 4;
+                    table_data[color_data_offset..color_data_offset + 4]
+                        .try_into()
+                        .unwrap()
                 } else {
-                    image_data[output_index..][..entry_size].copy_from_slice(table[table_index]);
-                }
+                    [0u8; 4] // WebP spec: out-of-bounds indices are [0,0,0,0]
+                };
+
+                let array_fill_offset = pixel_sub_index * 4;
+                entry_pixels_array[array_fill_offset..array_fill_offset + 4]
+                    .copy_from_slice(&color_source_array);
             }
+            entry_pixels_array
+        })
+        .collect();
+
+    let expanded_lookup_table_array: &[[u8; EXP_ENTRY_SIZE]; 256] =
+        expanded_lookup_table_storage.as_slice().try_into().unwrap();
+
+    let packed_image_width_in_blocks = width.div_ceil(pixels_per_packed_byte_u8.into()) as usize;
+
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let final_block_expanded_size_bytes =
+        (width as usize * 4) - EXP_ENTRY_SIZE * (packed_image_width_in_blocks.saturating_sub(1));
+
+    let input_stride_bytes_packed = packed_image_width_in_blocks * 4;
+    let output_stride_bytes_expanded = width as usize * 4;
+
+    let mut packed_indices_for_row: Vec<u8> = vec![0; packed_image_width_in_blocks];
+
+    for y_rev_idx in 0..height as usize {
+        let y = height as usize - 1 - y_rev_idx;
+
+        let packed_row_input_global_offset = y * input_stride_bytes_packed;
+        let packed_argb_row_slice =
+            &image_data[packed_row_input_global_offset..][..input_stride_bytes_packed];
+
+        for (packed_argb_chunk, packed_idx) in packed_argb_row_slice
+            .chunks_exact(4)
+            .zip(packed_indices_for_row.iter_mut())
+        {
+            *packed_idx = packed_argb_chunk[1];
+        }
+
+        let output_row_global_offset = y * output_stride_bytes_expanded;
+        let output_row_slice_mut =
+            &mut image_data[output_row_global_offset..][..output_stride_bytes_expanded];
+
+        let num_full_blocks = packed_image_width_in_blocks.saturating_sub(1);
+
+        let (full_blocks_part, final_block_part) =
+            output_row_slice_mut.split_at_mut(num_full_blocks * EXP_ENTRY_SIZE);
+
+        for (output_chunk_slice, &packed_index_byte) in full_blocks_part
+            .chunks_exact_mut(EXP_ENTRY_SIZE) // Uses const generic to avoid expensive memmove call
+            .zip(packed_indices_for_row.iter())
+        {
+            let output_chunk_array: &mut [u8; EXP_ENTRY_SIZE] =
+                output_chunk_slice.try_into().unwrap();
+
+            let colors_data_array = &expanded_lookup_table_array[packed_index_byte as usize];
+
+            *output_chunk_array = *colors_data_array;
+        }
+
+        if packed_image_width_in_blocks > 0 {
+            let final_packed_index_byte = packed_indices_for_row[packed_image_width_in_blocks - 1];
+            let colors_data_full_array =
+                &expanded_lookup_table_array[final_packed_index_byte as usize];
+
+            final_block_part
+                .copy_from_slice(&colors_data_full_array[..final_block_expanded_size_bytes]);
         }
     }
 }

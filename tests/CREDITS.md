@@ -30,6 +30,7 @@ convert -delay 15 -size 99x87 xc: xc: xc: xc: +noise Random -define webp:lossles
 
 color_index.webp: Manually constructed to reproduce decoding error.
 tiny.webp: Provided in a [bug report](https://github.com/image-rs/image-webp/issues/81).
+lossless_indexed_{1,2,4}bit_palette.webp: Manually created with GIMP
 
 # Reference images
 
@@ -57,3 +58,4 @@ for i in {1..4}; do webpmux -get frame ${i} ../../images/animated/random_lossy.w
 
 color_index.png: Converted with dwebp.
 tiny.png: Converted with dwebp.
+lossless_indexed_{1,2,4}bit_palette.png: Converted with GIMP.
