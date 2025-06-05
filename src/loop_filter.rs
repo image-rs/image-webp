@@ -68,7 +68,6 @@ fn should_filter(
         && diff(pixels[point + 3 * stride], pixels[point + 2 * stride]) <= interior_limit
         && diff(pixels[point + 2 * stride], pixels[point + stride]) <= interior_limit
         && diff(pixels[point + stride], pixels[point]) <= interior_limit
-        && diff(pixels[point - stride], pixels[point]) <= interior_limit
 }
 
 fn high_edge_variance(threshold: u8, pixels: &[u8], point: usize, stride: usize) -> bool {
