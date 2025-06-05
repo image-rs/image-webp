@@ -103,7 +103,7 @@ pub(crate) fn subblock_filter(
 
         if !hv {
             pixels[point + stride] = s2u(u2s(pixels[point + stride]) - a);
-            pixels[point - 2 * stride] = s2u(u2s(pixels[point - 2 * stride]) - a);
+            pixels[point - 2 * stride] = s2u(u2s(pixels[point - 2 * stride]) + a);
         }
     }
 }
