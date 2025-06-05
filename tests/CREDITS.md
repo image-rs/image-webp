@@ -58,4 +58,4 @@ for i in {1..4}; do webpmux -get frame ${i} ../../images/animated/random_lossy.w
 
 color_index.png: Converted with dwebp.
 tiny.png: Converted with dwebp.
-lossless_indexed_{1,2,4}bit_palette.webp: Converted with GIMP.
+lossless_indexed_{1,2,4}bit_palette.png: Converted with GIMP.
