@@ -394,10 +394,7 @@ pub(crate) fn apply_color_indexing_transform(
     table_size: u16,
     table_data: &[u8],
 ) {
-    if table_size == 0 {
-        // An explicit table_size of 0 is invalid, means no palette.
-        return;
-    }
+    assert!(table_size > 0);
     if table_size > 16 {
         // convert the table of colors into a Vec of color values that can be directly indexed
         let mut table: Vec<[u8; 4]> = table_data
