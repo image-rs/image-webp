@@ -454,7 +454,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     match self.read_chunk(WebPRiffChunk::ANIM, 6) {
                         Ok(Some(chunk)) => {
                             let mut cursor = Cursor::new(chunk);
-                            cursor.read_exact(&mut info.background_color)?;
+                            cursor.read_exact(&mut info.background_color_hint)?;
                             self.loop_count = match cursor.read_u16::<LittleEndian>()? {
                                 0 => LoopCount::Forever,
                                 n => LoopCount::Times(NonZeroU16::new(n).unwrap()),
@@ -505,10 +505,19 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         self.memory_limit = limit;
     }
 
+    /// Get the background color specified in the image file if the image is extended and animated webp.
+    pub fn background_color_hint(&self) -> Option<[u8; 4]> {
+        if let ImageKind::Extended(info) = &self.kind {
+            Some(info.background_color_hint)
+        } else {
+            None
+        }
+    }
+
     /// Sets the background color if the image is an extended and animated webp.
     pub fn set_background_color(&mut self, color: [u8; 4]) -> Result<(), DecodingError> {
         if let ImageKind::Extended(info) = &mut self.kind {
-            info.background_color = color;
+            info.background_color = Some(color);
             Ok(())
         } else {
             Err(DecodingError::InvalidParameter(
@@ -727,7 +736,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         let dispose = frame_info & 0b00000001 != 0;
 
         let clear_color = if self.animation.dispose_next_frame {
-            Some(info.background_color)
+            info.background_color
         } else {
             None
         };
@@ -809,9 +818,11 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         if self.animation.canvas.is_none() {
             self.animation.canvas = {
                 let mut canvas = vec![0; (self.width * self.height * 4) as usize];
-                canvas
-                    .chunks_exact_mut(4)
-                    .for_each(|c| c.copy_from_slice(&info.background_color));
+                if let Some(color) = info.background_color.as_ref() {
+                    canvas
+                        .chunks_exact_mut(4)
+                        .for_each(|c| c.copy_from_slice(color))
+                }
                 Some(canvas)
             }
         }
