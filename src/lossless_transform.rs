@@ -409,7 +409,8 @@ pub(crate) fn apply_color_indexing_transform(
         let table: &[[u8; 4]; 256] = table.as_slice().try_into().unwrap();
 
         for pixel in image_data.chunks_exact_mut(4) {
-            // Input image_data has ARGB pixels. Index is in G channel.
+            // Index is in G channel.
+            // WebP format encodes ARGB pixels, but we permute to RGBA immediately after reading from the bitstream.
             pixel.copy_from_slice(&table[pixel[1] as usize]);
         }
     } else {
