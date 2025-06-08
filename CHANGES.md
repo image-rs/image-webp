@@ -1,5 +1,17 @@
 # Release Notes
 
+### Version 0.2.2
+
+Changes:
+ - Do not apply background color to animated images by default to better match libwebp behavior (#135)
+
+Bug Fixes:
+ - Fixed a bug in the loop filter causing subtly but noticeably incorrect decoding of some lossy images (#140)
+
+Optimizations:
+ - Remove bounds checks from color transform hot loop (#133)
+ - Optimize resolving indexed images into RGB colors (#132, #134)
+
 ### Version 0.2.1
 
 Changes:
