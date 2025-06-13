@@ -12,6 +12,7 @@ pub(crate) struct WebPExtendedInfo {
     pub(crate) canvas_width: u32,
     pub(crate) canvas_height: u32,
 
+    #[allow(unused)]
     pub(crate) icc_profile: bool,
     pub(crate) exif_metadata: bool,
     pub(crate) xmp_metadata: bool,
