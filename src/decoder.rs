@@ -436,10 +436,11 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 }
                 self.is_lossy = self.is_lossy || self.chunks.contains_key(&WebPRiffChunk::VP8);
 
+                // NOTE: We allow malformed images that have `info.icc_profile` set without a ICCP chunk,
+                // because this is relatively common.
                 if info.animation
                     && (!self.chunks.contains_key(&WebPRiffChunk::ANIM)
                         || !self.chunks.contains_key(&WebPRiffChunk::ANMF))
-                    || info.icc_profile && !self.chunks.contains_key(&WebPRiffChunk::ICCP)
                     || info.exif_metadata && !self.chunks.contains_key(&WebPRiffChunk::EXIF)
                     || info.xmp_metadata && !self.chunks.contains_key(&WebPRiffChunk::XMP)
                     || !info.animation
