@@ -2271,7 +2271,12 @@ fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8
 
 const CHROMA_BLOCK_SIZE: usize = (8 + 1) * (8 + 1);
 // creates the left and top border for chroma prediction
-fn create_border_chroma(mbx: usize, mby: usize, top: &[u8], left: &[u8]) -> [u8; CHROMA_BLOCK_SIZE] {
+fn create_border_chroma(
+    mbx: usize,
+    mby: usize,
+    top: &[u8],
+    left: &[u8],
+) -> [u8; CHROMA_BLOCK_SIZE] {
     let stride: usize = 1usize + 8;
     let mut chroma_block = [0u8; CHROMA_BLOCK_SIZE];
 
@@ -2312,7 +2317,12 @@ fn create_border_chroma(mbx: usize, mby: usize, top: &[u8], left: &[u8]) -> [u8;
 }
 
 // set border
-fn set_chroma_border(left_border: &mut [u8], top_border: &mut [u8], chroma_block: &[u8], mbx: usize) {
+fn set_chroma_border(
+    left_border: &mut [u8],
+    top_border: &mut [u8],
+    chroma_block: &[u8],
+    mbx: usize,
+) {
     let stride = 1usize + 8;
     // top left
     left_border[0] = chroma_block[0];
@@ -2328,7 +2338,7 @@ fn set_chroma_border(left_border: &mut [u8], top_border: &mut [u8], chroma_block
     {
         *top = w;
     }
-} 
+}
 
 fn avg3(left: u8, this: u8, right: u8) -> u8 {
     let avg = (u16::from(left) + 2 * u16::from(this) + u16::from(right) + 2) >> 2;
