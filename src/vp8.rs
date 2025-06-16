@@ -2324,8 +2324,8 @@ fn set_chroma_border(
     mbx: usize,
 ) {
     let stride = 1usize + 8;
-    // top left
-    left_border[0] = chroma_block[0];
+    // top left is top right of previous chroma block
+    left_border[0] = chroma_block[8];
 
     // left border
     for (i, left) in left_border[1..][..8].iter_mut().enumerate() {
