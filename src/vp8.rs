@@ -1050,8 +1050,17 @@ pub struct Vp8Decoder<R> {
     top: Vec<MacroBlock>,
     left: MacroBlock,
 
-    top_border: Vec<u8>,
-    left_border: Vec<u8>,
+    // The borders from the previous macroblock, used for predictions
+    // See Section 12
+    // Note that the left border contains the top left pixel
+    top_border_y: Vec<u8>,
+    left_border_y: Vec<u8>,
+
+    top_border_u: Vec<u8>,
+    left_border_u: Vec<u8>,
+
+    top_border_v: Vec<u8>,
+    left_border_v: Vec<u8>,
 }
 
 impl<R: Read> Vp8Decoder<R> {
@@ -1103,8 +1112,14 @@ impl<R: Read> Vp8Decoder<R> {
             top: Vec::new(),
             left: m,
 
-            top_border: Vec::new(),
-            left_border: Vec::new(),
+            top_border_y: Vec::new(),
+            left_border_y: Vec::new(),
+
+            top_border_u: Vec::new(),
+            left_border_u: Vec::new(),
+
+            top_border_v: Vec::new(),
+            left_border_v: Vec::new(),
         }
     }
 
@@ -1302,8 +1317,15 @@ impl<R: Read> Vp8Decoder<R> {
             self.frame.vbuf =
                 vec![0u8; self.frame.chroma_width() as usize * self.frame.chroma_height() as usize];
 
-            self.top_border = vec![127u8; self.frame.width as usize + 4 + 16];
-            self.left_border = vec![129u8; 1 + 16];
+            self.top_border_y = vec![127u8; self.frame.width as usize + 4 + 16];
+            self.left_border_y = vec![129u8; 1 + 16];
+
+            // 8 pixels per macroblock
+            self.top_border_u = vec![127u8; 8 * self.mbwidth as usize];
+            self.left_border_u = vec![129u8; 1 + 8];
+
+            self.top_border_v = vec![127u8; 8 * self.mbwidth as usize];
+            self.left_border_v = vec![129u8; 1 + 8];
         }
 
         let size = first_partition_size as usize;
@@ -1460,7 +1482,7 @@ impl<R: Read> Vp8Decoder<R> {
         let stride = 1usize + 16 + 4;
         let w = self.frame.width as usize;
         let mw = self.mbwidth as usize;
-        let mut ws = create_border_luma(mbx, mby, mw, &self.top_border, &self.left_border);
+        let mut ws = create_border_luma(mbx, mby, mw, &self.top_border_y, &self.left_border_y);
 
         match mb.luma_mode {
             LumaMode::V => predict_vpred(&mut ws, 16, 1, 1, stride),
@@ -1484,13 +1506,13 @@ impl<R: Read> Vp8Decoder<R> {
             }
         }
 
-        self.left_border[0] = ws[16];
+        self.left_border_y[0] = ws[16];
 
-        for (i, left) in self.left_border[1..][..16].iter_mut().enumerate() {
+        for (i, left) in self.left_border_y[1..][..16].iter_mut().enumerate() {
             *left = ws[(i + 1) * stride + 16];
         }
 
-        for (top, &w) in self.top_border[mbx * 16..][..16]
+        for (top, &w) in self.top_border_y[mbx * 16..][..16]
             .iter_mut()
             .zip(&ws[16 * stride + 1..][..16])
         {
@@ -1517,53 +1539,11 @@ impl<R: Read> Vp8Decoder<R> {
         let w = self.frame.chroma_width() as usize;
 
         //8x8 with left top border of 1
-        let mut uws = [0u8; (8 + 1) * (8 + 1)];
-        let mut vws = [0u8; (8 + 1) * (8 + 1)];
+        let mut uws = create_border_chroma(mbx, mby, &self.top_border_u, &self.left_border_u);
+        let mut vws = create_border_chroma(mbx, mby, &self.top_border_v, &self.left_border_v);
 
         let ylength = cmp::min(self.frame.chroma_height() as usize - mby * 8, 8);
         let xlength = cmp::min(self.frame.chroma_width() as usize - mbx * 8, 8);
-
-        //left border
-        for y in 0usize..8 {
-            let (uy, vy) = if mbx == 0 || y >= ylength {
-                (129, 129)
-            } else {
-                let index = (mby * 8 + y) * w + ((mbx - 1) * 8 + 7);
-                (self.frame.ubuf[index], self.frame.vbuf[index])
-            };
-
-            uws[(y + 1) * stride] = uy;
-            vws[(y + 1) * stride] = vy;
-        }
-        //top border
-        for x in 0usize..8 {
-            let (ux, vx) = if mby == 0 || x >= xlength {
-                (127, 127)
-            } else {
-                let index = ((mby - 1) * 8 + 7) * w + (mbx * 8 + x);
-                (self.frame.ubuf[index], self.frame.vbuf[index])
-            };
-
-            uws[x + 1] = ux;
-            vws[x + 1] = vx;
-        }
-
-        //top left point
-        let (u1, v1) = if mby == 0 {
-            (127, 127)
-        } else if mbx == 0 {
-            (129, 129)
-        } else {
-            let index = ((mby - 1) * 8 + 7) * w + (mbx - 1) * 8 + 7;
-            if index >= self.frame.ubuf.len() {
-                (127, 127)
-            } else {
-                (self.frame.ubuf[index], self.frame.vbuf[index])
-            }
-        };
-
-        uws[0] = u1;
-        vws[0] = v1;
 
         match mb.chroma_mode {
             ChromaMode::DC => {
@@ -1598,6 +1578,9 @@ impl<R: Read> Vp8Decoder<R> {
                 add_residue(&mut vws, vrb, y0, x0, stride);
             }
         }
+
+        set_chroma_border(&mut self.left_border_u, &mut self.top_border_u, &uws, mbx);
+        set_chroma_border(&mut self.left_border_v, &mut self.top_border_v, &vws, mbx);
 
         for y in 0usize..ylength {
             let uv_buf_index = (mby * 8 + y) * w + mbx * 8;
@@ -2146,7 +2129,9 @@ impl<R: Read> Vp8Decoder<R> {
                 self.macroblocks.push(mb);
             }
 
-            self.left_border = vec![129u8; 1 + 16];
+            self.left_border_y = vec![129u8; 1 + 16];
+            self.left_border_u = vec![129u8; 1 + 8];
+            self.left_border_v = vec![129u8; 1 + 8];
         }
 
         //do loop filtering
@@ -2283,6 +2268,67 @@ fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8
 
     ws
 }
+
+const CHROMA_BLOCK_SIZE: usize = (8 + 1) * (8 + 1);
+// creates the left and top border for chroma prediction
+fn create_border_chroma(mbx: usize, mby: usize, top: &[u8], left: &[u8]) -> [u8; CHROMA_BLOCK_SIZE] {
+    let stride: usize = 1usize + 8;
+    let mut chroma_block = [0u8; CHROMA_BLOCK_SIZE];
+
+    // above
+    {
+        let above = &mut chroma_block[1..stride];
+        if mby == 0 {
+            for above in above.iter_mut() {
+                *above = 127;
+            }
+        } else {
+            for (above, &top) in above.iter_mut().zip(&top[mbx * 8..]) {
+                *above = top;
+            }
+        }
+    }
+
+    // left
+    if mbx == 0 {
+        for y in 0usize..8 {
+            chroma_block[(y + 1) * stride] = 129;
+        }
+    } else {
+        for (y, &left) in (0usize..8).zip(&left[1..]) {
+            chroma_block[(y + 1) * stride] = left;
+        }
+    }
+
+    chroma_block[0] = if mby == 0 {
+        127
+    } else if mbx == 0 {
+        129
+    } else {
+        left[0]
+    };
+
+    chroma_block
+}
+
+// set border
+fn set_chroma_border(left_border: &mut [u8], top_border: &mut [u8], chroma_block: &[u8], mbx: usize) {
+    let stride = 1usize + 8;
+    // top left
+    left_border[0] = chroma_block[0];
+
+    // left border
+    for (i, left) in left_border[1..][..8].iter_mut().enumerate() {
+        *left = chroma_block[(i + 1) * stride + 8];
+    }
+
+    for (top, &w) in top_border[mbx * 8..][..8]
+        .iter_mut()
+        .zip(&chroma_block[8 * stride + 1..][..8])
+    {
+        *top = w;
+    }
+} 
 
 fn avg3(left: u8, this: u8, right: u8) -> u8 {
     let avg = (u16::from(left) + 2 * u16::from(this) + u16::from(right) + 2) >> 2;
