@@ -1,5 +1,13 @@
 # Release Notes
 
+### Version 0.2.3
+
+Changes:
+ - Do not reject images with ICC profile bit set but missing ICCP chunk (#143)
+
+Bug Fixes:
+ - Fixed a bug that caused the last chroma macroblock in the image to be sometimes decoded incorrectly (#144)
+
 ### Version 0.2.2
 
 Changes:
