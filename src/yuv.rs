@@ -86,7 +86,7 @@ pub(crate) fn fill_rgb_buffer_fancy<const BPP: usize>(
     let top_row_v = &v_buffer[..chroma_width];
     let top_row_buffer = &mut buffer[..width * BPP];
     fill_row_fancy_with_1_uv_row::<BPP>(top_row_buffer, &y_buffer[..width], top_row_u, top_row_v);
-    
+
     let main_row_buffer = &mut buffer[width * BPP..];
     let main_y_buffer = &y_buffer[width..];
 
@@ -108,15 +108,22 @@ pub(crate) fn fill_rgb_buffer_fancy<const BPP: usize>(
         );
     }
 
-    let final_row_buffer = main_row_buffer.chunks_exact_mut(width * BPP * 2).into_remainder();
+    let final_row_buffer = main_row_buffer
+        .chunks_exact_mut(width * BPP * 2)
+        .into_remainder();
     let final_y_row = main_y_buffer.chunks_exact(width * 2).remainder();
 
-    if final_row_buffer.len() > 0 {
+    if !final_row_buffer.is_empty() {
         let start_u_index = u_buffer.len() - chroma_width;
         let final_u_row = &u_buffer[start_u_index..];
         let start_v_index = u_buffer.len() - chroma_width;
         let final_v_row = &v_buffer[start_v_index..];
-        fill_row_fancy_with_1_uv_row::<BPP>(final_row_buffer, final_y_row, final_u_row, final_v_row);
+        fill_row_fancy_with_1_uv_row::<BPP>(
+            final_row_buffer,
+            final_y_row,
+            final_u_row,
+            final_v_row,
+        );
     }
 }
 
@@ -174,7 +181,7 @@ fn fill_row_fancy_with_2_uv_rows<const BPP: usize>(
     let final_pixel = rest_row_buffer.chunks_exact_mut(BPP * 2).into_remainder();
     let final_y = rest_y_row.chunks_exact(2).remainder();
 
-    if let ([rgb @ ..], [y_value]) = (final_pixel, final_y) {
+    if let (rgb, [y_value]) = (final_pixel, final_y) {
         let final_u_1 = *u_row_1.last().unwrap();
         let final_u_2 = *u_row_2.last().unwrap();
 
@@ -187,10 +194,14 @@ fn fill_row_fancy_with_2_uv_rows<const BPP: usize>(
         let v_value = get_fancy_chroma_value(final_v_1, final_v_1, final_v_2, final_v_2);
         set_pixel(rgb1, *y_value, u_value, v_value);
     }
-
 }
 
-fn fill_row_fancy_with_1_uv_row<const BPP: usize>(row_buffer: &mut [u8], y_row: &[u8], u_row: &[u8], v_row: &[u8]) {
+fn fill_row_fancy_with_1_uv_row<const BPP: usize>(
+    row_buffer: &mut [u8],
+    y_row: &[u8],
+    u_row: &[u8],
+    v_row: &[u8],
+) {
     // doing left pixel first
     {
         let rgb1 = &mut row_buffer[0..3];
@@ -231,7 +242,7 @@ fn fill_row_fancy_with_1_uv_row<const BPP: usize>(row_buffer: &mut [u8], y_row: 
     let final_pixel = main_row_buffer.chunks_exact_mut(BPP * 2).into_remainder();
     let final_y = main_y_row.chunks_exact(2).remainder();
 
-    if let ([rgb @ ..], [final_y]) = (final_pixel, final_y) {
+    if let (rgb, [final_y]) = (final_pixel, final_y) {
         let final_u = *u_row.last().unwrap();
         let final_v = *v_row.last().unwrap();
 
@@ -265,10 +276,7 @@ fn fill_rgb_buffer_simple<const BPP: usize>(
 ) {
     let mut index = 0_usize;
 
-    for (y, row) in buffer
-        .chunks_exact_mut(width * BPP)
-        .enumerate()
-    {
+    for (y, row) in buffer.chunks_exact_mut(width * BPP).enumerate() {
         let chroma_index = chroma_width * (y / 2);
 
         let next_index = index + width;
@@ -342,6 +350,7 @@ mod tests {
 
     #[test]
     fn test_fancy_grid() {
+        #[rustfmt::skip]
         let y_buffer = [
             77, 162, 202, 185,
             28, 13, 199, 182,
@@ -349,11 +358,13 @@ mod tests {
             66, 27, 171, 130,
         ];
 
+        #[rustfmt::skip]
         let u_buffer = [
             34, 101, 
             123, 163
         ];
 
+        #[rustfmt::skip]
         let v_buffer = [
             97, 167,
             149, 23,
@@ -362,12 +373,15 @@ mod tests {
         let mut rgb_buffer = [0u8; 16 * 3];
         fill_rgb_buffer_fancy::<3>(&mut rgb_buffer, &y_buffer, &u_buffer, &v_buffer, 4, 2);
 
+        #[rustfmt::skip]
         let upsampled_u_buffer = [
             34, 51, 84, 101,
             56, 71, 101, 117,
             101, 112, 136, 148,
             123, 133, 153, 163,
         ];
+
+        #[rustfmt::skip]
         let upsampled_v_buffer = [
             97, 115, 150, 167,
             110, 115, 126, 131,
@@ -376,10 +390,12 @@ mod tests {
         ];
 
         let mut upsampled_rgb_buffer = [0u8; 16 * 3];
-        for (((rgb_val, y), u), v) in upsampled_rgb_buffer.chunks_exact_mut(3)
-        .zip(y_buffer)
-        .zip(upsampled_u_buffer)
-        .zip(upsampled_v_buffer) {
+        for (((rgb_val, y), u), v) in upsampled_rgb_buffer
+            .chunks_exact_mut(3)
+            .zip(y_buffer)
+            .zip(upsampled_u_buffer)
+            .zip(upsampled_v_buffer)
+        {
             rgb_val[0] = yuv_to_r(y, v);
             rgb_val[1] = yuv_to_g(y, u, v);
             rgb_val[2] = yuv_to_b(y, u);
@@ -396,5 +412,4 @@ mod tests {
         assert_eq!(yuv_to_g(y, u, v), 255);
         assert_eq!(yuv_to_b(y, u), 40);
     }
-
 }
