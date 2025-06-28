@@ -807,27 +807,36 @@ impl Frame {
         self.width.div_ceil(2)
     }
 
+    const fn buffer_width(&self) -> u16 {
+        let difference = self.width % 16;
+        if difference > 0 {
+            self.width + (16 - difference % 16)
+        } else {
+            self.width
+        }
+    }
+
     /// Fills an rgb buffer with the image
     pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
         const BPP: usize = 3;
 
-        let mut index = 0_usize;
+        let buffer_width = usize::from(self.buffer_width());
 
-        for (y, row) in buf
+        let u_row_twice_iter = self.ubuf.chunks_exact(buffer_width / 2).flat_map(|n| std::iter::repeat(n).take(2));
+        let v_row_twice_iter = self.vbuf.chunks_exact(buffer_width / 2).flat_map(|n| std::iter::repeat(n).take(2));
+
+        for (((row, y_row), u_row), v_row) in buf
             .chunks_exact_mut(usize::from(self.width) * BPP)
-            .enumerate()
+            .zip(self.ybuf.chunks_exact(buffer_width))
+            .zip(u_row_twice_iter)
+            .zip(v_row_twice_iter)
         {
-            let chroma_index = usize::from(self.chroma_width()) * (y / 2);
-
-            let next_index = index + usize::from(self.width);
             Self::fill_rgb_row(
-                &self.ybuf[index..next_index],
-                &self.ubuf[chroma_index..],
-                &self.vbuf[chroma_index..],
+                &y_row[..usize::from(self.width)],
+                &u_row[..usize::from(self.chroma_width())],
+                &v_row[..usize::from(self.chroma_width())],
                 row,
             );
-
-            index = next_index;
         }
     }
 
@@ -884,23 +893,23 @@ impl Frame {
     pub(crate) fn fill_rgba(&self, buf: &mut [u8]) {
         const BPP: usize = 4;
 
-        let mut index = 0_usize;
+        let buffer_width = usize::from(self.buffer_width());
 
-        for (y, row) in buf
+        let u_row_twice_iter = self.ubuf.chunks_exact(buffer_width / 2).flat_map(|n| std::iter::repeat(n).take(2));
+        let v_row_twice_iter = self.vbuf.chunks_exact(buffer_width / 2).flat_map(|n| std::iter::repeat(n).take(2));
+
+        for (((row, y_row), u_row), v_row) in buf
             .chunks_exact_mut(usize::from(self.width) * BPP)
-            .enumerate()
+            .zip(self.ybuf.chunks_exact(buffer_width))
+            .zip(u_row_twice_iter)
+            .zip(v_row_twice_iter)
         {
-            let chroma_index = usize::from(self.chroma_width()) * (y / 2);
-
-            let next_index = index + usize::from(self.width);
             Self::fill_rgba_row(
-                &self.ybuf[index..next_index],
-                &self.ubuf[chroma_index..],
-                &self.vbuf[chroma_index..],
+                &y_row[..usize::from(self.width)],
+                &u_row[..usize::from(self.chroma_width())],
+                &v_row[..usize::from(self.chroma_width())],
                 row,
             );
-
-            index = next_index;
         }
     }
 
@@ -1477,7 +1486,6 @@ impl<R: Read> Vp8Decoder<R> {
 
     fn intra_predict_luma(&mut self, mbx: usize, mby: usize, mb: &MacroBlock, resdata: &[i32]) {
         let stride = 1usize + 16 + 4;
-        let w = self.frame.width as usize;
         let mw = self.mbwidth as usize;
         let mut ws = create_border_luma(mbx, mby, mw, &self.top_border_y, &self.left_border_y);
 
@@ -1517,7 +1525,7 @@ impl<R: Read> Vp8Decoder<R> {
         }
 
         for y in 0usize..16 {
-            for (ybuf, &ws) in self.frame.ybuf[(mby * 16 + y) * w + mbx * 16..][..16]
+            for (ybuf, &ws) in self.frame.ybuf[(mby * 16 + y) * mw * 16 + mbx * 16..][..16]
                 .iter_mut()
                 .zip(ws[(1 + y) * stride + 1..][..16].iter())
             {
@@ -1529,7 +1537,7 @@ impl<R: Read> Vp8Decoder<R> {
     fn intra_predict_chroma(&mut self, mbx: usize, mby: usize, mb: &MacroBlock, resdata: &[i32]) {
         let stride = 1usize + 8;
 
-        let w = self.frame.chroma_width() as usize;
+        let mw = self.mbwidth as usize;
 
         //8x8 with left top border of 1
         let mut uws = create_border_chroma(mbx, mby, &self.top_border_u, &self.left_border_u);
@@ -1573,7 +1581,7 @@ impl<R: Read> Vp8Decoder<R> {
         set_chroma_border(&mut self.left_border_v, &mut self.top_border_v, &vws, mbx);
 
         for y in 0usize..8 {
-            let uv_buf_index = (mby * 8 + y) * w + mbx * 8;
+            let uv_buf_index = (mby * 8 + y) * mw * 8 + mbx * 8;
             let ws_index = (1 + y) * stride + 1;
 
             for (((ub, vb), &uw), &vw) in self.frame.ubuf[uv_buf_index..][..8]
@@ -1762,8 +1770,8 @@ impl<R: Read> Vp8Decoder<R> {
 
     /// Does loop filtering on the macroblock
     fn loop_filter(&mut self, mbx: usize, mby: usize, mb: &MacroBlock) {
-        let luma_w = usize::from(self.frame.width);
-        let chroma_w = usize::from(self.frame.chroma_width());
+        let luma_w = self.mbwidth as usize * 16;
+        let chroma_w = self.mbwidth as usize * 8;
 
         let (filter_level, interior_limit, hev_threshold) = self.calculate_filter_parameters(mb);
 
