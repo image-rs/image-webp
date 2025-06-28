@@ -94,7 +94,7 @@ fn reference_test(file: &str) {
             .filter(|(a, b)| a != b)
             .count();
         let percentage_different = 100 * num_bytes_different / data.len();
-        if percentage_different >= 10 {
+        if percentage_different >= 1 {
             save_image(
                 &data,
                 file,
@@ -104,7 +104,7 @@ fn reference_test(file: &str) {
                 height,
             );
         }
-        assert!(percentage_different < 10, "More than 10% of pixels differ");
+        assert!(percentage_different < 1, "More than 1% of pixels differ");
     }
 
     // If the file is animated, then check all frames.
@@ -133,10 +133,10 @@ fn reference_test(file: &str) {
                     .filter(|(a, b)| a != b)
                     .count();
                 let percentage_different = 100 * num_bytes_different / data.len();
-                if percentage_different >= 10 {
+                if percentage_different >= 1 {
                     save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
                 }
-                assert!(percentage_different < 10, "More than 10% of pixels differ");
+                assert!(percentage_different < 1, "More than 1% of pixels differ");
             } else if data != reference_data {
                 save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
                 panic!("Pixel mismatch")
