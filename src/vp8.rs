@@ -822,8 +822,14 @@ impl Frame {
 
         let buffer_width = usize::from(self.buffer_width());
 
-        let u_row_twice_iter = self.ubuf.chunks_exact(buffer_width / 2).flat_map(|n| std::iter::repeat(n).take(2));
-        let v_row_twice_iter = self.vbuf.chunks_exact(buffer_width / 2).flat_map(|n| std::iter::repeat(n).take(2));
+        let u_row_twice_iter = self
+            .ubuf
+            .chunks_exact(buffer_width / 2)
+            .flat_map(|n| std::iter::repeat(n).take(2));
+        let v_row_twice_iter = self
+            .vbuf
+            .chunks_exact(buffer_width / 2)
+            .flat_map(|n| std::iter::repeat(n).take(2));
 
         for (((row, y_row), u_row), v_row) in buf
             .chunks_exact_mut(usize::from(self.width) * BPP)
@@ -895,8 +901,14 @@ impl Frame {
 
         let buffer_width = usize::from(self.buffer_width());
 
-        let u_row_twice_iter = self.ubuf.chunks_exact(buffer_width / 2).flat_map(|n| std::iter::repeat(n).take(2));
-        let v_row_twice_iter = self.vbuf.chunks_exact(buffer_width / 2).flat_map(|n| std::iter::repeat(n).take(2));
+        let u_row_twice_iter = self
+            .ubuf
+            .chunks_exact(buffer_width / 2)
+            .flat_map(|n| std::iter::repeat(n).take(2));
+        let v_row_twice_iter = self
+            .vbuf
+            .chunks_exact(buffer_width / 2)
+            .flat_map(|n| std::iter::repeat(n).take(2));
 
         for (((row, y_row), u_row), v_row) in buf
             .chunks_exact_mut(usize::from(self.width) * BPP)
