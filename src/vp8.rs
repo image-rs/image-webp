@@ -762,6 +762,7 @@ struct MacroBlock {
     chroma_mode: ChromaMode,
     segmentid: u8,
     coeffs_skipped: bool,
+    non_zero_dct: bool,
 }
 
 /// A Representation of the last decoded video frame
@@ -1685,7 +1686,7 @@ impl<R: Read> Vp8Decoder<R> {
 
     fn read_residual_data(
         &mut self,
-        mb: &MacroBlock,
+        mb: &mut MacroBlock,
         mbx: usize,
         p: usize,
     ) -> Result<[i32; 384], DecodingError> {
@@ -1726,6 +1727,7 @@ impl<R: Read> Vp8Decoder<R> {
                 let n = self.read_coefficients(block, p, plane, complexity as usize, dcq, acq)?;
 
                 if block[0] != 0 || n {
+                    mb.non_zero_dct = true;
                     transform::idct4x4(block);
                 }
 
@@ -1754,6 +1756,7 @@ impl<R: Read> Vp8Decoder<R> {
                     let n =
                         self.read_coefficients(block, p, plane, complexity as usize, dcq, acq)?;
                     if block[0] != 0 || n {
+                        mb.non_zero_dct = true;
                         transform::idct4x4(block);
                     }
 
@@ -1780,6 +1783,9 @@ impl<R: Read> Vp8Decoder<R> {
         if filter_level > 0 {
             let mbedge_limit = (filter_level + 2) * 2 + interior_limit;
             let sub_bedge_limit = (filter_level * 2) + interior_limit;
+
+            // we skip subblock filtering if the coding mode isn't B_PRED and there's no DCT coefficient coded
+            let do_subblock_filtering = mb.luma_mode == LumaMode::B || (!mb.coeffs_skipped && mb.non_zero_dct);
 
             let luma_ylength = cmp::min(luma_h - 16 * mby, 16);
             let luma_xlength = cmp::min(luma_w - 16 * mbx, 16);
@@ -1848,7 +1854,7 @@ impl<R: Read> Vp8Decoder<R> {
             }
 
             //filter across vertical subblocks in macroblock
-            if mb.luma_mode == LumaMode::B || !mb.coeffs_skipped {
+            if do_subblock_filtering {
                 if self.frame.filter_type {
                     for x in (4usize..luma_xlength - 1).step_by(4) {
                         for y in 0..luma_ylength {
@@ -1970,7 +1976,7 @@ impl<R: Read> Vp8Decoder<R> {
             }
 
             //filter across horizontal subblock edges within the macroblock
-            if mb.luma_mode == LumaMode::B || !mb.coeffs_skipped {
+            if do_subblock_filtering {
                 if self.frame.filter_type {
                     for y in (4usize..luma_ylength - 1).step_by(4) {
                         for x in 0..luma_xlength {
@@ -2076,7 +2082,7 @@ impl<R: Read> Vp8Decoder<R> {
         if self.frame.keyframe {
             if filter_level >= 40 {
                 hev_threshold = 2;
-            } else {
+            } else if filter_level >= 15 {
                 hev_threshold = 1;
             }
         } else {
@@ -2106,9 +2112,9 @@ impl<R: Read> Vp8Decoder<R> {
             self.left = MacroBlock::default();
 
             for mbx in 0..self.mbwidth as usize {
-                let mb = self.read_macroblock_header(mbx)?;
+                let mut mb = self.read_macroblock_header(mbx)?;
                 let blocks = if !mb.coeffs_skipped {
-                    self.read_residual_data(&mb, mbx, p)?
+                    self.read_residual_data(&mut mb, mbx, p)?
                 } else {
                     if mb.luma_mode != LumaMode::B {
                         self.left.complexity[0] = 0;
