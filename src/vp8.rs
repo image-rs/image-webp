@@ -1049,6 +1049,7 @@ pub struct Vp8Decoder<R> {
     segments_update_map: bool,
     segment: [Segment; MAX_SEGMENTS],
 
+    loop_filter_adjustments_enabled: bool,
     ref_delta: [i32; 4],
     mode_delta: [i32; 4],
 
@@ -1101,6 +1102,7 @@ impl<R: Read> Vp8Decoder<R> {
             segments_update_map: false,
             segment: [s; MAX_SEGMENTS],
 
+            loop_filter_adjustments_enabled: false,
             ref_delta: [0; 4],
             mode_delta: [0; 4],
 
@@ -1373,8 +1375,8 @@ impl<R: Read> Vp8Decoder<R> {
         self.frame.filter_level = self.b.read_literal(6).or_accumulate(&mut res);
         self.frame.sharpness_level = self.b.read_literal(3).or_accumulate(&mut res);
 
-        let lf_adjust_enable = self.b.read_flag().or_accumulate(&mut res);
-        if lf_adjust_enable {
+        self.loop_filter_adjustments_enabled = self.b.read_flag().or_accumulate(&mut res);
+        if self.loop_filter_adjustments_enabled {
             self.read_loop_filter_adjustments()?;
         }
 
@@ -2026,6 +2028,11 @@ impl<R: Read> Vp8Decoder<R> {
         let segment = self.segment[macroblock.segmentid as usize];
         let mut filter_level = i32::from(self.frame.filter_level);
 
+        // if frame level filter level is 0, we must skip loop filter
+        if filter_level == 0 {
+            return (0, 0, 0);
+        }
+
         if self.segments_enabled {
             if segment.delta_values {
                 filter_level += i32::from(segment.loopfilter_level);
@@ -2036,8 +2043,11 @@ impl<R: Read> Vp8Decoder<R> {
 
         filter_level = filter_level.clamp(0, 63);
 
-        if macroblock.luma_mode == LumaMode::B {
-            filter_level += self.mode_delta[0];
+        if self.loop_filter_adjustments_enabled {
+            filter_level += self.ref_delta[0];
+            if macroblock.luma_mode == LumaMode::B {
+                filter_level += self.mode_delta[0];
+            }
         }
 
         let filter_level = filter_level.clamp(0, 63) as u8;
