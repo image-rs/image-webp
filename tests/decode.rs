@@ -86,15 +86,12 @@ fn reference_test(file: &str) {
     } else {
         // NOTE: WebP lossy images are stored in YUV format. The conversion to RGB is not precisely
         // defined, but we currently attempt to match the dwebp's "-nofancy" conversion option.
-        //
-        // TODO: Investigate why we don't get bit exact output for all pixels.
         let num_bytes_different = data
             .iter()
             .zip(reference_data.iter())
             .filter(|(a, b)| a != b)
             .count();
-        let percentage_different = 100 * num_bytes_different / data.len();
-        if percentage_different >= 1 {
+        if num_bytes_different > 0 {
             save_image(
                 &data,
                 file,
@@ -104,7 +101,7 @@ fn reference_test(file: &str) {
                 height,
             );
         }
-        assert!(percentage_different < 1, "More than 1% of pixels differ");
+        assert_eq!(num_bytes_different, 0, "Pixel mismatch");
     }
 
     // If the file is animated, then check all frames.
@@ -132,11 +129,10 @@ fn reference_test(file: &str) {
                     .zip(reference_data.iter())
                     .filter(|(a, b)| a != b)
                     .count();
-                let percentage_different = 100 * num_bytes_different / data.len();
-                if percentage_different >= 1 {
+                if num_bytes_different > 0 {
                     save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
                 }
-                assert!(percentage_different < 1, "More than 1% of pixels differ");
+                assert_eq!(num_bytes_different, 0, "Pixel mismatch");
             } else if data != reference_data {
                 save_image(&data, file, Some(i), decoder.has_alpha(), width, height);
                 panic!("Pixel mismatch")
