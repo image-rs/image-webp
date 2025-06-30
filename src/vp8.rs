@@ -827,6 +827,7 @@ impl Frame {
             &self.ubuf,
             &self.vbuf,
             usize::from(self.width),
+            usize::from(self.height),
             usize::from(self.chroma_width()),
             usize::from(self.buffer_width()),
         );
@@ -842,6 +843,7 @@ impl Frame {
             &self.ubuf,
             &self.vbuf,
             usize::from(self.width),
+            usize::from(self.height),
             usize::from(self.chroma_width()),
             usize::from(self.buffer_width()),
         );
