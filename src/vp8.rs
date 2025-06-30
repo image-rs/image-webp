@@ -828,6 +828,7 @@ impl Frame {
             &self.vbuf,
             usize::from(self.width),
             usize::from(self.chroma_width()),
+            usize::from(self.buffer_width()),
         );
     }
 
@@ -842,6 +843,7 @@ impl Frame {
             &self.vbuf,
             usize::from(self.width),
             usize::from(self.chroma_width()),
+            usize::from(self.buffer_width()),
         );
     }
     /// Gets the buffer size
