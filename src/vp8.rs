@@ -803,11 +803,6 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Chroma plane is half the size of the Luma plane
-    const fn chroma_width(&self) -> u16 {
-        self.width.div_ceil(2)
-    }
-
     const fn buffer_width(&self) -> u16 {
         let difference = self.width % 16;
         if difference > 0 {
@@ -828,7 +823,6 @@ impl Frame {
             &self.vbuf,
             usize::from(self.width),
             usize::from(self.height),
-            usize::from(self.chroma_width()),
             usize::from(self.buffer_width()),
         );
     }
@@ -844,7 +838,6 @@ impl Frame {
             &self.vbuf,
             usize::from(self.width),
             usize::from(self.height),
-            usize::from(self.chroma_width()),
             usize::from(self.buffer_width()),
         );
     }

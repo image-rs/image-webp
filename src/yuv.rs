@@ -80,11 +80,11 @@ pub(crate) fn fill_rgb_buffer_fancy<const BPP: usize>(
     v_buffer: &[u8],
     width: usize,
     height: usize,
-    chroma_width: usize,
     buffer_width: usize,
 ) {
     // buffer width is always even so don't need to do div_ceil
     let chroma_buffer_width = buffer_width / 2;
+    let chroma_width = width.div_ceil(2);
 
     // fill top row first since it only uses the top u/v row
     let top_row_y = &y_buffer[..width];
@@ -97,8 +97,12 @@ pub(crate) fn fill_rgb_buffer_fancy<const BPP: usize>(
     // the y buffer iterator limits the end of the row iterator so we need this end index
     let end_y_index = height * buffer_width;
     let mut main_y_chunks = y_buffer[buffer_width..end_y_index].chunks_exact(buffer_width * 2);
-    let mut main_u_windows = u_buffer.windows(chroma_buffer_width * 2).step_by(chroma_buffer_width);
-    let mut main_v_windows = v_buffer.windows(chroma_buffer_width * 2).step_by(chroma_buffer_width);
+    let mut main_u_windows = u_buffer
+        .windows(chroma_buffer_width * 2)
+        .step_by(chroma_buffer_width);
+    let mut main_v_windows = v_buffer
+        .windows(chroma_buffer_width * 2)
+        .step_by(chroma_buffer_width);
 
     for (((row_buffer, y_rows), u_rows), v_rows) in (&mut main_row_chunks)
         .zip(&mut main_y_chunks)
@@ -110,19 +114,27 @@ pub(crate) fn fill_rgb_buffer_fancy<const BPP: usize>(
         let (row_buf_1, row_buf_2) = row_buffer.split_at_mut(width * BPP);
         let (y_row_1, y_row_2) = y_rows.split_at(buffer_width);
         fill_row_fancy_with_2_uv_rows::<BPP>(
-            row_buf_1, &y_row_1[..width], &u_row_1[..chroma_width], &u_row_2[..chroma_width], &v_row_1[..chroma_width], &v_row_2[..chroma_width],
+            row_buf_1,
+            &y_row_1[..width],
+            &u_row_1[..chroma_width],
+            &u_row_2[..chroma_width],
+            &v_row_1[..chroma_width],
+            &v_row_2[..chroma_width],
         );
         fill_row_fancy_with_2_uv_rows::<BPP>(
-            row_buf_2, &y_row_2[..width], &u_row_2[..chroma_width], &u_row_1[..chroma_width], &v_row_2[..chroma_width], &v_row_1[..chroma_width],
+            row_buf_2,
+            &y_row_2[..width],
+            &u_row_2[..chroma_width],
+            &u_row_1[..chroma_width],
+            &v_row_2[..chroma_width],
+            &v_row_1[..chroma_width],
         );
     }
 
-    let final_row_buffer = main_row_chunks
-        .into_remainder();
-    
+    let final_row_buffer = main_row_chunks.into_remainder();
+
     // if the image has even height there will be one final row with only one u/v row matching it
     if !final_row_buffer.is_empty() {
-
         let final_y_row = main_y_chunks.remainder();
 
         let chroma_height = height.div_ceil(2);
@@ -287,7 +299,6 @@ fn fill_rgb_buffer_simple<const BPP: usize>(
     chroma_width: usize,
     buffer_width: usize,
 ) {
-
     let u_row_twice_iter = u_buffer
         .chunks_exact(buffer_width / 2)
         .flat_map(|n| std::iter::repeat(n).take(2));
@@ -390,7 +401,7 @@ mod tests {
         ];
 
         let mut rgb_buffer = [0u8; 16 * 3];
-        fill_rgb_buffer_fancy::<3>(&mut rgb_buffer, &y_buffer, &u_buffer, &v_buffer, 4, 4, 2, 4);
+        fill_rgb_buffer_fancy::<3>(&mut rgb_buffer, &y_buffer, &u_buffer, &v_buffer, 4, 4, 4);
 
         #[rustfmt::skip]
         let upsampled_u_buffer = [
