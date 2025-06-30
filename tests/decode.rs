@@ -85,7 +85,7 @@ fn reference_test(file: &str) {
         }
     } else {
         // NOTE: WebP lossy images are stored in YUV format. The conversion to RGB is not precisely
-        // defined, but we currently attempt to match the dwebp's "-nofancy" conversion option.
+        // defined, but we currently attempt to match the dwebp's default conversion option.
         let num_bytes_different = data
             .iter()
             .zip(reference_data.iter())
