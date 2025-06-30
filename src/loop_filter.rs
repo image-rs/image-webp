@@ -19,11 +19,7 @@ fn s2u(val: i32) -> u8 {
 
 #[inline]
 const fn diff(val1: u8, val2: u8) -> u8 {
-    if val1 > val2 {
-        val1 - val2
-    } else {
-        val2 - val1
-    }
+    u8::abs_diff(val1, val2)
 }
 
 //15.2

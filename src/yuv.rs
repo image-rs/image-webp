@@ -273,21 +273,28 @@ fn fill_rgb_buffer_simple<const BPP: usize>(
     v_buffer: &[u8],
     width: usize,
     chroma_width: usize,
+    buffer_width: usize,
 ) {
-    let mut index = 0_usize;
 
-    for (y, row) in buffer.chunks_exact_mut(width * BPP).enumerate() {
-        let chroma_index = chroma_width * (y / 2);
+    let u_row_twice_iter = u_buffer
+        .chunks_exact(buffer_width / 2)
+        .flat_map(|n| std::iter::repeat(n).take(2));
+    let v_row_twice_iter = v_buffer
+        .chunks_exact(buffer_width / 2)
+        .flat_map(|n| std::iter::repeat(n).take(2));
 
-        let next_index = index + width;
+    for (((row, y_row), u_row), v_row) in buffer
+        .chunks_exact_mut(width * BPP)
+        .zip(y_buffer.chunks_exact(buffer_width))
+        .zip(u_row_twice_iter)
+        .zip(v_row_twice_iter)
+    {
         fill_rgba_row_simple(
-            &y_buffer[index..next_index],
-            &u_buffer[chroma_index..],
-            &v_buffer[chroma_index..],
+            &y_row[..width],
+            &u_row[..chroma_width],
+            &v_row[..chroma_width],
             row,
         );
-
-        index = next_index;
     }
 }
 
