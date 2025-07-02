@@ -1805,11 +1805,9 @@ impl<R: Read> Vp8Decoder<R> {
                         let y0 = mby * 16 + y;
                         let x0 = mbx * 16;
 
-                        loop_filter::simple_segment(
+                        loop_filter::simple_segment_horizontal(
                             mbedge_limit,
-                            &mut self.frame.ybuf[..],
-                            y0 * luma_w + x0,
-                            1,
+                            &mut self.frame.ybuf[y0 * luma_w + x0 - 4..][..8],
                         );
                     }
                 } else {
@@ -1817,13 +1815,11 @@ impl<R: Read> Vp8Decoder<R> {
                         let y0 = mby * 16 + y;
                         let x0 = mbx * 16;
 
-                        loop_filter::macroblock_filter(
+                        loop_filter::macroblock_filter_horizontal(
                             hev_threshold,
                             interior_limit,
                             mbedge_limit,
-                            &mut self.frame.ybuf[..],
-                            y0 * luma_w + x0,
-                            1,
+                            &mut self.frame.ybuf[y0 * luma_w + x0 - 4..][..8],
                         );
                     }
 
@@ -1831,21 +1827,17 @@ impl<R: Read> Vp8Decoder<R> {
                         let y0 = mby * 8 + y;
                         let x0 = mbx * 8;
 
-                        loop_filter::macroblock_filter(
+                        loop_filter::macroblock_filter_horizontal(
                             hev_threshold,
                             interior_limit,
                             mbedge_limit,
-                            &mut self.frame.ubuf[..],
-                            y0 * chroma_w + x0,
-                            1,
+                            &mut self.frame.ubuf[y0 * chroma_w + x0 - 4..][..8],
                         );
-                        loop_filter::macroblock_filter(
+                        loop_filter::macroblock_filter_horizontal(
                             hev_threshold,
                             interior_limit,
                             mbedge_limit,
-                            &mut self.frame.vbuf[..],
-                            y0 * chroma_w + x0,
-                            1,
+                            &mut self.frame.vbuf[y0 * chroma_w + x0 - 4..][..8],
                         );
                     }
                 }
@@ -1859,11 +1851,9 @@ impl<R: Read> Vp8Decoder<R> {
                             let y0 = mby * 16 + y;
                             let x0 = mbx * 16 + x;
 
-                            loop_filter::simple_segment(
+                            loop_filter::simple_segment_horizontal(
                                 sub_bedge_limit,
-                                &mut self.frame.ybuf[..],
-                                y0 * luma_w + x0,
-                                1,
+                                &mut self.frame.ybuf[y0 * luma_w + x0 - 4..][..8],
                             );
                         }
                     }
@@ -1873,13 +1863,11 @@ impl<R: Read> Vp8Decoder<R> {
                             let y0 = mby * 16 + y;
                             let x0 = mbx * 16 + x;
 
-                            loop_filter::subblock_filter(
+                            loop_filter::subblock_filter_horizontal(
                                 hev_threshold,
                                 interior_limit,
                                 sub_bedge_limit,
-                                &mut self.frame.ybuf[..],
-                                y0 * luma_w + x0,
-                                1,
+                                &mut self.frame.ybuf[y0 * luma_w + x0 - 4..][..8],
                             );
                         }
                     }
@@ -1888,22 +1876,18 @@ impl<R: Read> Vp8Decoder<R> {
                         let y0 = mby * 8 + y;
                         let x0 = mbx * 8 + 4;
 
-                        loop_filter::subblock_filter(
+                        loop_filter::subblock_filter_horizontal(
                             hev_threshold,
                             interior_limit,
                             sub_bedge_limit,
-                            &mut self.frame.ubuf[..],
-                            y0 * chroma_w + x0,
-                            1,
+                            &mut self.frame.ubuf[y0 * chroma_w + x0 - 4..][..8],
                         );
 
-                        loop_filter::subblock_filter(
+                        loop_filter::subblock_filter_horizontal(
                             hev_threshold,
                             interior_limit,
                             sub_bedge_limit,
-                            &mut self.frame.vbuf[..],
-                            y0 * chroma_w + x0,
-                            1,
+                            &mut self.frame.vbuf[y0 * chroma_w + x0 - 4..][..8],
                         );
                     }
                 }
@@ -1916,7 +1900,7 @@ impl<R: Read> Vp8Decoder<R> {
                         let y0 = mby * 16;
                         let x0 = mbx * 16 + x;
 
-                        loop_filter::simple_segment(
+                        loop_filter::simple_segment_vertical(
                             mbedge_limit,
                             &mut self.frame.ybuf[..],
                             y0 * luma_w + x0,
@@ -1929,7 +1913,7 @@ impl<R: Read> Vp8Decoder<R> {
                         let y0 = mby * 16;
                         let x0 = mbx * 16 + x;
 
-                        loop_filter::macroblock_filter(
+                        loop_filter::macroblock_filter_vertical(
                             hev_threshold,
                             interior_limit,
                             mbedge_limit,
@@ -1943,7 +1927,7 @@ impl<R: Read> Vp8Decoder<R> {
                         let y0 = mby * 8;
                         let x0 = mbx * 8 + x;
 
-                        loop_filter::macroblock_filter(
+                        loop_filter::macroblock_filter_vertical(
                             hev_threshold,
                             interior_limit,
                             mbedge_limit,
@@ -1951,7 +1935,7 @@ impl<R: Read> Vp8Decoder<R> {
                             y0 * chroma_w + x0,
                             chroma_w,
                         );
-                        loop_filter::macroblock_filter(
+                        loop_filter::macroblock_filter_vertical(
                             hev_threshold,
                             interior_limit,
                             mbedge_limit,
@@ -1971,7 +1955,7 @@ impl<R: Read> Vp8Decoder<R> {
                             let y0 = mby * 16 + y;
                             let x0 = mbx * 16 + x;
 
-                            loop_filter::simple_segment(
+                            loop_filter::simple_segment_vertical(
                                 sub_bedge_limit,
                                 &mut self.frame.ybuf[..],
                                 y0 * luma_w + x0,
@@ -1985,7 +1969,7 @@ impl<R: Read> Vp8Decoder<R> {
                             let y0 = mby * 16 + y;
                             let x0 = mbx * 16 + x;
 
-                            loop_filter::subblock_filter(
+                            loop_filter::subblock_filter_vertical(
                                 hev_threshold,
                                 interior_limit,
                                 sub_bedge_limit,
@@ -2000,7 +1984,7 @@ impl<R: Read> Vp8Decoder<R> {
                         let y0 = mby * 8 + 4;
                         let x0 = mbx * 8 + x;
 
-                        loop_filter::subblock_filter(
+                        loop_filter::subblock_filter_vertical(
                             hev_threshold,
                             interior_limit,
                             sub_bedge_limit,
@@ -2009,7 +1993,7 @@ impl<R: Read> Vp8Decoder<R> {
                             chroma_w,
                         );
 
-                        loop_filter::subblock_filter(
+                        loop_filter::subblock_filter_vertical(
                             hev_threshold,
                             interior_limit,
                             sub_bedge_limit,
