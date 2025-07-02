@@ -25,7 +25,12 @@ const fn diff(val1: u8, val2: u8) -> u8 {
 /// Used in both the simple and normal filters described in 15.2 and 15.3
 ///
 /// Adjusts the 2 middle pixels in a vertical loop filter
-fn common_adjust_vertical(use_outer_taps: bool, pixels: &mut [u8], point: usize, stride: usize) -> i32 {
+fn common_adjust_vertical(
+    use_outer_taps: bool,
+    pixels: &mut [u8],
+    point: usize,
+    stride: usize,
+) -> i32 {
     let p1 = u2s(pixels[point - 2 * stride]);
     let p0 = u2s(pixels[point - stride]);
     let q0 = u2s(pixels[point]);
@@ -71,7 +76,12 @@ fn common_adjust_horizontal(use_outer_taps: bool, pixels: &mut [u8]) -> i32 {
 }
 
 #[inline]
-fn simple_threshold_vertical(filter_limit: i32, pixels: &[u8], point: usize, stride: usize) -> bool {
+fn simple_threshold_vertical(
+    filter_limit: i32,
+    pixels: &[u8],
+    point: usize,
+    stride: usize,
+) -> bool {
     i32::from(diff(pixels[point - stride], pixels[point])) * 2
         + i32::from(diff(pixels[point - 2 * stride], pixels[point + stride])) / 2
         <= filter_limit
@@ -79,8 +89,7 @@ fn simple_threshold_vertical(filter_limit: i32, pixels: &[u8], point: usize, str
 
 #[inline]
 fn simple_threshold_horizontal(filter_limit: i32, pixels: &[u8]) -> bool {
-    i32::from(diff(pixels[3], pixels[4])) * 2
-        + i32::from(diff(pixels[2], pixels[5])) / 2
+    i32::from(diff(pixels[3], pixels[4])) * 2 + i32::from(diff(pixels[2], pixels[5])) / 2
         <= filter_limit
 }
 
@@ -103,11 +112,7 @@ fn should_filter_vertical(
         && diff(pixels[point + stride], pixels[point]) <= interior_limit
 }
 
-fn should_filter_horizontal(
-    interior_limit: u8,
-    edge_limit: u8,
-    pixels: &[u8],
-) -> bool {
+fn should_filter_horizontal(interior_limit: u8, edge_limit: u8, pixels: &[u8]) -> bool {
     simple_threshold_horizontal(i32::from(edge_limit), pixels)
         // this looks like an erroneous way to compute differences between 8 points, but isn't:
         // there are actually only 6 diff comparisons required as per the spec:
@@ -128,21 +133,25 @@ fn high_edge_variance_vertical(threshold: u8, pixels: &[u8], point: usize, strid
 
 #[inline]
 fn high_edge_variance_horizontal(threshold: u8, pixels: &[u8]) -> bool {
-    diff(pixels[2], pixels[3]) > threshold
-        || diff(pixels[5], pixels[4]) > threshold
+    diff(pixels[2], pixels[3]) > threshold || diff(pixels[5], pixels[4]) > threshold
 }
 
 /// Part of the simple filter described in 15.2 in the specification
-/// 
+///
 /// Affects 4 pixels on an edge(2 each side)
-pub(crate) fn simple_segment_vertical(edge_limit: u8, pixels: &mut [u8], point: usize, stride: usize) {
+pub(crate) fn simple_segment_vertical(
+    edge_limit: u8,
+    pixels: &mut [u8],
+    point: usize,
+    stride: usize,
+) {
     if simple_threshold_vertical(i32::from(edge_limit), pixels, point, stride) {
         common_adjust_vertical(true, pixels, point, stride);
     }
 }
 
 /// Part of the simple filter described in 15.2 in the specification
-/// 
+///
 /// Affects 4 pixels on an edge(2 each side)
 pub(crate) fn simple_segment_horizontal(edge_limit: u8, pixels: &mut [u8]) {
     if simple_threshold_horizontal(i32::from(edge_limit), pixels) {
@@ -151,7 +160,7 @@ pub(crate) fn simple_segment_horizontal(edge_limit: u8, pixels: &mut [u8]) {
 }
 
 /// Part of the normal filter described in 15.3 in the specification
-/// 
+///
 /// Filters on the 8 pixels on the edges between subblocks inside a macroblock
 pub(crate) fn subblock_filter_vertical(
     hev_threshold: u8,
@@ -163,7 +172,7 @@ pub(crate) fn subblock_filter_vertical(
 ) {
     if should_filter_vertical(interior_limit, edge_limit, pixels, point, stride) {
         let hv = high_edge_variance_vertical(hev_threshold, pixels, point, stride);
-        
+
         let a = (common_adjust_vertical(hv, pixels, point, stride) + 1) >> 1;
 
         if !hv {
@@ -174,7 +183,7 @@ pub(crate) fn subblock_filter_vertical(
 }
 
 /// Part of the normal filter described in 15.3 in the specification
-/// 
+///
 /// Filters on the 8 pixels on the edges between subblocks inside a macroblock
 pub(crate) fn subblock_filter_horizontal(
     hev_threshold: u8,
@@ -184,7 +193,7 @@ pub(crate) fn subblock_filter_horizontal(
 ) {
     if should_filter_horizontal(interior_limit, edge_limit, pixels) {
         let hv = high_edge_variance_horizontal(hev_threshold, pixels);
-        
+
         let a = (common_adjust_horizontal(hv, pixels) + 1) >> 1;
 
         if !hv {
@@ -195,7 +204,7 @@ pub(crate) fn subblock_filter_horizontal(
 }
 
 /// Part of the normal filter described in 15.3 in the specification
-/// 
+///
 /// Filters on the 8 pixels on the vertical edges between macroblocks\
 /// The point passed in must be the first vertical pixel on the bottom macroblock
 pub(crate) fn macroblock_filter_vertical(
@@ -218,19 +227,19 @@ pub(crate) fn macroblock_filter_vertical(
             let q2 = u2s(pixels[point + 2 * stride]);
 
             let w = c(c(p1 - q1) + 3 * (q0 - p0));
-            
+
             let a = c((27 * w + 63) >> 7);
-            
+
             pixels[point] = s2u(q0 - a);
             pixels[point - stride] = s2u(p0 + a);
-            
+
             let a = c((18 * w + 63) >> 7);
-            
+
             pixels[point + stride] = s2u(q1 - a);
             pixels[point - 2 * stride] = s2u(p1 + a);
-            
+
             let a = c((9 * w + 63) >> 7);
-            
+
             pixels[point + 2 * stride] = s2u(q2 - a);
             pixels[point - 3 * stride] = s2u(p2 + a);
         } else {
@@ -240,7 +249,7 @@ pub(crate) fn macroblock_filter_vertical(
 }
 
 /// Part of the normal filter described in 15.3 in the specification
-/// 
+///
 /// Filters on the 8 pixels on the horizontal edges between macroblocks\
 /// The pixels passed in must be a slice containing the 4 pixels on each macroblock
 pub(crate) fn macroblock_filter_horizontal(
@@ -262,19 +271,19 @@ pub(crate) fn macroblock_filter_horizontal(
             let q2 = u2s(pixels[6]);
 
             let w = c(c(p1 - q1) + 3 * (q0 - p0));
-            
+
             let a = c((27 * w + 63) >> 7);
-            
+
             pixels[4] = s2u(q0 - a);
             pixels[3] = s2u(p0 + a);
-            
+
             let a = c((18 * w + 63) >> 7);
-            
+
             pixels[5] = s2u(q1 - a);
             pixels[2] = s2u(p1 + a);
-            
+
             let a = c((9 * w + 63) >> 7);
-            
+
             pixels[6] = s2u(q2 - a);
             pixels[1] = s2u(p2 + a);
         } else {
@@ -288,6 +297,7 @@ mod benches {
     use super::*;
     use test::{black_box, Bencher};
 
+    #[rustfmt::skip]
     const TEST_DATA: [u8; 8 * 8] = [
         177, 192, 179, 181, 185, 174, 186, 193,
         185, 180, 175, 179, 175, 190, 189, 190,
@@ -301,14 +311,13 @@ mod benches {
 
     #[bench]
     fn measure_horizontal_macroblock_filter(b: &mut Bencher) {
-
         let hev_threshold = 5;
         let interior_limit = 15;
         let edge_limit = 15;
 
         let mut data = TEST_DATA.clone();
         let stride = 8;
-        
+
         b.iter(|| {
             for y in 0..8 {
                 black_box(macroblock_filter_horizontal(
@@ -323,14 +332,13 @@ mod benches {
 
     #[bench]
     fn measure_vertical_macroblock_filter(b: &mut Bencher) {
-
         let hev_threshold = 5;
         let interior_limit = 15;
         let edge_limit = 15;
 
         let mut data = TEST_DATA.clone();
         let stride = 8;
-        
+
         b.iter(|| {
             for x in 0..8 {
                 black_box(macroblock_filter_vertical(
