@@ -73,35 +73,43 @@ pub(crate) fn apply_predictor_transform(
     Ok(())
 }
 pub fn apply_predictor_transform_0(image_data: &mut [u8], range: Range<usize>, _width: usize) {
-    for i in ((range.start + 3)..range.end).step_by(4) {
+    assert!(range.end <= image_data.len());
+    let mut i = range.start + 3;
+    while i < range.end {
         image_data[i] = image_data[i].wrapping_add(0xff);
+        i += 4;
     }
 }
 pub fn apply_predictor_transform_1(image_data: &mut [u8], range: Range<usize>, _width: usize) {
-    let mut prev: [u8; 4] = image_data[range.start - 4..][..4].try_into().unwrap();
-    for chunk in image_data[range].chunks_exact_mut(4) {
-        prev = [
-            chunk[0].wrapping_add(prev[0]),
-            chunk[1].wrapping_add(prev[1]),
-            chunk[2].wrapping_add(prev[2]),
-            chunk[3].wrapping_add(prev[3]),
-        ];
-        chunk.copy_from_slice(&prev);
+    assert!(range.end <= image_data.len());
+    let mut i = range.start;
+    while i < range.end {
+        image_data[i] = image_data[i].wrapping_add(image_data[i - 4]);
+        i += 1;
     }
 }
 pub fn apply_predictor_transform_2(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range {
+    assert!(range.end <= image_data.len());
+    let mut i = range.start;
+    while i < range.end {
         image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4]);
+        i += 1;
     }
 }
 pub fn apply_predictor_transform_3(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range {
+    assert!(range.end <= image_data.len());
+    let mut i = range.start;
+    while i < range.end {
         image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4 + 4]);
+        i += 1;
     }
 }
 pub fn apply_predictor_transform_4(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range {
+    assert!(range.end <= image_data.len());
+    let mut i = range.start;
+    while i < range.end {
         image_data[i] = image_data[i].wrapping_add(image_data[i - width * 4 - 4]);
+        i += 1;
     }
 }
 pub fn apply_predictor_transform_5(image_data: &mut [u8], range: Range<usize>, width: usize) {
@@ -117,25 +125,21 @@ pub fn apply_predictor_transform_5(image_data: &mut [u8], range: Range<usize>, w
         .zip(top.chunks_exact(4))
     {
         prev = [
-            chunk[0].wrapping_add(average2(average2(prev[0], tr[0]), t[0])),
-            chunk[1].wrapping_add(average2(average2(prev[1], tr[1]), t[1])),
-            chunk[2].wrapping_add(average2(average2(prev[2], tr[2]), t[2])),
-            chunk[3].wrapping_add(average2(average2(prev[3], tr[3]), t[3])),
+            chunk[0].wrapping_add(average2_autovec(average2_autovec(prev[0], tr[0]), t[0])),
+            chunk[1].wrapping_add(average2_autovec(average2_autovec(prev[1], tr[1]), t[1])),
+            chunk[2].wrapping_add(average2_autovec(average2_autovec(prev[2], tr[2]), t[2])),
+            chunk[3].wrapping_add(average2_autovec(average2_autovec(prev[3], tr[3]), t[3])),
         ];
         chunk.copy_from_slice(&prev);
     }
 }
 pub fn apply_predictor_transform_6(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    let (old, current) = image_data[..range.end].split_at_mut(range.start);
-
-    let mut prev: [u8; 4] = old[range.start - 4..][..4].try_into().unwrap();
-    let top_left = &old[range.start - width * 4 - 4..];
-
-    for (chunk, tl) in current.chunks_exact_mut(4).zip(top_left.chunks_exact(4)) {
-        for i in 0..4 {
-            chunk[i] = chunk[i].wrapping_add(average2(prev[i], tl[i]));
-        }
-        prev.copy_from_slice(chunk);
+    assert!(range.end <= image_data.len());
+    let mut i = range.start;
+    while i < range.end {
+        image_data[i] =
+            image_data[i].wrapping_add(average2(image_data[i - 4], image_data[i - width * 4 - 4]));
+        i += 1;
     }
 }
 pub fn apply_predictor_transform_7(image_data: &mut [u8], range: Range<usize>, width: usize) {
@@ -150,10 +154,10 @@ pub fn apply_predictor_transform_7(image_data: &mut [u8], range: Range<usize>, w
     for (current, top) in (&mut current_chunks).zip(&mut top_chunks) {
         for (chunk, t) in current.chunks_exact_mut(4).zip(top.chunks_exact(4)) {
             prev = [
-                chunk[0].wrapping_add(average2(prev[0], t[0])),
-                chunk[1].wrapping_add(average2(prev[1], t[1])),
-                chunk[2].wrapping_add(average2(prev[2], t[2])),
-                chunk[3].wrapping_add(average2(prev[3], t[3])),
+                chunk[0].wrapping_add(average2_autovec(prev[0], t[0])),
+                chunk[1].wrapping_add(average2_autovec(prev[1], t[1])),
+                chunk[2].wrapping_add(average2_autovec(prev[2], t[2])),
+                chunk[3].wrapping_add(average2_autovec(prev[3], t[3])),
             ];
             chunk.copy_from_slice(&prev);
         }
@@ -164,28 +168,34 @@ pub fn apply_predictor_transform_7(image_data: &mut [u8], range: Range<usize>, w
         .zip(top_chunks.remainder().chunks_exact(4))
     {
         prev = [
-            chunk[0].wrapping_add(average2(prev[0], t[0])),
-            chunk[1].wrapping_add(average2(prev[1], t[1])),
-            chunk[2].wrapping_add(average2(prev[2], t[2])),
-            chunk[3].wrapping_add(average2(prev[3], t[3])),
+            chunk[0].wrapping_add(average2_autovec(prev[0], t[0])),
+            chunk[1].wrapping_add(average2_autovec(prev[1], t[1])),
+            chunk[2].wrapping_add(average2_autovec(prev[2], t[2])),
+            chunk[3].wrapping_add(average2_autovec(prev[3], t[3])),
         ];
         chunk.copy_from_slice(&prev);
     }
 }
 pub fn apply_predictor_transform_8(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range {
+    assert!(range.end <= image_data.len());
+    let mut i = range.start;
+    while i < range.end {
         image_data[i] = image_data[i].wrapping_add(average2(
             image_data[i - width * 4 - 4],
             image_data[i - width * 4],
         ));
+        i += 1;
     }
 }
 pub fn apply_predictor_transform_9(image_data: &mut [u8], range: Range<usize>, width: usize) {
-    for i in range {
+    assert!(range.end <= image_data.len());
+    let mut i = range.start;
+    while i < range.end {
         image_data[i] = image_data[i].wrapping_add(average2(
             image_data[i - width * 4],
             image_data[i - width * 4 + 4],
         ));
+        i += 1;
     }
 }
 pub fn apply_predictor_transform_10(image_data: &mut [u8], range: Range<usize>, width: usize) {
@@ -569,6 +579,14 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
 /// Get average of 2 bytes
 fn average2(a: u8, b: u8) -> u8 {
     ((u16::from(a) + u16::from(b)) / 2) as u8
+}
+
+/// Get average of 2 bytes, allows some predictors to be autovectorized by
+/// keeping computation within lanes of `u8`.
+///
+/// LLVM is capable of optimizing `average2` into this but not in all cases.
+fn average2_autovec(a: u8, b: u8) -> u8 {
+    (a & b) + ((a ^ b) >> 1)
 }
 
 /// Clamp add subtract full on one part
