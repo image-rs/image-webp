@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/image-webp/badge.svg)](https://docs.rs/image-webp)
 [![Build Status](https://github.com/image-rs/image-webp/workflows/Rust%20CI/badge.svg)](https://github.com/image-rs/image-webp/actions)
 
-This crate is an indpendent implementation of the WebP image format, written so
+This crate is an independent implementation of the WebP image format, written so
 that the `image` crate can have a pure-Rust WebP backend for both encoding and
 decoding.
 
