@@ -5,6 +5,10 @@ pub use self::encoder::{WebPEncoder, WebPQuality};
 
 #[cfg(feature = "webp-encoder")]
 mod encoder;
+#[cfg(feature = "webp-encoder")]
+mod vp8_encoder;
+#[cfg(feature = "webp-encoder")]
+mod vp8_arithmetic_encoder;
 
 #[cfg(feature = "webp")]
 pub use self::decoder::WebPDecoder;
@@ -25,4 +29,7 @@ mod lossless_transform;
 mod transform;
 
 #[cfg(feature = "webp")]
+pub mod vp8_info;
+#[cfg(feature = "webp")]
 pub mod vp8;
+

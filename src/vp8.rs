@@ -16,35 +16,36 @@ use std::io::Read;
 
 use crate::decoder::{DecodingError, UpsamplingMethod};
 use crate::yuv;
+use crate::vp8_info::Plane;
 
 use super::vp8_arithmetic_decoder::ArithmeticDecoder;
 use super::{loop_filter, transform};
 
-const MAX_SEGMENTS: usize = 4;
-const NUM_DCT_TOKENS: usize = 12;
+pub(crate) const MAX_SEGMENTS: usize = 4;
+pub(crate) const NUM_DCT_TOKENS: usize = 12;
 
 // Prediction modes
-const DC_PRED: i8 = 0;
-const V_PRED: i8 = 1;
-const H_PRED: i8 = 2;
-const TM_PRED: i8 = 3;
-const B_PRED: i8 = 4;
+pub(crate) const DC_PRED: i8 = 0;
+pub(crate) const V_PRED: i8 = 1;
+pub(crate) const H_PRED: i8 = 2;
+pub(crate) const TM_PRED: i8 = 3;
+pub(crate) const B_PRED: i8 = 4;
 
-const B_DC_PRED: i8 = 0;
-const B_TM_PRED: i8 = 1;
-const B_VE_PRED: i8 = 2;
-const B_HE_PRED: i8 = 3;
-const B_LD_PRED: i8 = 4;
-const B_RD_PRED: i8 = 5;
-const B_VR_PRED: i8 = 6;
-const B_VL_PRED: i8 = 7;
-const B_HD_PRED: i8 = 8;
-const B_HU_PRED: i8 = 9;
+pub(crate) const B_DC_PRED: i8 = 0;
+pub(crate) const B_TM_PRED: i8 = 1;
+pub(crate) const B_VE_PRED: i8 = 2;
+pub(crate) const B_HE_PRED: i8 = 3;
+pub(crate) const B_LD_PRED: i8 = 4;
+pub(crate) const B_RD_PRED: i8 = 5;
+pub(crate) const B_VR_PRED: i8 = 6;
+pub(crate) const B_VL_PRED: i8 = 7;
+pub(crate) const B_HD_PRED: i8 = 8;
+pub(crate) const B_HU_PRED: i8 = 9;
 
 // Prediction mode enum
 #[repr(i8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-enum LumaMode {
+pub(crate) enum LumaMode {
     /// Predict DC using row above and column to the left.
     #[default]
     DC = DC_PRED,
@@ -64,7 +65,7 @@ enum LumaMode {
 
 #[repr(i8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-enum ChromaMode {
+pub(crate) enum ChromaMode {
     /// Predict DC using row above and column to the left.
     #[default]
     DC = DC_PRED,
@@ -146,18 +147,18 @@ const fn tree_nodes_from<const N: usize, const M: usize>(
     nodes
 }
 
-const SEGMENT_ID_TREE: [i8; 6] = [2, 4, -0, -1, -2, -3];
+pub(crate) const SEGMENT_ID_TREE: [i8; 6] = [2, 4, -0, -1, -2, -3];
 
 const SEGMENT_TREE_NODE_DEFAULTS: [TreeNode; 3] = tree_nodes_from(SEGMENT_ID_TREE, [255; 3]);
 
 // Section 11.2
 // Tree for determining the keyframe luma intra prediction modes:
-const KEYFRAME_YMODE_TREE: [i8; 8] = [-B_PRED, 2, 4, 6, -DC_PRED, -V_PRED, -H_PRED, -TM_PRED];
+pub(crate) const KEYFRAME_YMODE_TREE: [i8; 8] = [-B_PRED, 2, 4, 6, -DC_PRED, -V_PRED, -H_PRED, -TM_PRED];
 
 // Default probabilities for decoding the keyframe luma modes
-const KEYFRAME_YMODE_PROBS: [Prob; 4] = [145, 156, 163, 128];
+pub(crate) const KEYFRAME_YMODE_PROBS: [Prob; 4] = [145, 156, 163, 128];
 
-const KEYFRAME_YMODE_NODES: [TreeNode; 4] =
+pub(crate) const KEYFRAME_YMODE_NODES: [TreeNode; 4] =
     tree_nodes_from(KEYFRAME_YMODE_TREE, KEYFRAME_YMODE_PROBS);
 
 // Tree for determining the keyframe B_PRED mode:
@@ -306,20 +307,20 @@ const KEYFRAME_BPRED_MODE_NODES: [[[TreeNode; 9]; 10]; 10] = {
 };
 
 // Section 11.4 Tree for determining macroblock the chroma mode
-const KEYFRAME_UV_MODE_TREE: [i8; 6] = [-DC_PRED, 2, -V_PRED, 4, -H_PRED, -TM_PRED];
+pub(crate) const KEYFRAME_UV_MODE_TREE: [i8; 6] = [-DC_PRED, 2, -V_PRED, 4, -H_PRED, -TM_PRED];
 
 // Probabilities for determining macroblock mode
-const KEYFRAME_UV_MODE_PROBS: [Prob; 3] = [142, 114, 183];
+pub(crate) const KEYFRAME_UV_MODE_PROBS: [Prob; 3] = [142, 114, 183];
 
 const KEYFRAME_UV_MODE_NODES: [TreeNode; 3] =
     tree_nodes_from(KEYFRAME_UV_MODE_TREE, KEYFRAME_UV_MODE_PROBS);
 
 // Section 13.4
-type TokenProbTables = [[[[Prob; NUM_DCT_TOKENS - 1]; 3]; 8]; 4];
+pub(crate) type TokenProbTables = [[[[Prob; NUM_DCT_TOKENS - 1]; 3]; 8]; 4];
 type TokenProbTreeNodes = [[[[TreeNode; NUM_DCT_TOKENS - 1]; 3]; 8]; 4];
 
 // Probabilities that a token's probability will be updated
-const COEFF_UPDATE_PROBS: TokenProbTables = [
+pub(crate) const COEFF_UPDATE_PROBS: TokenProbTables = [
     [
         [
             [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255],
@@ -492,7 +493,7 @@ const COEFF_UPDATE_PROBS: TokenProbTables = [
 
 // Section 13.5
 // Default Probabilities for tokens
-const COEFF_PROBS: TokenProbTables = [
+pub(crate) const COEFF_PROBS: TokenProbTables = [
     [
         [
             [128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128],
@@ -682,25 +683,25 @@ const COEFF_PROB_NODES: TokenProbTreeNodes = {
 };
 
 // DCT Tokens
-const DCT_0: i8 = 0;
-const DCT_1: i8 = 1;
-const DCT_2: i8 = 2;
-const DCT_3: i8 = 3;
-const DCT_4: i8 = 4;
-const DCT_CAT1: i8 = 5;
-const DCT_CAT2: i8 = 6;
-const DCT_CAT3: i8 = 7;
-const DCT_CAT4: i8 = 8;
-const DCT_CAT5: i8 = 9;
-const DCT_CAT6: i8 = 10;
-const DCT_EOB: i8 = 11;
+pub(crate) const DCT_0: i8 = 0;
+pub(crate) const DCT_1: i8 = 1;
+pub(crate) const DCT_2: i8 = 2;
+pub(crate) const DCT_3: i8 = 3;
+pub(crate) const DCT_4: i8 = 4;
+pub(crate) const DCT_CAT1: i8 = 5;
+pub(crate) const DCT_CAT2: i8 = 6;
+pub(crate) const DCT_CAT3: i8 = 7;
+pub(crate) const DCT_CAT4: i8 = 8;
+pub(crate) const DCT_CAT5: i8 = 9;
+pub(crate) const DCT_CAT6: i8 = 10;
+pub(crate) const DCT_EOB: i8 = 11;
 
-const DCT_TOKEN_TREE: [i8; 22] = [
+pub(crate) const DCT_TOKEN_TREE: [i8; 22] = [
     -DCT_EOB, 2, -DCT_0, 4, -DCT_1, 6, 8, 12, -DCT_2, 10, -DCT_3, -DCT_4, 14, 16, -DCT_CAT1,
     -DCT_CAT2, 18, 20, -DCT_CAT3, -DCT_CAT4, -DCT_CAT5, -DCT_CAT6,
 ];
 
-const PROB_DCT_CAT: [[Prob; 12]; 6] = [
+pub(crate) const PROB_DCT_CAT: [[Prob; 12]; 6] = [
     [159, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [165, 145, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     [173, 148, 140, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -709,8 +710,8 @@ const PROB_DCT_CAT: [[Prob; 12]; 6] = [
     [254, 254, 243, 230, 196, 177, 153, 140, 133, 130, 129, 0],
 ];
 
-const DCT_CAT_BASE: [u8; 6] = [5, 7, 11, 19, 35, 67];
-const COEFF_BANDS: [u8; 16] = [0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7];
+pub(crate) const DCT_CAT_BASE: [u8; 6] = [5, 7, 11, 19, 35, 67];
+pub(crate) const COEFF_BANDS: [u8; 16] = [0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7];
 
 #[rustfmt::skip]
 const DC_QUANT: [i16; 128] = [
@@ -752,10 +753,10 @@ const AC_QUANT: [i16; 128] = [
      249, 254, 259, 264, 269, 274, 279, 284,
 ];
 
-const ZIGZAG: [u8; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
+pub(crate) const ZIGZAG: [u8; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 
 #[derive(Default, Clone, Copy)]
-struct MacroBlock {
+pub(crate) struct MacroBlock {
     bpred: [IntraMode; 16],
     complexity: [u8; 9],
     luma_mode: LumaMode,
@@ -883,20 +884,20 @@ impl Frame {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Segment {
-    ydc: i16,
-    yac: i16,
+pub(crate) struct Segment {
+    pub(crate) ydc: i16,
+    pub(crate) yac: i16,
 
-    y2dc: i16,
-    y2ac: i16,
+    pub(crate) y2dc: i16,
+    pub(crate) y2ac: i16,
 
-    uvdc: i16,
-    uvac: i16,
+    pub(crate) uvdc: i16,
+    pub(crate) uvac: i16,
 
-    delta_values: bool,
+    pub(crate) delta_values: bool,
 
-    quantizer_level: i8,
-    loopfilter_level: i8,
+    pub(crate) quantizer_level: i8,
+    pub(crate) loopfilter_level: i8,
 }
 
 /// VP8 Decoder
@@ -1481,7 +1482,7 @@ impl<R: Read> Vp8Decoder<R> {
         &mut self,
         block: &mut [i32; 16],
         p: usize,
-        plane: usize,
+        plane: Plane,
         complexity: usize,
         dcq: i16,
         acq: i16,
@@ -1490,8 +1491,8 @@ impl<R: Read> Vp8Decoder<R> {
         // so that the compiler doesn't have to insert them in the hot loop below
         assert!(complexity <= 2);
 
-        let first = if plane == 0 { 1usize } else { 0usize };
-        let probs = &self.token_probs[plane];
+        let first_coeff = if plane == Plane::YCoeff1 { 1usize } else { 0usize };
+        let probs = &self.token_probs[plane as usize];
         let decoder = &mut self.partitions[p];
 
         let mut res = decoder.start_accumulated_result();
@@ -1500,7 +1501,7 @@ impl<R: Read> Vp8Decoder<R> {
         let mut has_coefficients = false;
         let mut skip = false;
 
-        for i in first..16usize {
+        for i in first_coeff..16usize {
             let band = COEFF_BANDS[i] as usize;
             let tree = &probs[band][complexity];
 
@@ -1570,9 +1571,10 @@ impl<R: Read> Vp8Decoder<R> {
     ) -> Result<[i32; 384], DecodingError> {
         let sindex = mb.segmentid as usize;
         let mut blocks = [0i32; 384];
-        let mut plane = if mb.luma_mode == LumaMode::B { 3 } else { 1 };
+        let mut plane = if mb.luma_mode == LumaMode::B { Plane::Y2 } else { Plane::YCoeff0 };
 
-        if plane == 1 {
+        if plane == Plane::Y2 {
+            // get Y2 block first
             let complexity = self.top[mbx].complexity[0] + self.left.complexity[0];
             let mut block = [0i32; 16];
             let dcq = self.segment[sindex].y2dc;
@@ -1588,9 +1590,10 @@ impl<R: Read> Vp8Decoder<R> {
                 blocks[16 * k] = block[k];
             }
 
-            plane = 0;
+            plane = Plane::YCoeff1;
         }
 
+        // get the 16 DCTs for the Y subblock
         for y in 0usize..4 {
             let mut left = self.left.complexity[y + 1];
             for x in 0usize..4 {
@@ -1616,8 +1619,9 @@ impl<R: Read> Vp8Decoder<R> {
             self.left.complexity[y + 1] = left;
         }
 
-        plane = 2;
+        plane = Plane::Chroma;
 
+        //get the 4 DCTs for the U and V subblocks respectively
         for &j in &[5usize, 7usize] {
             for y in 0usize..2 {
                 let mut left = self.left.complexity[y + j];
@@ -2016,6 +2020,16 @@ impl LumaMode {
             Self::B => return None,
         })
     }
+
+    pub(crate) const fn to_i8(&self) -> i8 {
+        match self {
+            LumaMode::DC => DC_PRED,
+            LumaMode::V => V_PRED,
+            LumaMode::H => H_PRED,
+            LumaMode::TM => TM_PRED,
+            LumaMode::B => B_PRED,
+        }
+    }
 }
 
 impl ChromaMode {
@@ -2027,6 +2041,15 @@ impl ChromaMode {
             TM_PRED => Self::TM,
             _ => return None,
         })
+    }
+
+    pub(crate) const fn to_i8(&self) -> i8 {
+        match self {
+            ChromaMode::DC => DC_PRED,
+            ChromaMode::V => V_PRED,
+            ChromaMode::H => H_PRED,
+            ChromaMode::TM => TM_PRED,
+        }
     }
 }
 
@@ -2061,7 +2084,7 @@ fn init_top_macroblocks(width: usize) -> Vec<MacroBlock> {
     vec![mb; mb_width]
 }
 
-fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8]) -> [u8; 357] {
+pub(crate) fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8]) -> [u8; 357] {
     let stride = 1usize + 16 + 4;
     let mut ws = [0u8; (1 + 16) * (1 + 16 + 4)];
 
@@ -2120,7 +2143,7 @@ fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8
 
 const CHROMA_BLOCK_SIZE: usize = (8 + 1) * (8 + 1);
 // creates the left and top border for chroma prediction
-fn create_border_chroma(
+pub(crate) fn create_border_chroma(
     mbx: usize,
     mby: usize,
     top: &[u8],
@@ -2240,7 +2263,7 @@ fn predict_4x4(ws: &mut [u8], stride: usize, modes: &[IntraMode], resdata: &[i32
     }
 }
 
-fn predict_vpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
+pub(crate) fn predict_vpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
     // This pass copies the top row to the rows below it.
     let (above, curr) = a.split_at_mut(stride * y0);
     let above_slice = &above[x0..];
@@ -2252,7 +2275,7 @@ fn predict_vpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize)
     }
 }
 
-fn predict_hpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
+pub(crate) fn predict_hpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
     // This pass copies the first value of a row to the values right of it.
     for chunk in a.chunks_exact_mut(stride).skip(y0).take(size) {
         let left = chunk[x0 - 1];
@@ -2260,7 +2283,7 @@ fn predict_hpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize)
     }
 }
 
-fn predict_dcpred(a: &mut [u8], size: usize, stride: usize, above: bool, left: bool) {
+pub(crate) fn predict_dcpred(a: &mut [u8], size: usize, stride: usize, above: bool, left: bool) {
     let mut sum = 0;
     let mut shf = if size == 8 { 2 } else { 3 };
 
@@ -2293,7 +2316,7 @@ fn predict_dcpred(a: &mut [u8], size: usize, stride: usize, above: bool, left: b
 
 // Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
 #[allow(clippy::manual_clamp)]
-fn predict_tmpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
+pub(crate) fn predict_tmpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize) {
     // The formula for tmpred is:
     // X_ij = L_i + A_j - P (i, j=0, 1, 2, 3)
     //
@@ -2326,7 +2349,7 @@ fn predict_tmpred(a: &mut [u8], size: usize, x0: usize, y0: usize, stride: usize
     }
 }
 
-fn predict_bdcpred(a: &mut [u8], x0: usize, y0: usize, stride: usize) {
+pub(crate) fn predict_bdcpred(a: &mut [u8], x0: usize, y0: usize, stride: usize) {
     let mut v = 4;
 
     a[(y0 - 1) * stride + x0..][..4]
