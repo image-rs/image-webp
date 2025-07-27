@@ -34,9 +34,14 @@ decoding.
   task and would require a lot of work. If you are interested in helping with
   this, please get in touch!
 
-## No unsafe code
+## Unsafe code
 
-Both this crate and all of its dependencies avoid unsafe code:
+Both this crate and all of its dependencies currently contain no unsafe code.
+
+NOTE: This isn't a guarantee that unsafe code will never be added. It may prove
+necessary in the future to improve performance, but we will always strive to
+minimize the use of unsafe code and ensure that it is well-tested and
+documented.
 
 ```
 $ cargo geiger
