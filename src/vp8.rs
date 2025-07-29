@@ -714,7 +714,7 @@ pub(crate) const DCT_CAT_BASE: [u8; 6] = [5, 7, 11, 19, 35, 67];
 pub(crate) const COEFF_BANDS: [u8; 16] = [0, 1, 2, 3, 6, 4, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7];
 
 #[rustfmt::skip]
-const DC_QUANT: [i16; 128] = [
+pub(crate) const DC_QUANT: [i16; 128] = [
       4,   5,   6,   7,   8,   9,  10,  10,
      11,  12,  13,  14,  15,  16,  17,  17,
      18,  19,  20,  20,  21,  21,  22,  22,
@@ -734,7 +734,7 @@ const DC_QUANT: [i16; 128] = [
 ];
 
 #[rustfmt::skip]
-const AC_QUANT: [i16; 128] = [
+pub(crate) const AC_QUANT: [i16; 128] = [
       4,   5,   6,   7,   8,    9,  10,  11,
       12,  13,  14,  15,  16,  17,  18,  19,
       20,  21,  22,  23,  24,  25,  26,  27,
@@ -1501,6 +1501,7 @@ impl<R: Read> Vp8Decoder<R> {
         let mut has_coefficients = false;
         let mut skip = false;
 
+
         for i in first_coeff..16usize {
             let band = COEFF_BANDS[i] as usize;
             let tree = &probs[band][complexity];
@@ -1571,7 +1572,7 @@ impl<R: Read> Vp8Decoder<R> {
     ) -> Result<[i32; 384], DecodingError> {
         let sindex = mb.segmentid as usize;
         let mut blocks = [0i32; 384];
-        let mut plane = if mb.luma_mode == LumaMode::B { Plane::Y2 } else { Plane::YCoeff0 };
+        let mut plane = if mb.luma_mode == LumaMode::B { Plane::YCoeff0 } else { Plane::Y2 };
 
         if plane == Plane::Y2 {
             // get Y2 block first

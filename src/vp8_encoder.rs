@@ -4,8 +4,10 @@ use std::mem;
 use byteorder_lite::WriteBytesExt;
 use byteorder_lite::LittleEndian;
 
+use crate::vp8::AC_QUANT;
 use crate::vp8::COEFF_UPDATE_PROBS;
 use crate::vp8::DCT_EOB;
+use crate::vp8::DC_QUANT;
 use crate::EncodingError;
 use crate::{transform::{dct4x4, wht4x4}, vp8::{create_border_chroma, create_border_luma, predict_dcpred, predict_hpred, predict_tmpred, predict_vpred, ChromaMode, LumaMode, Segment, TokenProbTables, COEFF_BANDS, COEFF_PROBS, DCT_0, DCT_1, DCT_CAT1, DCT_CAT2, DCT_CAT3, DCT_CAT4, DCT_CAT5, DCT_CAT6, DCT_CAT_BASE, DCT_TOKEN_TREE, KEYFRAME_UV_MODE_PROBS, KEYFRAME_UV_MODE_TREE, KEYFRAME_YMODE_PROBS, KEYFRAME_YMODE_TREE, MAX_SEGMENTS, PROB_DCT_CAT, ZIGZAG}, vp8_arithmetic_encoder::ArithmeticEncoder, vp8_info::Plane};
 
@@ -259,26 +261,29 @@ impl<W: Write> Vp8Encoder<W> {
     fn encode_residual_data(&mut self, macroblock_info: &MacroblockInfo, partition_index: usize, mbx: usize, y_subblocks: &[[i32; 16]; 16], u_subblocks: &[[i32; 16]; 4], v_subblocks: &[[i32; 16]; 4]) {
         // TODO: set residual data if coeffs are not skipped
 
-        let mut plane = if macroblock_info.luma_mode == LumaMode::B { Plane::Y2 } else { Plane::YCoeff0 };
-
-        let left_complexity = self.left_complexity;
-        let top_complexity = self.top_complexity[mbx];
+        let mut plane = if macroblock_info.luma_mode == LumaMode::B { Plane::YCoeff0 } else { Plane::Y2 };
 
         // TODO: change to get index from macroblock 
         let segment = self.segments[0];
+
+        let mut transformed_y_subblocks = [[0i32; 16]; 16];
+        for (transformed_block, y_block) in transformed_y_subblocks.iter_mut().zip(y_subblocks.iter()) {
+            *transformed_block = dct4x4(&y_block);
+        }
 
         // Y2
         if plane == Plane::Y2 {
             // encode 0th coefficient of each luma
 
             let mut coeffs0 = [0i32; 16];
-            for (coeff, y_subblock) in coeffs0.iter_mut().zip(y_subblocks) {
+            for (coeff, y_subblock) in coeffs0.iter_mut().zip(transformed_y_subblocks.iter()) {
                 *coeff = y_subblock[0];
             }
+            
             // wht here on the 0th coeffs
             let coeffs0 = wht4x4(&coeffs0);
 
-            let complexity = left_complexity.y2 + top_complexity.y2;
+            let complexity = self.left_complexity.y2 + self.top_complexity[mbx].y2;
 
             let has_coeffs = self.encode_coefficients(&coeffs0, partition_index, plane, complexity.into(), segment.y2dc, segment.y2ac);
 
@@ -291,12 +296,12 @@ impl<W: Write> Vp8Encoder<W> {
 
         // now encode the 16 luma 4x4 subblocks in the macroblock
         for y in 0usize..4 {
-            let mut left = left_complexity.y[y];
+            let mut left = self.left_complexity.y[y];
             for x in 0..4 {
-                let block = y_subblocks[y * 4 + x];
-                let block = dct4x4(&block);
+                let block = transformed_y_subblocks[y * 4 + x];
+                // let block = dct4x4(&block);
 
-                let top = top_complexity.y[x];
+                let top = self.top_complexity[mbx].y[x];
                 let complexity = left + top;
 
                 let has_coeffs = self.encode_coefficients(&block, partition_index, plane, complexity.into(), segment.ydc, segment.yac);
@@ -312,12 +317,12 @@ impl<W: Write> Vp8Encoder<W> {
 
         // encode the 4 u 4x4 subblocks
         for y in 0usize..2 {
-            let mut left = left_complexity.u[y];
-            for x in 0..2 {
+            let mut left = self.left_complexity.u[y];
+            for x in 0usize..2 {
                 let block = u_subblocks[y * 2 + x];
                 let block = dct4x4(&block);
 
-                let top = top_complexity.u[x];
+                let top = self.top_complexity[mbx].u[x];
                 let complexity = left + top;
 
                 let has_coeffs = self.encode_coefficients(&block, partition_index, plane, complexity.into(), segment.uvdc, segment.uvac);
@@ -330,12 +335,12 @@ impl<W: Write> Vp8Encoder<W> {
 
         // encode the 4 v 4x4 subblocks
         for y in 0usize..2 {
-            let mut left = left_complexity.v[y];
-            for x in 0..2 {
+            let mut left = self.left_complexity.v[y];
+            for x in 0usize..2 {
                 let block = v_subblocks[y * 2 + x];
                 let block = dct4x4(&block);
 
-                let top = top_complexity.v[x];
+                let top = self.top_complexity[mbx].v[x];
                 let complexity = left + top;
 
                 let has_coeffs = self.encode_coefficients(&block, partition_index, plane, complexity.into(), segment.uvdc, segment.uvac);
@@ -365,7 +370,7 @@ impl<W: Write> Vp8Encoder<W> {
         // convert to zigzag and quantize
         // this is the only lossy part of the encoding 
         let mut zigzag_block = [0i32; 16];
-        for i in 0..16 {
+        for i in first_coeff..16 {
             let zigzag_index = usize::from(ZIGZAG[i]);
             let quant = if zigzag_index > 0 { ac_quant } else { dc_quant };
             zigzag_block[i] = block[zigzag_index] / i32::from(quant);
@@ -403,6 +408,8 @@ impl<W: Write> Vp8Encoder<W> {
                 // just encode as literal
                 literal @ 1..=4 => { 
                     encoder.write_with_tree(token_tree, token_probs, literal as i8, start_index_token_tree);
+                    
+                    skip_eob = false;
                     literal as i8
                 },
 
@@ -439,6 +446,8 @@ impl<W: Write> Vp8Encoder<W> {
                         mask >>= 1;
                     }
 
+                    skip_eob = false;
+
                     category
                 }
             };
@@ -458,7 +467,8 @@ impl<W: Write> Vp8Encoder<W> {
 
         // encode end of block
         if end_of_block_index < 16 {
-            let band = usize::from(COEFF_BANDS[end_of_block_index]);
+            let band_index = usize::max(first_coeff, end_of_block_index);
+            let band = usize::from(COEFF_BANDS[band_index]);
             let probabilities = &probs[band][complexity];
             encoder.write_with_tree(&DCT_TOKEN_TREE, probabilities, DCT_EOB, 0);
         }
@@ -537,12 +547,12 @@ impl<W: Write> Vp8Encoder<W> {
         self.frame_info.quantization_indices = quantization_indices;
         
         let segment = Segment {
-            ydc: 10,
-            yac: 10,
-            y2dc: 10 * 2,
-            y2ac: 10 * 155 / 100,
-            uvdc: 10,
-            uvac: 10,
+            ydc: DC_QUANT[10],
+            yac: AC_QUANT[10],
+            y2dc: DC_QUANT[10] * 2,
+            y2ac: ((i32::from(AC_QUANT[10]) * 155 / 100) as i16).max(8),
+            uvdc: DC_QUANT[10],
+            uvac: AC_QUANT[10],
             ..Default::default()
         };
         self.segments[0] = segment;
@@ -572,13 +582,14 @@ fn get_macroblock_info(
 // gets all the subblocks out of the macroblock
 fn luma_block_to_subblock(y_macroblock_data: &[i32; 16 * 16]) -> [[i32; 16]; 16] {
     let mut blocks = [[0i32; 16]; 16];
-
-    for ((luma_subblock, y), x) in blocks.iter_mut().zip(0..4).zip(0..4) {
-        let stride = 16;
-        let start_index = y * stride + x;
-        
-        let subblock = get_subblock(y_macroblock_data, start_index, stride);
-        *luma_subblock = subblock; 
+    let stride = 16;
+    
+    for y in 0..4 {
+        for x in 0..4 {
+            let start_index = y * 4 * stride + x * 4;
+            let subblock = get_subblock(y_macroblock_data, start_index, stride);
+            blocks[y * 4 + x] = subblock;
+        }
     }
 
     blocks
@@ -587,13 +598,14 @@ fn luma_block_to_subblock(y_macroblock_data: &[i32; 16 * 16]) -> [[i32; 16]; 16]
 // gets all the subblocks out of the macroblock
 fn chroma_block_to_subblock(chroma_macroblock_data: &[i32; 8 * 8]) -> [[i32; 16]; 4] {
     let mut blocks = [[0i32; 16]; 4];
+    let stride = 8;
 
-    for ((chroma_subblock, y), x) in blocks.iter_mut().zip(0..4).zip(0..4) {
-        let stride = 8;
-        let start_index = y * stride + x;
-
-        let subblock = get_subblock(chroma_macroblock_data, start_index, stride);
-        *chroma_subblock = subblock;
+    for y in 0..2 {
+        for x in 0..2 {
+            let start_index = y * 4 * stride + x * 4;
+            let subblock = get_subblock(chroma_macroblock_data, start_index, stride);
+            blocks[y * 2 + x] = subblock;
+        }
     }
 
     blocks
@@ -609,6 +621,8 @@ fn get_subblock(block: &[i32], start_index: usize, stride: usize) -> [i32; 16] {
 
 // TODO: do we need to create a new buffer for this?
 fn subtract_prediction_luma(y_data: &[u8], mbx: usize, mby: usize, mbw: usize, width: usize, pred: LumaMode) -> [i32; 16 * 16] {
+    let stride = 1usize + 16 + 4;
+
     let top_border_y = if mby == 0 {
         // will get ignored
         &Vec::new()
@@ -617,7 +631,7 @@ fn subtract_prediction_luma(y_data: &[u8], mbx: usize, mby: usize, mbw: usize, w
         &y_data[index..][..width]
     };
     const LEFT_BORDER_SIZE: usize = 16 + 1;
-    let mut left_border_y = [0u8; LEFT_BORDER_SIZE];
+    let mut left_border_y = [129u8; LEFT_BORDER_SIZE];
     if mbx != 0 {
         if mby == 0 {
             // start from point 1 to left 
@@ -638,15 +652,14 @@ fn subtract_prediction_luma(y_data: &[u8], mbx: usize, mby: usize, mbw: usize, w
         }
     }
 
-    let mut luma_with_border = create_border_luma(mbx, mby, mbw, top_border_y, &left_border_y);
+    let mut y_with_border = create_border_luma(mbx, mby, mbw, top_border_y, &left_border_y);
 
-    let stride = 1usize + 16 + 4;
     // do the prediction
     match pred {
-        LumaMode::V => predict_vpred(&mut luma_with_border, 16, 1, 1, stride),
-        LumaMode::H => predict_hpred(&mut luma_with_border, 16, 1, 1, stride),
-        LumaMode::TM => predict_tmpred(&mut luma_with_border, 16, 1, 1, stride),
-        LumaMode::DC => predict_dcpred(&mut luma_with_border, 16, stride, mby != 0, mbx != 0),
+        LumaMode::V => predict_vpred(&mut y_with_border, 16, 1, 1, stride),
+        LumaMode::H => predict_hpred(&mut y_with_border, 16, 1, 1, stride),
+        LumaMode::TM => predict_tmpred(&mut y_with_border, 16, 1, 1, stride),
+        LumaMode::DC => predict_dcpred(&mut y_with_border, 16, stride, mby != 0, mbx != 0),
         LumaMode::B => todo!(),
     }
 
@@ -656,7 +669,7 @@ fn subtract_prediction_luma(y_data: &[u8], mbx: usize, mby: usize, mbw: usize, w
     {
         let x = index % 16;
         let y = index / 16;
-        let pred_value = luma_with_border[stride * (y + 1) + x + 1];
+        let pred_value = y_with_border[stride * (y + 1) + x + 1];
         let y_value = y_data[(mby * 16 + y) * width + mbx * 16 + x];
         
         *buf_val = i32::from(y_value) - i32::from(pred_value);
@@ -666,10 +679,10 @@ fn subtract_prediction_luma(y_data: &[u8], mbx: usize, mby: usize, mbw: usize, w
 
 fn subtract_prediction_chroma(u_data: &[u8], v_data: &[u8], mbx: usize, mby: usize, width: usize, pred: ChromaMode) -> ([i32; 8 * 8], [i32; 8 * 8]) {
     let stride = 8 + 1;
-    let chroma_width = width.div_ceil(2);
-    let top_border_u = create_top_border_chroma(u_data, mbx, mby);
+    let chroma_width = width;
+    let top_border_u = create_top_border_chroma(u_data, mby, chroma_width);
     let left_border_u = create_left_border_chroma(u_data, mbx, mby, chroma_width);
-    let top_border_v = create_top_border_chroma(v_data, mbx, mby);
+    let top_border_v = create_top_border_chroma(v_data, mby, chroma_width);
     let left_border_v = create_left_border_chroma(v_data, mbx, mby, chroma_width);
 
     let mut u_with_border = create_border_chroma(mbx, mby, top_border_u, &left_border_u);
@@ -716,19 +729,23 @@ fn subtract_prediction_chroma(u_data: &[u8], v_data: &[u8], mbx: usize, mby: usi
     (new_buffer_u, new_buffer_v)
 }
 
-fn create_top_border_chroma(buffer: &[u8], mbx: usize, mby: usize) -> &[u8] {
+fn create_top_border_chroma(buffer: &[u8], mby: usize, chroma_width: usize) -> &[u8] {
     if mby == 0 {
         // won't be used
         &buffer[..]
     } else {
-        let index = (mby * 8 - 1) * 8; 
-        &buffer[index..][..8 * mbx]
+        let index = (mby * 8 - 1) * chroma_width; 
+        &buffer[index..][..chroma_width]
     }
 }
 
 fn create_left_border_chroma(buffer: &[u8], mbx: usize, mby: usize, chroma_width: usize) -> [u8; 8 + 1] {
-    let mut left_border = [0u8; 8 + 1];
+    let mut left_border = [129u8; 8 + 1];
     let left_border_size = 8 + 1;
+    
+    if mby == 0 {
+        left_border[0] = 127;
+    }
 
     if mbx != 0 {
         if mby == 0 {
@@ -753,26 +770,19 @@ fn create_left_border_chroma(buffer: &[u8], mbx: usize, mby: usize, chroma_width
     left_border
 }
 
-const YUV_FIX: i32 = 16;
-
 fn rgb_to_y(r: u8, g: u8, b: u8) -> u8 {
-    let luma = 16839 * i32::from(r) + 33059 * i32::from(g) + 6420 * i32::from(b);
-    ((luma + (16 << YUV_FIX)) >> YUV_FIX) as u8
-}
-
-fn clip_chroma(value: i32) -> u8 {
-    let value = (value + (128 << (YUV_FIX + 2))) >> (YUV_FIX + 2);
-    value.clamp(0, 255) as u8
+    let luma = 0.2568 * f64::from(r) + 0.5041 * f64::from(g) + 0.0979 * f64::from(b) + 16.0;
+    luma as u8
 }
 
 fn rgb_to_u(r: u8, g: u8, b: u8) -> u8 {
-    let u = -9719 * i32::from(r) - 19081 * i32::from(g) + 28800 * i32::from(b);
-    clip_chroma(u)
+    let u = -0.1482 * f64::from(r) - 0.2910 * f64::from(g) + 0.4392 * f64::from(b) + 128.0;
+    u as u8
 }
 
 fn rgb_to_v(r: u8, g: u8, b: u8) -> u8 {
-    let v = 28800 * i32::from(r) - 24116 * i32::from(g) - 4684 * i32::from(b);
-    clip_chroma(v)
+    let v = 0.4392 * f64::from(r) - 0.3678 * f64::from(g) - 0.0714 * f64::from(b) + 128.0;
+    v as u8
 }
 
 // converts the whole image to yuv data and adds values on the end to make it match the macroblock sizes
@@ -791,14 +801,6 @@ fn convert_image_yuv(image_data: &[u8], width: u32, height: u32) -> (Vec<u8>, Ve
             }
         }
     }
-    /* for (rgb, y) in image_data
-        .chunks_exact(3)
-        .zip(y_bytes.iter_mut())
-    {
-        if let [r, g, b] = rgb {
-            *y = rgb_to_y(*r, *g, *b);
-        }
-    } */
     
     let (u_bytes, v_bytes) = get_uv_buffers(image_data, width, height);
 
@@ -821,7 +823,7 @@ fn get_uv_buffers(rgb_image_data: &[u8], width: usize, height: usize) -> (Vec<u8
     let mut u_buffer = vec![0u8; chroma_size];
     let mut v_buffer = vec![0u8; chroma_size];
     
-    for ((rgb_row, u_row), v_row) in rgb_image_data.windows(BPP * width * 2).step_by(BPP * width)
+    for ((rgb_row, u_row), v_row) in rgb_image_data.chunks_exact(BPP * width * 2)
         .zip(u_buffer.chunks_exact_mut(chroma_width)) 
         .zip(v_buffer.chunks_exact_mut(chroma_width)) 
     {
@@ -868,6 +870,11 @@ pub(crate) fn encode_frame_lossy<W: Write>(writer: W, data: &[u8], width: u32, h
     vp8_encoder.encode_image(data, width, height)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
 }
 
 
