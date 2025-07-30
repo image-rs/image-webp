@@ -803,6 +803,10 @@ pub struct Frame {
 }
 
 impl Frame {
+    const fn chroma_width(&self) -> u16 {
+        self.width.div_ceil(2)
+    }
+
     const fn buffer_width(&self) -> u16 {
         let difference = self.width % 16;
         if difference > 0 {
@@ -813,33 +817,63 @@ impl Frame {
     }
 
     /// Fills an rgb buffer from the YUV buffers
-    pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
+    pub(crate) fn fill_rgb(&self, buf: &mut [u8], upsampling_method: UpsamplingMethod) {
         const BPP: usize = 3;
 
-        yuv::fill_rgb_buffer_fancy::<BPP>(
-            buf,
-            &self.ybuf,
-            &self.ubuf,
-            &self.vbuf,
-            usize::from(self.width),
-            usize::from(self.height),
-            usize::from(self.buffer_width()),
-        );
+        match upsampling_method {
+            UpsamplingMethod::Bilinear => {
+                yuv::fill_rgb_buffer_fancy::<BPP>(
+                    buf,
+                    &self.ybuf,
+                    &self.ubuf,
+                    &self.vbuf,
+                    usize::from(self.width),
+                    usize::from(self.height),
+                    usize::from(self.buffer_width()),
+                );
+            }
+            UpsamplingMethod::Simple => {
+                yuv::fill_rgb_buffer_simple::<BPP>(
+                    buf,
+                    &self.ybuf,
+                    &self.ubuf,
+                    &self.vbuf,
+                    usize::from(self.width),
+                    usize::from(self.chroma_width()),
+                    usize::from(self.buffer_width()),
+                );
+            }
+        }
     }
 
     /// Fills an rgba buffer from the YUV buffers
-    pub(crate) fn fill_rgba(&self, buf: &mut [u8]) {
+    pub(crate) fn fill_rgba(&self, buf: &mut [u8], upsampling_method: UpsamplingMethod) {
         const BPP: usize = 4;
 
-        yuv::fill_rgb_buffer_fancy::<BPP>(
-            buf,
-            &self.ybuf,
-            &self.ubuf,
-            &self.vbuf,
-            usize::from(self.width),
-            usize::from(self.height),
-            usize::from(self.buffer_width()),
-        );
+        match upsampling_method {
+            UpsamplingMethod::Bilinear => {
+                yuv::fill_rgb_buffer_fancy::<BPP>(
+                    buf,
+                    &self.ybuf,
+                    &self.ubuf,
+                    &self.vbuf,
+                    usize::from(self.width),
+                    usize::from(self.height),
+                    usize::from(self.buffer_width()),
+                );
+            }
+            UpsamplingMethod::Simple => {
+                yuv::fill_rgb_buffer_simple::<BPP>(
+                    buf,
+                    &self.ybuf,
+                    &self.ubuf,
+                    &self.vbuf,
+                    usize::from(self.width),
+                    usize::from(self.chroma_width()),
+                    usize::from(self.buffer_width()),
+                );
+            }
+        }
     }
     /// Gets the buffer size
     #[must_use]
@@ -863,6 +897,25 @@ struct Segment {
 
     quantizer_level: i8,
     loopfilter_level: i8,
+}
+
+/// Methods for upsampling the chroma values
+///
+/// The chroma red and blue planes are encoded in VP8 as half the size of the luma plane
+/// Therefore we need to upsample these values up to fit each pixel in the image.
+#[derive(Clone, Copy, Default)]
+pub enum UpsamplingMethod {
+    /// Fancy upsampling
+    ///
+    /// Does bilinear interpolation using the 4 values nearest to the pixel, weighting based on the distance
+    /// from the pixel.
+    #[default]
+    Bilinear,
+    /// Simple upsampling, just uses the closest u/v value to the pixel when upsampling
+    ///
+    /// Matches the -nofancy option in dwebp.
+    /// Should be faster but may lead to slightly jagged edges.
+    Simple,
 }
 
 /// VP8 Decoder

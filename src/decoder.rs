@@ -7,6 +7,7 @@ use std::num::NonZeroU16;
 use std::ops::Range;
 
 use crate::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo};
+use crate::vp8::UpsamplingMethod;
 
 use super::lossless::LosslessDecoder;
 use super::vp8::Vp8Decoder;
@@ -271,6 +272,29 @@ pub enum LoopCount {
     Times(NonZeroU16),
 }
 
+/// WebP decoder configuration options
+#[derive(Clone)]
+pub struct WebPDecodeOptions {
+    lossy_upsampling: UpsamplingMethod,
+}
+
+impl WebPDecodeOptions {
+    /// Sets the upsampling method used in conversion from lossy yuv to rgb
+    ///
+    /// Defaults to `Bilinear`.
+    pub fn set_lossy_upsampling(&mut self, lossy_upsampling: UpsamplingMethod) {
+        self.lossy_upsampling = lossy_upsampling;
+    }
+}
+
+impl Default for WebPDecodeOptions {
+    fn default() -> Self {
+        Self {
+            lossy_upsampling: UpsamplingMethod::Bilinear,
+        }
+    }
+}
+
 /// WebP image format decoder.
 pub struct WebPDecoder<R> {
     r: R,
@@ -289,12 +313,23 @@ pub struct WebPDecoder<R> {
     loop_duration: u64,
 
     chunks: HashMap<WebPRiffChunk, Range<u64>>,
+
+    webp_decode_options: WebPDecodeOptions,
 }
 
 impl<R: BufRead + Seek> WebPDecoder<R> {
     /// Create a new `WebPDecoder` from the reader `r`. The decoder performs many small reads, so the
     /// reader should be buffered.
     pub fn new(r: R) -> Result<Self, DecodingError> {
+        Self::new_with_options(r, WebPDecodeOptions::default())
+    }
+
+    /// Create a new `WebPDecoder` from the reader `r` with the options `WebPDecodeOptions`. The decoder
+    /// performs many small reads, so the reader should be buffered.
+    pub fn new_with_options(
+        r: R,
+        webp_decode_options: WebPDecodeOptions,
+    ) -> Result<Self, DecodingError> {
         let mut decoder = Self {
             r,
             width: 0,
@@ -308,6 +343,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             has_alpha: false,
             loop_count: LoopCount::Times(NonZeroU16::new(1).unwrap()),
             loop_duration: 0,
+            webp_decode_options,
         };
         decoder.read_data()?;
         Ok(decoder)
@@ -653,7 +689,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             }
 
             if self.has_alpha() {
-                frame.fill_rgba(buf);
+                frame.fill_rgba(buf, self.webp_decode_options.lossy_upsampling);
 
                 let range = self
                     .chunks
@@ -684,7 +720,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     }
                 }
             } else {
-                frame.fill_rgb(buf);
+                frame.fill_rgb(buf, self.webp_decode_options.lossy_upsampling);
             }
         }
 
@@ -758,7 +794,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     return Err(DecodingError::InconsistentImageSizes);
                 }
                 let mut rgb_frame = vec![0; frame_width as usize * frame_height as usize * 3];
-                raw_frame.fill_rgb(&mut rgb_frame);
+                raw_frame.fill_rgb(&mut rgb_frame, self.webp_decode_options.lossy_upsampling);
                 (rgb_frame, false)
             }
             WebPRiffChunk::VP8L => {
@@ -789,7 +825,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 let frame = Vp8Decoder::decode_frame((&mut self.r).take(next_chunk_size))?;
 
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
-                frame.fill_rgba(&mut rgba_frame);
+                frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
 
                 for y in 0..frame.height {
                     for x in 0..frame.width {
@@ -879,6 +915,11 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         self.animation.next_frame = 0;
         self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
         self.animation.dispose_next_frame = true;
+    }
+
+    /// Sets the upsampling method that is used in lossy decoding
+    pub fn set_lossy_upsampling(&mut self, upsampling_method: UpsamplingMethod) {
+        self.webp_decode_options.lossy_upsampling = upsampling_method;
     }
 }
 

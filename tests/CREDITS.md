@@ -38,7 +38,11 @@ These files are all PNGs with contents that should exactly match the associated 
 
 ## reference/gallery1 and reference/gallery2
 
-These files were all produced by running dwebp with the `-nofancy` option.
+These files were all produced by running dwebp with the default settings.
+
+## reference/gallery1_nofancy
+
+These files were produced by running dwebp with the `nofancy` option.
 
 ## reference/animated
 
@@ -51,7 +55,7 @@ for i in {1..3}; do webpmux -get frame ${i} ../../images/animated/random_lossles
 random-lossy-N.png:
 
 ```
-for i in {1..4}; do webpmux -get frame ${i} ../../images/animated/random_lossy.webp -o random_lossy-${i}.png && dwebp random_lossy-${i}.png -nofancy -o random_lossy-${i}.png; done
+for i in {1..4}; do webpmux -get frame ${i} ../../images/animated/random_lossy.webp -o random_lossy-${i}.png && dwebp random_lossy-${i}.png -o random_lossy-${i}.png; done
 ```
 
 ## reference/regression

@@ -290,7 +290,7 @@ fn set_pixel(rgb: &mut [u8], y: u8, u: u8, v: u8) {
 
 /// Simple conversion, not currently used but could add a config to allow for using the simple
 #[allow(unused)]
-fn fill_rgb_buffer_simple<const BPP: usize>(
+pub(crate) fn fill_rgb_buffer_simple<const BPP: usize>(
     buffer: &mut [u8],
     y_buffer: &[u8],
     u_buffer: &[u8],
@@ -312,7 +312,7 @@ fn fill_rgb_buffer_simple<const BPP: usize>(
         .zip(u_row_twice_iter)
         .zip(v_row_twice_iter)
     {
-        fill_rgba_row_simple(
+        fill_rgba_row_simple::<BPP>(
             &y_row[..width],
             &u_row[..chroma_width],
             &v_row[..chroma_width],
@@ -321,9 +321,14 @@ fn fill_rgb_buffer_simple<const BPP: usize>(
     }
 }
 
-fn fill_rgba_row_simple(y_vec: &[u8], u_vec: &[u8], v_vec: &[u8], rgba: &mut [u8]) {
+fn fill_rgba_row_simple<const BPP: usize>(
+    y_vec: &[u8],
+    u_vec: &[u8],
+    v_vec: &[u8],
+    rgba: &mut [u8],
+) {
     // Fill 2 pixels per iteration: these pixels share `u` and `v` components
-    let mut rgb_chunks = rgba.chunks_exact_mut(8);
+    let mut rgb_chunks = rgba.chunks_exact_mut(BPP * 2);
     let mut y_chunks = y_vec.chunks_exact(2);
     let mut u_iter = u_vec.iter();
     let mut v_iter = v_vec.iter();
@@ -340,21 +345,23 @@ fn fill_rgba_row_simple(y_vec: &[u8], u_vec: &[u8], v_vec: &[u8], rgba: &mut [u8
             mulhi(u, 33050),
         ];
 
-        let to_copy = [
-            clip(mulhi(y[0], 19077) + coeffs[0] - 14234),
-            clip(mulhi(y[0], 19077) - coeffs[1] - coeffs[2] + 8708),
-            clip(mulhi(y[0], 19077) + coeffs[3] - 17685),
-            rgb[3],
-            clip(mulhi(y[1], 19077) + coeffs[0] - 14234),
-            clip(mulhi(y[1], 19077) - coeffs[1] - coeffs[2] + 8708),
-            clip(mulhi(y[1], 19077) + coeffs[3] - 17685),
-            rgb[7],
-        ];
-        rgb.copy_from_slice(&to_copy);
+        let get_r = |y: u8| clip(mulhi(y, 19077) + coeffs[0] - 14234);
+        let get_g = |y: u8| clip(mulhi(y, 19077) - coeffs[1] - coeffs[2] + 8708);
+        let get_b = |y: u8| clip(mulhi(y, 19077) + coeffs[3] - 17685);
+
+        let rgb1 = &mut rgb[0..3];
+        rgb1[0] = get_r(y[0]);
+        rgb1[1] = get_g(y[0]);
+        rgb1[2] = get_b(y[0]);
+
+        let rgb2 = &mut rgb[BPP..];
+        rgb2[0] = get_r(y[1]);
+        rgb2[1] = get_g(y[1]);
+        rgb2[2] = get_b(y[1]);
     }
 
     let remainder = rgb_chunks.into_remainder();
-    if remainder.len() >= 4 {
+    if remainder.len() >= 3 {
         if let (Some(&y), Some(&u), Some(&v)) = (
             y_chunks.remainder().iter().next(),
             u_iter.next(),
