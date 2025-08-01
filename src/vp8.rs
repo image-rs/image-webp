@@ -14,7 +14,7 @@ use byteorder_lite::{LittleEndian, ReadBytesExt};
 use std::default::Default;
 use std::io::Read;
 
-use crate::decoder::DecodingError;
+use crate::decoder::{DecodingError, UpsamplingMethod};
 use crate::yuv;
 
 use super::vp8_arithmetic_decoder::ArithmeticDecoder;
@@ -897,25 +897,6 @@ struct Segment {
 
     quantizer_level: i8,
     loopfilter_level: i8,
-}
-
-/// Methods for upsampling the chroma values
-///
-/// The chroma red and blue planes are encoded in VP8 as half the size of the luma plane
-/// Therefore we need to upsample these values up to fit each pixel in the image.
-#[derive(Clone, Copy, Default)]
-pub enum UpsamplingMethod {
-    /// Fancy upsampling
-    ///
-    /// Does bilinear interpolation using the 4 values nearest to the pixel, weighting based on the distance
-    /// from the pixel.
-    #[default]
-    Bilinear,
-    /// Simple upsampling, just uses the closest u/v value to the pixel when upsampling
-    ///
-    /// Matches the -nofancy option in dwebp.
-    /// Should be faster but may lead to slightly jagged edges.
-    Simple,
 }
 
 /// VP8 Decoder

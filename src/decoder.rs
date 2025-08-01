@@ -7,7 +7,6 @@ use std::num::NonZeroU16;
 use std::ops::Range;
 
 use crate::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo};
-use crate::vp8::UpsamplingMethod;
 
 use super::lossless::LosslessDecoder;
 use super::vp8::Vp8Decoder;
@@ -288,6 +287,25 @@ impl Default for WebPDecodeOptions {
             lossy_upsampling: UpsamplingMethod::Bilinear,
         }
     }
+}
+
+/// Methods for upsampling the chroma values in lossy decoding
+///
+/// The chroma red and blue planes are encoded in VP8 as half the size of the luma plane
+/// Therefore we need to upsample these values up to fit each pixel in the image.
+#[derive(Clone, Copy, Default)]
+pub enum UpsamplingMethod {
+    /// Fancy upsampling
+    ///
+    /// Does bilinear interpolation using the 4 values nearest to the pixel, weighting based on the distance
+    /// from the pixel.
+    #[default]
+    Bilinear,
+    /// Simple upsampling, just uses the closest u/v value to the pixel when upsampling
+    ///
+    /// Matches the -nofancy option in dwebp.
+    /// Should be faster but may lead to slightly jagged edges.
+    Simple,
 }
 
 /// WebP image format decoder.

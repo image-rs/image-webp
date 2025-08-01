@@ -9,7 +9,9 @@
 #[cfg(all(test, feature = "_benchmarks"))]
 extern crate test;
 
-pub use self::decoder::{DecodingError, LoopCount, WebPDecodeOptions, WebPDecoder};
+pub use self::decoder::{
+    DecodingError, LoopCount, UpsamplingMethod, WebPDecodeOptions, WebPDecoder,
+};
 pub use self::encoder::{ColorType, EncoderParams, EncodingError, WebPEncoder};
 
 mod alpha_blending;
