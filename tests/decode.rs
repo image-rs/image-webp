@@ -172,7 +172,7 @@ macro_rules! reftest_nofancy {
             #[test]
             fn [<reftest_nofancy_ $basename _ $name>]() {
                 let mut options = image_webp::WebPDecodeOptions::default();
-                options.set_lossy_upsampling(image_webp::vp8::UpsamplingMethod::Simple);
+                options.lossy_upsampling = image_webp::vp8::UpsamplingMethod::Simple;
                 reference_test_with_options(
                     concat!(stringify!($basename), "/", stringify!($name)),
                     options,

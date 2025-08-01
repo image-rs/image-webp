@@ -274,17 +274,12 @@ pub enum LoopCount {
 
 /// WebP decoder configuration options
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct WebPDecodeOptions {
-    lossy_upsampling: UpsamplingMethod,
-}
-
-impl WebPDecodeOptions {
-    /// Sets the upsampling method used in conversion from lossy yuv to rgb
+    /// The upsampling method used in conversion from lossy yuv to rgb
     ///
     /// Defaults to `Bilinear`.
-    pub fn set_lossy_upsampling(&mut self, lossy_upsampling: UpsamplingMethod) {
-        self.lossy_upsampling = lossy_upsampling;
-    }
+    pub lossy_upsampling: UpsamplingMethod,
 }
 
 impl Default for WebPDecodeOptions {
