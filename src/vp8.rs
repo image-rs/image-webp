@@ -14,7 +14,8 @@ use byteorder_lite::{LittleEndian, ReadBytesExt};
 use std::default::Default;
 use std::io::Read;
 
-use crate::decoder::DecodingError;
+use crate::decoder::{DecodingError, UpsamplingMethod};
+use crate::yuv;
 
 use super::vp8_arithmetic_decoder::ArithmeticDecoder;
 use super::{loop_filter, transform};
@@ -802,7 +803,6 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Chroma plane is half the size of the Luma plane
     const fn chroma_width(&self) -> u16 {
         self.width.div_ceil(2)
     }
@@ -816,203 +816,70 @@ impl Frame {
         }
     }
 
-    /// Fills an rgb buffer with the image
-    pub(crate) fn fill_rgb(&self, buf: &mut [u8]) {
+    /// Fills an rgb buffer from the YUV buffers
+    pub(crate) fn fill_rgb(&self, buf: &mut [u8], upsampling_method: UpsamplingMethod) {
         const BPP: usize = 3;
 
-        let buffer_width = usize::from(self.buffer_width());
-
-        let u_row_twice_iter = self
-            .ubuf
-            .chunks_exact(buffer_width / 2)
-            .flat_map(|n| std::iter::repeat(n).take(2));
-        let v_row_twice_iter = self
-            .vbuf
-            .chunks_exact(buffer_width / 2)
-            .flat_map(|n| std::iter::repeat(n).take(2));
-
-        for (((row, y_row), u_row), v_row) in buf
-            .chunks_exact_mut(usize::from(self.width) * BPP)
-            .zip(self.ybuf.chunks_exact(buffer_width))
-            .zip(u_row_twice_iter)
-            .zip(v_row_twice_iter)
-        {
-            Self::fill_rgb_row(
-                &y_row[..usize::from(self.width)],
-                &u_row[..usize::from(self.chroma_width())],
-                &v_row[..usize::from(self.chroma_width())],
-                row,
-            );
-        }
-    }
-
-    fn fill_rgb_row(y_vec: &[u8], u_vec: &[u8], v_vec: &[u8], rgb: &mut [u8]) {
-        // Fill 2 pixels per iteration: these pixels share `u` and `v` components
-        let mut rgb_chunks = rgb.chunks_exact_mut(6);
-        let mut y_chunks = y_vec.chunks_exact(2);
-        let mut u_iter = u_vec.iter();
-        let mut v_iter = v_vec.iter();
-
-        for (((rgb, y), &u), &v) in (&mut rgb_chunks)
-            .zip(&mut y_chunks)
-            .zip(&mut u_iter)
-            .zip(&mut v_iter)
-        {
-            let coeffs = [
-                mulhi(v, 26149),
-                mulhi(u, 6419),
-                mulhi(v, 13320),
-                mulhi(u, 33050),
-            ];
-
-            rgb[0] = clip(mulhi(y[0], 19077) + coeffs[0] - 14234);
-            rgb[1] = clip(mulhi(y[0], 19077) - coeffs[1] - coeffs[2] + 8708);
-            rgb[2] = clip(mulhi(y[0], 19077) + coeffs[3] - 17685);
-
-            rgb[3] = clip(mulhi(y[1], 19077) + coeffs[0] - 14234);
-            rgb[4] = clip(mulhi(y[1], 19077) - coeffs[1] - coeffs[2] + 8708);
-            rgb[5] = clip(mulhi(y[1], 19077) + coeffs[3] - 17685);
-        }
-
-        let remainder = rgb_chunks.into_remainder();
-        if remainder.len() >= 3 {
-            if let (Some(&y), Some(&u), Some(&v)) = (
-                y_chunks.remainder().iter().next(),
-                u_iter.next(),
-                v_iter.next(),
-            ) {
-                let coeffs = [
-                    mulhi(v, 26149),
-                    mulhi(u, 6419),
-                    mulhi(v, 13320),
-                    mulhi(u, 33050),
-                ];
-
-                remainder[0] = clip(mulhi(y, 19077) + coeffs[0] - 14234);
-                remainder[1] = clip(mulhi(y, 19077) - coeffs[1] - coeffs[2] + 8708);
-                remainder[2] = clip(mulhi(y, 19077) + coeffs[3] - 17685);
+        match upsampling_method {
+            UpsamplingMethod::Bilinear => {
+                yuv::fill_rgb_buffer_fancy::<BPP>(
+                    buf,
+                    &self.ybuf,
+                    &self.ubuf,
+                    &self.vbuf,
+                    usize::from(self.width),
+                    usize::from(self.height),
+                    usize::from(self.buffer_width()),
+                );
+            }
+            UpsamplingMethod::Simple => {
+                yuv::fill_rgb_buffer_simple::<BPP>(
+                    buf,
+                    &self.ybuf,
+                    &self.ubuf,
+                    &self.vbuf,
+                    usize::from(self.width),
+                    usize::from(self.chroma_width()),
+                    usize::from(self.buffer_width()),
+                );
             }
         }
     }
 
-    /// Fills an rgba buffer by skipping the alpha values
-    pub(crate) fn fill_rgba(&self, buf: &mut [u8]) {
+    /// Fills an rgba buffer from the YUV buffers
+    pub(crate) fn fill_rgba(&self, buf: &mut [u8], upsampling_method: UpsamplingMethod) {
         const BPP: usize = 4;
 
-        let buffer_width = usize::from(self.buffer_width());
-
-        let u_row_twice_iter = self
-            .ubuf
-            .chunks_exact(buffer_width / 2)
-            .flat_map(|n| std::iter::repeat(n).take(2));
-        let v_row_twice_iter = self
-            .vbuf
-            .chunks_exact(buffer_width / 2)
-            .flat_map(|n| std::iter::repeat(n).take(2));
-
-        for (((row, y_row), u_row), v_row) in buf
-            .chunks_exact_mut(usize::from(self.width) * BPP)
-            .zip(self.ybuf.chunks_exact(buffer_width))
-            .zip(u_row_twice_iter)
-            .zip(v_row_twice_iter)
-        {
-            Self::fill_rgba_row(
-                &y_row[..usize::from(self.width)],
-                &u_row[..usize::from(self.chroma_width())],
-                &v_row[..usize::from(self.chroma_width())],
-                row,
-            );
-        }
-    }
-
-    fn fill_rgba_row(y_vec: &[u8], u_vec: &[u8], v_vec: &[u8], rgba: &mut [u8]) {
-        // Fill 2 pixels per iteration: these pixels share `u` and `v` components
-        let mut rgb_chunks = rgba.chunks_exact_mut(8);
-        let mut y_chunks = y_vec.chunks_exact(2);
-        let mut u_iter = u_vec.iter();
-        let mut v_iter = v_vec.iter();
-
-        for (((rgb, y), &u), &v) in (&mut rgb_chunks)
-            .zip(&mut y_chunks)
-            .zip(&mut u_iter)
-            .zip(&mut v_iter)
-        {
-            let coeffs = [
-                mulhi(v, 26149),
-                mulhi(u, 6419),
-                mulhi(v, 13320),
-                mulhi(u, 33050),
-            ];
-
-            let to_copy = [
-                clip(mulhi(y[0], 19077) + coeffs[0] - 14234),
-                clip(mulhi(y[0], 19077) - coeffs[1] - coeffs[2] + 8708),
-                clip(mulhi(y[0], 19077) + coeffs[3] - 17685),
-                rgb[3],
-                clip(mulhi(y[1], 19077) + coeffs[0] - 14234),
-                clip(mulhi(y[1], 19077) - coeffs[1] - coeffs[2] + 8708),
-                clip(mulhi(y[1], 19077) + coeffs[3] - 17685),
-                rgb[7],
-            ];
-            rgb.copy_from_slice(&to_copy);
-        }
-
-        let remainder = rgb_chunks.into_remainder();
-        if remainder.len() >= 4 {
-            if let (Some(&y), Some(&u), Some(&v)) = (
-                y_chunks.remainder().iter().next(),
-                u_iter.next(),
-                v_iter.next(),
-            ) {
-                let coeffs = [
-                    mulhi(v, 26149),
-                    mulhi(u, 6419),
-                    mulhi(v, 13320),
-                    mulhi(u, 33050),
-                ];
-
-                remainder[0] = clip(mulhi(y, 19077) + coeffs[0] - 14234);
-                remainder[1] = clip(mulhi(y, 19077) - coeffs[1] - coeffs[2] + 8708);
-                remainder[2] = clip(mulhi(y, 19077) + coeffs[3] - 17685);
+        match upsampling_method {
+            UpsamplingMethod::Bilinear => {
+                yuv::fill_rgb_buffer_fancy::<BPP>(
+                    buf,
+                    &self.ybuf,
+                    &self.ubuf,
+                    &self.vbuf,
+                    usize::from(self.width),
+                    usize::from(self.height),
+                    usize::from(self.buffer_width()),
+                );
+            }
+            UpsamplingMethod::Simple => {
+                yuv::fill_rgb_buffer_simple::<BPP>(
+                    buf,
+                    &self.ybuf,
+                    &self.ubuf,
+                    &self.vbuf,
+                    usize::from(self.width),
+                    usize::from(self.chroma_width()),
+                    usize::from(self.buffer_width()),
+                );
             }
         }
     }
-
     /// Gets the buffer size
     #[must_use]
     pub fn get_buf_size(&self) -> usize {
         self.ybuf.len() * 3
     }
-}
-
-/// `_mm_mulhi_epu16` emulation used in `Frame::fill_rgb` and `Frame::fill_rgba`.
-fn mulhi(v: u8, coeff: u16) -> i32 {
-    ((u32::from(v) * u32::from(coeff)) >> 8) as i32
-}
-
-/// Used in `Frame::fill_rgb` and `Frame::fill_rgba`.
-/// This function has been rewritten to encourage auto-vectorization.
-///
-/// Based on [src/dsp/yuv.h](https://github.com/webmproject/libwebp/blob/8534f53960befac04c9631e6e50d21dcb42dfeaf/src/dsp/yuv.h#L79)
-/// from the libwebp source.
-/// ```text
-/// const YUV_FIX2: i32 = 6;
-/// const YUV_MASK2: i32 = (256 << YUV_FIX2) - 1;
-/// fn clip(v: i32) -> u8 {
-///     if (v & !YUV_MASK2) == 0 {
-///         (v >> YUV_FIX2) as u8
-///     } else if v < 0 {
-///         0
-///     } else {
-///         255
-///     }
-/// }
-/// ```
-// Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
-#[allow(clippy::manual_clamp)]
-fn clip(v: i32) -> u8 {
-    const YUV_FIX2: i32 = 6;
-    (v >> YUV_FIX2).max(0).min(255) as u8
 }
 
 #[derive(Clone, Copy, Default)]

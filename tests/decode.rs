@@ -37,16 +37,26 @@ fn save_image(data: &[u8], file: &str, i: Option<u32>, has_alpha: bool, width: u
 }
 
 fn reference_test(file: &str) {
+    reference_test_with_options(file, image_webp::WebPDecodeOptions::default(), None);
+}
+
+fn reference_test_with_options(
+    file: &str,
+    options: image_webp::WebPDecodeOptions,
+    custom_reference_file: Option<&str>,
+) {
     // Prepare WebP decoder
     let contents = std::fs::read(format!("tests/images/{file}.webp")).unwrap();
-    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(contents)).unwrap();
+    let mut decoder =
+        image_webp::WebPDecoder::new_with_options(Cursor::new(contents), options).unwrap();
     let (width, height) = decoder.dimensions();
 
     // Decode reference PNG
+    let reference_file = custom_reference_file.unwrap_or(file);
     let reference_path = if decoder.is_animated() {
-        format!("tests/reference/{file}-1.png")
+        format!("tests/reference/{reference_file}-1.png")
     } else {
-        format!("tests/reference/{file}.png")
+        format!("tests/reference/{reference_file}.png")
     };
     let reference_contents = std::fs::read(reference_path).unwrap();
     let mut reference_decoder = png::Decoder::new(Cursor::new(reference_contents))
@@ -85,7 +95,7 @@ fn reference_test(file: &str) {
         }
     } else {
         // NOTE: WebP lossy images are stored in YUV format. The conversion to RGB is not precisely
-        // defined, but we currently attempt to match the dwebp's "-nofancy" conversion option.
+        // defined, but we currently attempt to match the dwebp's default conversion option.
         let num_bytes_different = data
             .iter()
             .zip(reference_data.iter())
@@ -156,7 +166,29 @@ macro_rules! reftest {
     }
 }
 
+macro_rules! reftest_nofancy {
+    ($basename:expr, $name:expr) => {
+        paste::paste! {
+            #[test]
+            fn [<reftest_nofancy_ $basename _ $name>]() {
+                let mut options = image_webp::WebPDecodeOptions::default();
+                options.lossy_upsampling = image_webp::UpsamplingMethod::Simple;
+                reference_test_with_options(
+                    concat!(stringify!($basename), "/", stringify!($name)),
+                    options,
+                    Some(concat!(stringify!($basename), "_nofancy", "/", stringify!($name)))
+                );
+            }
+        }
+    };
+    ($basename:expr, $name:expr, $($tail:expr),+) => {
+        reftest_nofancy!( $basename, $name );
+        reftest_nofancy!( $basename, $($tail),+ );
+    }
+}
+
 reftest!(gallery1, 1, 2, 3, 4, 5);
+reftest_nofancy!(gallery1, 1, 2, 3, 4, 5);
 reftest!(gallery2, 1_webp_ll, 2_webp_ll, 3_webp_ll, 4_webp_ll, 5_webp_ll);
 reftest!(gallery2, 1_webp_a, 2_webp_a, 3_webp_a, 4_webp_a, 5_webp_a);
 reftest!(animated, random_lossless, random_lossy);
