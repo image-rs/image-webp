@@ -1,9 +1,9 @@
 //! Info related to vp8 used in both the decoder and the encoder
-//! 
-//! 
+//!
+//!
 
 /// Different planes to be encoded/decoded in DCT coefficient decoding
-/// in 13.3 of the spec 
+/// in 13.3 of the spec
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Plane {
     /// The Y plane after decoding Y2

@@ -1,4 +1,3 @@
-
 // direct translation of the encoder given in the vp8 specification
 // TODO: optimise to be faster, similar to the decoder
 #[derive(Default)]
@@ -38,7 +37,7 @@ impl ArithmeticEncoder {
 
     pub(crate) fn write_bool(&mut self, bool_to_write: bool, probability: u8) {
         let split = 1 + (((u32::from(self.range) - 1) * u32::from(probability)) >> 8);
-        
+
         if bool_to_write {
             self.bottom += split;
             self.range -= split;
@@ -53,7 +52,7 @@ impl ArithmeticEncoder {
                 self.add_one_to_output();
             }
             self.bottom <<= 1;
-            
+
             self.bit_num -= 1;
             // we have a byte now so can write it
             if self.bit_num == 0 {
@@ -69,7 +68,7 @@ impl ArithmeticEncoder {
     pub(crate) fn write_literal(&mut self, num_bits: u8, value: u8) {
         for bit in (0..num_bits).rev() {
             let bool_encode = if (1 << bit) & value > 0 { true } else { false };
-            self.write_bool(bool_encode, 128); 
+            self.write_bool(bool_encode, 128);
         }
     }
 
@@ -80,14 +79,19 @@ impl ArithmeticEncoder {
             self.write_literal(num_bits, abs_value);
             let sign = if value >= 0 { true } else { false };
             self.write_flag(sign);
-        } 
+        }
     }
 
-    pub(crate) fn write_with_tree(&mut self, tree: &[i8], probabilities: &[u8], value: i8, start_index: usize) {
+    pub(crate) fn write_with_tree(
+        &mut self,
+        tree: &[i8],
+        probabilities: &[u8],
+        value: i8,
+        start_index: usize,
+    ) {
         assert_eq!(tree.len(), probabilities.len() * 2);
         // the values are encoded as negative or zero in the tree, positive values are indexes
-        let mut current_index = tree.iter().position(|x| *x == -value)
-            .unwrap();
+        let mut current_index = tree.iter().position(|x| *x == -value).unwrap();
 
         let mut to_encode: Vec<(bool, u8)> = vec![];
 
@@ -112,8 +116,13 @@ impl ArithmeticEncoder {
 
             to_encode.push((encode_val, probabilities[current_index / 2]));
 
-            let previous_index = tree.iter().position(|x| *x == (current_index as i8))
-                .expect(&format!("Failed to encode {} for tree {:?} and probs {:?}", value, tree, probabilities));
+            let previous_index = tree
+                .iter()
+                .position(|x| *x == (current_index as i8))
+                .expect(&format!(
+                    "Failed to encode {} for tree {:?} and probs {:?}",
+                    value, tree, probabilities
+                ));
             current_index = previous_index;
         }
 
@@ -145,7 +154,6 @@ impl ArithmeticEncoder {
         self.writer
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -195,7 +203,12 @@ mod tests {
         let mut decoder = ArithmeticDecoder::new();
         decoder.init(decode_buffer, write_buffer.len()).unwrap();
         let mut res = decoder.start_accumulated_result();
-        assert_eq!(decoder.read_with_tree(&KEYFRAME_YMODE_NODES).or_accumulate(&mut res), TM_PRED);
+        assert_eq!(
+            decoder
+                .read_with_tree(&KEYFRAME_YMODE_NODES)
+                .or_accumulate(&mut res),
+            TM_PRED
+        );
         decoder.check(res, ()).unwrap();
     }
 }

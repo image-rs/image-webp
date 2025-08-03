@@ -29,7 +29,7 @@ mod lossless_transform;
 mod transform;
 
 #[cfg(feature = "webp")]
-pub mod vp8_info;
+mod vp8_info;
 #[cfg(feature = "webp")]
 pub mod vp8;
 

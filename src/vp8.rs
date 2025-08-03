@@ -153,7 +153,8 @@ const SEGMENT_TREE_NODE_DEFAULTS: [TreeNode; 3] = tree_nodes_from(SEGMENT_ID_TRE
 
 // Section 11.2
 // Tree for determining the keyframe luma intra prediction modes:
-pub(crate) const KEYFRAME_YMODE_TREE: [i8; 8] = [-B_PRED, 2, 4, 6, -DC_PRED, -V_PRED, -H_PRED, -TM_PRED];
+pub(crate) const KEYFRAME_YMODE_TREE: [i8; 8] =
+    [-B_PRED, 2, 4, 6, -DC_PRED, -V_PRED, -H_PRED, -TM_PRED];
 
 // Default probabilities for decoding the keyframe luma modes
 pub(crate) const KEYFRAME_YMODE_PROBS: [Prob; 4] = [145, 156, 163, 128];
@@ -1491,7 +1492,11 @@ impl<R: Read> Vp8Decoder<R> {
         // so that the compiler doesn't have to insert them in the hot loop below
         assert!(complexity <= 2);
 
-        let first_coeff = if plane == Plane::YCoeff1 { 1usize } else { 0usize };
+        let first_coeff = if plane == Plane::YCoeff1 {
+            1usize
+        } else {
+            0usize
+        };
         let probs = &self.token_probs[plane as usize];
         let decoder = &mut self.partitions[p];
 
@@ -1500,7 +1505,6 @@ impl<R: Read> Vp8Decoder<R> {
         let mut complexity = complexity;
         let mut has_coefficients = false;
         let mut skip = false;
-
 
         for i in first_coeff..16usize {
             let band = COEFF_BANDS[i] as usize;
@@ -1572,7 +1576,11 @@ impl<R: Read> Vp8Decoder<R> {
     ) -> Result<[i32; 384], DecodingError> {
         let sindex = mb.segmentid as usize;
         let mut blocks = [0i32; 384];
-        let mut plane = if mb.luma_mode == LumaMode::B { Plane::YCoeff0 } else { Plane::Y2 };
+        let mut plane = if mb.luma_mode == LumaMode::B {
+            Plane::YCoeff0
+        } else {
+            Plane::Y2
+        };
 
         if plane == Plane::Y2 {
             // get Y2 block first
@@ -2085,7 +2093,13 @@ fn init_top_macroblocks(width: usize) -> Vec<MacroBlock> {
     vec![mb; mb_width]
 }
 
-pub(crate) fn create_border_luma(mbx: usize, mby: usize, mbw: usize, top: &[u8], left: &[u8]) -> [u8; 357] {
+pub(crate) fn create_border_luma(
+    mbx: usize,
+    mby: usize,
+    mbw: usize,
+    top: &[u8],
+    left: &[u8],
+) -> [u8; 357] {
     let stride = 1usize + 16 + 4;
     let mut ws = [0u8; (1 + 16) * (1 + 16 + 4)];
 
