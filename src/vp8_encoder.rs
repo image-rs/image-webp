@@ -79,6 +79,8 @@ struct MacroblockInfo {
     // whether the macroblock uses custom segment values
     // if None, will use the frame level values
     segment_id: Option<usize>,
+
+    coeffs_skipped: bool,
 }
 
 // note that in decoder it actually stores this information on the macroblock but that's super confusing
@@ -90,6 +92,17 @@ struct Complexity {
     y: [u8; 4],
     u: [u8; 2],
     v: [u8; 2],
+}
+
+impl Complexity {
+    fn clear(&mut self, include_y2: bool) {
+        self.y = [0; 4];
+        self.u = [0; 2];
+        self.v = [0; 2];
+        if include_y2 {
+            self.y2 = 0;
+        }
+    } 
 }
 
 struct Vp8Encoder<W> {
@@ -288,8 +301,8 @@ impl<W: Write> Vp8Encoder<W> {
         }
 
         if let Some(prob) = self.frame_info.macroblock_no_skip_coeff {
-            // TODO: 11.1 set mb_skip_coeff
-            todo!();
+            self.encoder
+                .write_bool(macroblock_info.coeffs_skipped, prob);
         }
 
         // encode macroblock info y mode using KEYFRAME_YMODE_TREE
@@ -638,7 +651,7 @@ impl<W: Write> Vp8Encoder<W> {
         // encode residual partitions first
         for mby in 0..self.macroblock_height {
             let partition_index = usize::from(mby) % self.partitions.len();
-            // reset left complexity / vpreds for left of image 
+            // reset left complexity / bpreds for left of image
             self.left_complexity = Complexity::default();
             self.left_b_pred = [IntraMode::default(); 4];
             for mbx in 0..self.macroblock_width {
@@ -648,33 +661,40 @@ impl<W: Write> Vp8Encoder<W> {
                 // write macroblock headers
                 self.write_macroblock_header(&macroblock_info, mbx.into());
 
-                let y_block_data = transform_luma_block(
-                    &y_bytes,
-                    mbx.into(),
-                    mby.into(),
-                    self.macroblock_width.into(),
-                    (self.macroblock_width * 16).into(),
-                    macroblock_info.luma_mode,
-                    macroblock_info.luma_bpred,
-                );
+                if !macroblock_info.coeffs_skipped {
+                    let y_block_data = transform_luma_block(
+                        &y_bytes,
+                        mbx.into(),
+                        mby.into(),
+                        self.macroblock_width.into(),
+                        (self.macroblock_width * 16).into(),
+                        macroblock_info.luma_mode,
+                        macroblock_info.luma_bpred,
+                    );
 
-                let (u_block_data, v_block_data) = transform_chroma_blocks(
-                    &u_bytes,
-                    &v_bytes,
-                    mbx.into(),
-                    mby.into(),
-                    (self.macroblock_width * 8).into(),
-                    macroblock_info.chroma_mode,
-                );
+                    let (u_block_data, v_block_data) = transform_chroma_blocks(
+                        &u_bytes,
+                        &v_bytes,
+                        mbx.into(),
+                        mby.into(),
+                        (self.macroblock_width * 8).into(),
+                        macroblock_info.chroma_mode,
+                    );
 
-                self.encode_residual_data(
-                    &macroblock_info,
-                    partition_index,
-                    mbx as usize,
-                    &y_block_data,
-                    &u_block_data,
-                    &v_block_data,
-                );
+                    self.encode_residual_data(
+                        &macroblock_info,
+                        partition_index,
+                        mbx as usize,
+                        &y_block_data,
+                        &u_block_data,
+                        &v_block_data,
+                    );
+                } else {
+                    // since coeffs are all zero, need to set all complexities to 0
+                    // except if the luma mode is B then won't set Y2
+                    self.left_complexity.clear(macroblock_info.luma_mode != LumaMode::B);
+                    self.top_complexity[usize::from(mbx)].clear(macroblock_info.luma_mode != LumaMode::B);
+                }
             }
         }
 
@@ -746,6 +766,7 @@ fn get_macroblock_info(
         luma_bpred: luma_bpred,
         chroma_mode: chroma_prediction,
         segment_id,
+        coeffs_skipped: false,
     }
 }
 
