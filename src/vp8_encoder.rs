@@ -5,10 +5,22 @@ use byteorder_lite::LittleEndian;
 use byteorder_lite::WriteBytesExt;
 
 use crate::transform;
+use crate::vp8::predict_bdcpred;
+use crate::vp8::predict_bhdpred;
+use crate::vp8::predict_bhepred;
+use crate::vp8::predict_bhupred;
+use crate::vp8::predict_bldpred;
+use crate::vp8::predict_brdpred;
+use crate::vp8::predict_bvepred;
+use crate::vp8::predict_bvlpred;
+use crate::vp8::predict_bvrpred;
+use crate::vp8::IntraMode;
 use crate::vp8::AC_QUANT;
 use crate::vp8::COEFF_UPDATE_PROBS;
 use crate::vp8::DCT_EOB;
 use crate::vp8::DC_QUANT;
+use crate::vp8::KEYFRAME_BPRED_MODE_PROBS;
+use crate::vp8::KEYFRAME_BPRED_MODE_TREE;
 use crate::EncodingError;
 use crate::{
     transform::{dct4x4, wht4x4},
@@ -59,6 +71,10 @@ struct QuantizationIndices {
 #[derive(Clone, Copy, Default)]
 struct MacroblockInfo {
     luma_mode: LumaMode,
+    // note ideally this would be on LumaMode::B
+    // since that it's where it's valid but need to change the decoder to
+    // work with that as well
+    luma_bpred: Option<[IntraMode; 16]>,
     chroma_mode: ChromaMode,
     // whether the macroblock uses custom segment values
     // if None, will use the frame level values
@@ -86,6 +102,9 @@ struct Vp8Encoder<W> {
     top_complexity: Vec<Complexity>,
     left_complexity: Complexity,
 
+    top_b_pred: Vec<IntraMode>,
+    left_b_pred: [IntraMode; 4],
+
     macroblock_width: u16,
     macroblock_height: u16,
 
@@ -111,6 +130,9 @@ impl<W: Write> Vp8Encoder<W> {
 
             top_complexity: Vec::new(),
             left_complexity: Complexity::default(),
+
+            top_b_pred: Vec::new(),
+            left_b_pred: [IntraMode::default(); 4],
 
             macroblock_width: 0,
             macroblock_height: 0,
@@ -257,7 +279,7 @@ impl<W: Write> Vp8Encoder<W> {
         }
     }
 
-    fn write_macroblock_header(&mut self, macroblock_info: &MacroblockInfo) {
+    fn write_macroblock_header(&mut self, macroblock_info: &MacroblockInfo, mbx: usize) {
         if self.frame_info.segments_enabled {
             if let Some(segment_id) = macroblock_info.segment_id {
                 // TODO: set segment
@@ -278,9 +300,41 @@ impl<W: Write> Vp8Encoder<W> {
             0,
         );
 
-        if macroblock_info.luma_mode == LumaMode::B {
-            // TODO: 11.3 code each of the subblocks
-            todo!();
+        match macroblock_info.luma_mode.into_intra() {
+            None => {
+                // 11.3 code each of the subblocks
+                if let Some(bpred) = macroblock_info.luma_bpred {
+                    for y in 0usize..4 {
+                        let mut left = self.left_b_pred[y];
+                        for x in 0usize..4 {
+                            let top = self.top_b_pred[mbx * 4 + x];
+                            let probs = &KEYFRAME_BPRED_MODE_PROBS[top as usize][left as usize];
+                            let intra_mode = bpred[y * 4 + x];
+                            self.encoder.write_with_tree(
+                                &KEYFRAME_BPRED_MODE_TREE,
+                                probs,
+                                intra_mode.to_i8(),
+                                0,
+                            );
+                            left = intra_mode;
+                            self.top_b_pred[mbx * 4 + x] = intra_mode;
+                        }
+                        self.left_b_pred[y] = left;
+                    }
+                } else {
+                    panic!("Invalid, can't set luma mode to B without setting preds");
+                }
+            }
+            Some(intra_mode) => {
+                for (left, top) in self
+                    .left_b_pred
+                    .iter_mut()
+                    .zip(self.top_b_pred[4 * mbx..][..4].iter_mut())
+                {
+                    *left = intra_mode;
+                    *top = intra_mode;
+                }
+            }
         }
 
         // encode macroblock info chroma mode
@@ -579,13 +633,20 @@ impl<W: Write> Vp8Encoder<W> {
 
         self.setup_encoding();
 
+        self.encode_compressed_frame_header();
+
         // encode residual partitions first
         for mby in 0..self.macroblock_height {
             let partition_index = usize::from(mby) % self.partitions.len();
+            // reset left complexity / vpreds for left of image 
             self.left_complexity = Complexity::default();
+            self.left_b_pred = [IntraMode::default(); 4];
             for mbx in 0..self.macroblock_width {
                 let macroblock_info =
                     self.macroblock_info[(mby * self.macroblock_width + mbx) as usize];
+
+                // write macroblock headers
+                self.write_macroblock_header(&macroblock_info, mbx.into());
 
                 let y_block_data = transform_luma_block(
                     &y_bytes,
@@ -594,6 +655,7 @@ impl<W: Write> Vp8Encoder<W> {
                     self.macroblock_width.into(),
                     (self.macroblock_width * 16).into(),
                     macroblock_info.luma_mode,
+                    macroblock_info.luma_bpred,
                 );
 
                 let (u_block_data, v_block_data) = transform_chroma_blocks(
@@ -601,7 +663,6 @@ impl<W: Write> Vp8Encoder<W> {
                     &v_bytes,
                     mbx.into(),
                     mby.into(),
-                    self.macroblock_width.into(),
                     (self.macroblock_width * 8).into(),
                     macroblock_info.chroma_mode,
                 );
@@ -614,17 +675,6 @@ impl<W: Write> Vp8Encoder<W> {
                     &u_block_data,
                     &v_block_data,
                 );
-            }
-        }
-
-        self.encode_compressed_frame_header();
-
-        // write macroblock headers
-        for mby in 0..self.macroblock_height {
-            for mbx in 0..self.macroblock_width {
-                let macroblock_info =
-                    self.macroblock_info[(mby * self.macroblock_width + mbx) as usize];
-                self.write_macroblock_header(&macroblock_info);
             }
         }
 
@@ -641,12 +691,18 @@ impl<W: Write> Vp8Encoder<W> {
     }
 
     fn setup_encoding(&mut self) {
-        let macroblock_info = MacroblockInfo::default();
+        let macroblock_info = MacroblockInfo {
+            luma_mode: LumaMode::DC,
+            luma_bpred: None,
+            ..Default::default()
+        };
         let macroblock_num =
             usize::from(self.macroblock_width) * usize::from(self.macroblock_height);
         self.macroblock_info = vec![macroblock_info; macroblock_num];
 
         self.top_complexity = vec![Complexity::default(); usize::from(self.macroblock_width)];
+        self.top_b_pred = vec![IntraMode::default(); 4 * usize::from(self.macroblock_width)];
+        self.left_b_pred = [IntraMode::default(); 4];
 
         self.frame_info.token_probs = COEFF_PROBS;
 
@@ -683,8 +739,11 @@ fn get_macroblock_info(
     // TODO: choose whether to use segment for this macroblock
     let segment_id = None;
 
+    let luma_bpred = None;
+
     MacroblockInfo {
         luma_mode: luma_prediction,
+        luma_bpred: luma_bpred,
         chroma_mode: chroma_prediction,
         segment_id,
     }
@@ -701,6 +760,7 @@ fn transform_luma_block(
     mbw: usize,
     width: usize,
     prediction: LumaMode,
+    bpred_modes: Option<[IntraMode; 16]>,
 ) -> [i32; 16 * 16] {
     let stride = 1usize + 16 + 4;
 
@@ -737,7 +797,61 @@ fn transform_luma_block(
         LumaMode::H => predict_hpred(&mut y_with_border, 16, 1, 1, stride),
         LumaMode::TM => predict_tmpred(&mut y_with_border, 16, 1, 1, stride),
         LumaMode::DC => predict_dcpred(&mut y_with_border, 16, stride, mby != 0, mbx != 0),
-        LumaMode::B => todo!(),
+        LumaMode::B => {
+            if let Some(bpred_modes) = bpred_modes {
+                let mut luma_blocks = [0i32; 16 * 16];
+
+                for sby in 0usize..4 {
+                    for sbx in 0usize..4 {
+                        let i = sby * 4 + sbx;
+                        let y0 = sby * 4 + 1;
+                        let x0 = sbx * 4 + 1;
+
+                        match bpred_modes[i] {
+                            IntraMode::TM => predict_tmpred(&mut y_with_border, 4, x0, y0, stride),
+                            IntraMode::VE => predict_bvepred(&mut y_with_border, x0, y0, stride),
+                            IntraMode::HE => predict_bhepred(&mut y_with_border, x0, y0, stride),
+                            IntraMode::DC => predict_bdcpred(&mut y_with_border, x0, y0, stride),
+                            IntraMode::LD => predict_bldpred(&mut y_with_border, x0, y0, stride),
+                            IntraMode::RD => predict_brdpred(&mut y_with_border, x0, y0, stride),
+                            IntraMode::VR => predict_bvrpred(&mut y_with_border, x0, y0, stride),
+                            IntraMode::VL => predict_bvlpred(&mut y_with_border, x0, y0, stride),
+                            IntraMode::HD => predict_bhdpred(&mut y_with_border, x0, y0, stride),
+                            IntraMode::HU => predict_bhupred(&mut y_with_border, x0, y0, stride),
+                        }
+
+                        let block_index = sby * 16 * 4 + sbx * 16;
+                        let mut current_subblock = [0i32; 16];
+
+                        // subtract actual values here
+                        let border_subblock_index = y0 * stride + x0;
+                        let y_data_block_index = (mby * 16 + sby * 4) * width + mbx * 16 + sbx * 4;
+                        for y in 0..4 {
+                            for x in 0..4 {
+                                let predicted_index = border_subblock_index + y * stride + x;
+                                let predicted_value = y_with_border[predicted_index];
+                                let actual_index = y_data_block_index + y * width + x;
+                                let actual_value = y_data[actual_index];
+                                current_subblock[y * 4 + x] =
+                                    i32::from(actual_value) - i32::from(predicted_value);
+
+                                // update predicted value to actual value for next subblocks
+                                // note we only actually need to update the borders, this might be slower than needed
+                                y_with_border[predicted_index] = actual_value;
+                            }
+                        }
+
+                        transform::dct4x4(&mut current_subblock);
+
+                        luma_blocks[block_index..][..16].copy_from_slice(&current_subblock);
+                    }
+                }
+
+                return luma_blocks;
+            } else {
+                panic!("Invalid, need bpred modes");
+            }
+        }
     }
 
     let mut luma_blocks = [0i32; 16 * 16];
@@ -774,7 +888,6 @@ fn transform_chroma_blocks(
     v_data: &[u8],
     mbx: usize,
     mby: usize,
-    mbw: usize,
     chroma_width: usize,
     prediction: ChromaMode,
 ) -> ([i32; 16 * 4], [i32; 16 * 4]) {
