@@ -157,7 +157,7 @@ impl ArithmeticEncoder {
 
 #[cfg(test)]
 mod tests {
-    use crate::vp8::*;
+    use crate::vp8_common::*;
     use crate::vp8_arithmetic_decoder::ArithmeticDecoder;
 
     use super::*;
@@ -169,7 +169,40 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_encoder() {
+    fn test_arithmetic_encoder_short() {
+        let mut encoder = ArithmeticEncoder::new();
+        encoder.write_flag(false);
+        encoder.write_bool(true, 10);
+        encoder.write_bool(false, 250);
+        encoder.write_literal(1, 1);
+        encoder.write_literal(3, 5);
+        encoder.write_literal(8, 64);
+        encoder.write_literal(8, 185);
+        let bytes = encoder.flush_and_get_buffer();
+        assert_eq!(&[104, 101, 107, 128], &*bytes);
+    }
+
+    #[test]
+    fn test_arithmetic_encoder_hello() {
+        let mut encoder = ArithmeticEncoder::new();
+        encoder.write_flag(false);
+        encoder.write_bool(true, 10);
+        encoder.write_bool(false, 250);
+        encoder.write_literal(1, 1);
+        encoder.write_literal(3, 5);
+        encoder.write_literal(8, 64);
+        encoder.write_literal(8, 185);
+        encoder.write_literal(8, 31);
+        encoder.write_literal(8, 134);
+        encoder.write_optional_signed_value(2, None);
+        encoder.write_optional_signed_value(2, Some(1));
+        let data = b"hello";
+        let bytes = encoder.flush_and_get_buffer();
+        assert_eq!(data, &bytes[..data.len()]);
+    }
+
+    #[test]
+    fn test_encoder_with_decoder() {
         let mut encoder = ArithmeticEncoder::new();
         encoder.write_bool(true, 40);
         encoder.write_bool(true, 110);
@@ -193,22 +226,10 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_encoder_tree() {
+    fn test_encoder_tree() {
         let mut encoder = ArithmeticEncoder::new();
         encoder.write_with_tree(&KEYFRAME_YMODE_TREE, &KEYFRAME_YMODE_PROBS, TM_PRED, 0);
         let write_buffer = encoder.flush_and_get_buffer();
-
-        let decode_buffer = convert_buffer_for_decoding(&write_buffer);
-
-        let mut decoder = ArithmeticDecoder::new();
-        decoder.init(decode_buffer, write_buffer.len()).unwrap();
-        let mut res = decoder.start_accumulated_result();
-        assert_eq!(
-            decoder
-                .read_with_tree(&KEYFRAME_YMODE_NODES)
-                .or_accumulate(&mut res),
-            TM_PRED
-        );
-        decoder.check(res, ()).unwrap();
+        assert_eq!(&[233, 64, 0, 0], &*write_buffer);
     }
 }

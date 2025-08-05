@@ -27,6 +27,7 @@ mod vp8_arithmetic_decoder;
 mod yuv;
 mod vp8_arithmetic_encoder;
 mod vp8_encoder;
-mod vp8_info;
+mod vp8_common;
+mod vp8_prediction;
 
 pub mod vp8;

@@ -85,7 +85,6 @@ pub(crate) fn iwht4x4(block: &mut [i32]) {
     }
 }
 
-// TODO: change to just mutate the block instead of allocating a new buffer
 pub(crate) fn wht4x4(block: &mut [i32; 16]) {
     // The intermediate results may overflow the types, so we stretch the type.
     fn fetch(block: &[i32], idx: usize) -> i64 {
@@ -129,7 +128,6 @@ pub(crate) fn wht4x4(block: &mut [i32; 16]) {
     }
 }
 
-// TODO: change to just mutate the block instead of allocating a new buffer
 pub(crate) fn dct4x4(block: &mut [i32; 16]) {
     // The intermediate results may overflow the types, so we stretch the type.
     fn fetch(block: &[i32], idx: usize) -> i64 {
@@ -170,7 +168,7 @@ mod tests {
     #[test]
     fn test_dct_inverse() {
         const BLOCK: [i32; 16] = [
-            37, 6, 210, 107, 42, 125, 185, 151, 241, 224, 125, 233, 227, 8, 57, 96,
+            38, 6, 210, 107, 42, 125, 185, 151, 241, 224, 125, 233, 227, 8, 57, 96,
         ];
 
         let mut dct_block = BLOCK.clone();

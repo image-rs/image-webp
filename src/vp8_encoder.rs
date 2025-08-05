@@ -5,35 +5,10 @@ use byteorder_lite::LittleEndian;
 use byteorder_lite::WriteBytesExt;
 
 use crate::transform;
-use crate::vp8::predict_bdcpred;
-use crate::vp8::predict_bhdpred;
-use crate::vp8::predict_bhepred;
-use crate::vp8::predict_bhupred;
-use crate::vp8::predict_bldpred;
-use crate::vp8::predict_brdpred;
-use crate::vp8::predict_bvepred;
-use crate::vp8::predict_bvlpred;
-use crate::vp8::predict_bvrpred;
-use crate::vp8::IntraMode;
-use crate::vp8::AC_QUANT;
-use crate::vp8::COEFF_UPDATE_PROBS;
-use crate::vp8::DCT_EOB;
-use crate::vp8::DC_QUANT;
-use crate::vp8::KEYFRAME_BPRED_MODE_PROBS;
-use crate::vp8::KEYFRAME_BPRED_MODE_TREE;
+use crate::vp8_arithmetic_encoder::ArithmeticEncoder;
+use crate::vp8_common::*;
+use crate::vp8_prediction::*;
 use crate::EncodingError;
-use crate::{
-    transform::{dct4x4, wht4x4},
-    vp8::{
-        create_border_chroma, create_border_luma, predict_dcpred, predict_hpred, predict_tmpred,
-        predict_vpred, ChromaMode, LumaMode, Segment, TokenProbTables, COEFF_BANDS, COEFF_PROBS,
-        DCT_0, DCT_1, DCT_CAT1, DCT_CAT2, DCT_CAT3, DCT_CAT4, DCT_CAT5, DCT_CAT6, DCT_CAT_BASE,
-        DCT_TOKEN_TREE, KEYFRAME_UV_MODE_PROBS, KEYFRAME_UV_MODE_TREE, KEYFRAME_YMODE_PROBS,
-        KEYFRAME_YMODE_TREE, MAX_SEGMENTS, PROB_DCT_CAT, ZIGZAG,
-    },
-    vp8_arithmetic_encoder::ArithmeticEncoder,
-    vp8_info::Plane,
-};
 
 /// info about the frame that's stored in the header
 #[derive(Default)]
@@ -392,7 +367,7 @@ impl<W: Write> Vp8Encoder<W> {
             }
 
             // wht here on the 0th coeffs
-            wht4x4(&mut coeffs0);
+            transform::wht4x4(&mut coeffs0);
 
             let complexity = self.left_complexity.y2 + self.top_complexity[mbx].y2;
 
