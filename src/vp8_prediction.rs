@@ -4,7 +4,7 @@
 
 /// Luma prediction block includes the 1 pixel border to the left and on top
 /// as well as 4 pixels to the top right of the block
-const LUMA_BLOCK_SIZE: usize = (1 + 16 + 4) * (1 + 16);
+pub(crate) const LUMA_BLOCK_SIZE: usize = (1 + 16 + 4) * (1 + 16);
 const LUMA_STRIDE: usize = 1 + 16 + 4;
 
 // creates the luma block with the border from the buffers
@@ -118,6 +118,30 @@ pub(crate) fn create_border_chroma(
     };
 
     chroma_block
+}
+
+// Helper function for adding residue to a 4x4 sub-block
+// from a contiguous block of 16
+//
+// Only 16 elements from rblock are used to add residue, so it is restricted to 16 elements
+// to enable SIMD and other optimizations.
+//
+// Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
+#[allow(clippy::manual_clamp)]
+pub(crate) fn add_residue(
+    pblock: &mut [u8],
+    rblock: &[i32; 16],
+    y0: usize,
+    x0: usize,
+    stride: usize,
+) {
+    let mut pos = y0 * stride + x0;
+    for row in rblock.chunks(4) {
+        for (p, &a) in pblock[pos..][..4].iter_mut().zip(row.iter()) {
+            *p = (a + i32::from(*p)).max(0).min(255) as u8;
+        }
+        pos += stride;
+    }
 }
 
 fn avg3(left: u8, this: u8, right: u8) -> u8 {
@@ -445,8 +469,6 @@ pub(crate) fn predict_bhupred(a: &mut [u8], x0: usize, y0: usize, stride: usize)
     a[(y0 + 3) * stride + x0 + 2] = l3;
     a[(y0 + 3) * stride + x0 + 3] = l3;
 }
-
-
 
 #[cfg(all(test, feature = "_benchmarks"))]
 mod benches {

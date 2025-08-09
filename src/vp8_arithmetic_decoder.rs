@@ -600,8 +600,18 @@ mod tests {
         assert_eq!(185, decoder.read_literal(8).or_accumulate(&mut res));
         assert_eq!(31, decoder.read_literal(8).or_accumulate(&mut res));
         assert_eq!(134, decoder.read_literal(8).or_accumulate(&mut res));
-        assert_eq!(0, decoder.read_optional_signed_value(2).or_accumulate(&mut res));
-        assert_eq!(-8, decoder.read_optional_signed_value(6).or_accumulate(&mut res));
+        assert_eq!(
+            0,
+            decoder
+                .read_optional_signed_value(2)
+                .or_accumulate(&mut res)
+        );
+        assert_eq!(
+            -8,
+            decoder
+                .read_optional_signed_value(6)
+                .or_accumulate(&mut res)
+        );
         assert_eq!(false, decoder.read_bool(163).or_accumulate(&mut res));
         decoder.check(res, ()).unwrap();
     }

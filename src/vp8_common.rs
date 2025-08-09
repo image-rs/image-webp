@@ -58,7 +58,6 @@ pub(crate) enum LumaMode {
     B = B_PRED,
 }
 
-
 impl LumaMode {
     pub(crate) const fn from_i8(val: i8) -> Option<Self> {
         Some(match val {
@@ -141,7 +140,6 @@ pub(crate) enum IntraMode {
     HU = B_HU_PRED,
 }
 
-
 impl IntraMode {
     pub(crate) const fn from_i8(val: i8) -> Option<Self> {
         Some(match val {
@@ -169,7 +167,6 @@ pub(crate) type Prob = u8;
 pub(crate) type TokenProbTables = [[[[Prob; NUM_DCT_TOKENS - 1]; 3]; 8]; 4];
 
 pub(crate) const SEGMENT_ID_TREE: [i8; 6] = [2, 4, -0, -1, -2, -3];
-
 
 // Section 11.2
 // Tree for determining the keyframe luma intra prediction modes:
@@ -314,7 +311,6 @@ pub(crate) const KEYFRAME_UV_MODE_TREE: [i8; 6] = [-DC_PRED, 2, -V_PRED, 4, -H_P
 
 // Probabilities for determining macroblock mode
 pub(crate) const KEYFRAME_UV_MODE_PROBS: [Prob; 3] = [142, 114, 183];
-
 
 // Probabilities that a token's probability will be updated
 pub(crate) const COEFF_UPDATE_PROBS: TokenProbTables = [
@@ -661,7 +657,6 @@ pub(crate) const COEFF_PROBS: TokenProbTables = [
     ],
 ];
 
-
 // DCT Tokens
 pub(crate) const DCT_0: i8 = 0;
 pub(crate) const DCT_1: i8 = 1;
@@ -735,7 +730,6 @@ pub(crate) const AC_QUANT: [i16; 128] = [
 
 pub(crate) const ZIGZAG: [u8; 16] = [0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15];
 
-
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Segment {
     pub(crate) ydc: i16,
@@ -752,4 +746,3 @@ pub(crate) struct Segment {
     pub(crate) quantizer_level: i8,
     pub(crate) loopfilter_level: i8,
 }
-

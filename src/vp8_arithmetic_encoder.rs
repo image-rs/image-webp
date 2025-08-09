@@ -157,8 +157,8 @@ impl ArithmeticEncoder {
 
 #[cfg(test)]
 mod tests {
-    use crate::vp8_common::*;
     use crate::vp8_arithmetic_decoder::ArithmeticDecoder;
+    use crate::vp8_common::*;
 
     use super::*;
 

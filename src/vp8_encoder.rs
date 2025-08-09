@@ -77,7 +77,7 @@ impl Complexity {
         if include_y2 {
             self.y2 = 0;
         }
-    } 
+    }
 }
 
 struct Vp8Encoder<W> {
@@ -97,11 +97,16 @@ struct Vp8Encoder<W> {
     macroblock_height: u16,
 
     partitions: Vec<ArithmeticEncoder>,
-    // width: u32,
-    // height: u32,
-    // y_bytes: Vec<u8>,
-    // u_bytes: Vec<u8>,
-    // v_bytes: Vec<u8>,
+
+    // the left borders used in prediction
+    left_border_y: [u8; 16 + 1],
+    left_border_u: [u8; 8 + 1],
+    left_border_v: [u8; 8 + 1],
+
+    // the top borders used in prediction
+    top_border_y: Vec<u8>,
+    top_border_u: Vec<u8>,
+    top_border_v: Vec<u8>,
 }
 
 impl<W: Write> Vp8Encoder<W> {
@@ -126,6 +131,13 @@ impl<W: Write> Vp8Encoder<W> {
             macroblock_height: 0,
 
             partitions: vec![ArithmeticEncoder::new()],
+
+            left_border_y: [0u8; 16 + 1],
+            left_border_u: [0u8; 8 + 1],
+            left_border_v: [0u8; 8 + 1],
+            top_border_y: Vec::new(),
+            top_border_u: Vec::new(),
+            top_border_v: Vec::new(),
         }
     }
 
@@ -179,14 +191,8 @@ impl<W: Write> Vp8Encoder<W> {
             self.encode_loop_filter_adjustments();
         }
 
-        let partitions_value = match self.partitions.len() {
-            1 => 0,
-            2 => 1,
-            4 => 2,
-            8 => 3,
-            // number of partitions can only be one of these values
-            _ => unreachable!(),
-        };
+        // partitions length must be 1, 2, 4 or 8, so value will be 0, 1, 2 or 3
+        let partitions_value: u8 = self.partitions.len().ilog2().try_into().unwrap();
         self.encoder.write_literal(2, partitions_value);
 
         self.encode_quantization_indices();
@@ -254,11 +260,12 @@ impl<W: Write> Vp8Encoder<W> {
             .write_optional_signed_value(4, self.frame_info.quantization_indices.uvac_delta);
     }
 
+    // TODO: work out when we want to update these probabilities
     fn encode_updated_token_probabilities(&mut self) {
-        for (i, is) in COEFF_UPDATE_PROBS.iter().enumerate() {
-            for (j, js) in is.iter().enumerate() {
-                for (k, ks) in js.iter().enumerate() {
-                    for (t, prob) in ks.iter().enumerate() {
+        for (_i, is) in COEFF_UPDATE_PROBS.iter().enumerate() {
+            for (_j, js) in is.iter().enumerate() {
+                for (_k, ks) in js.iter().enumerate() {
+                    for (_t, prob) in ks.iter().enumerate() {
                         // not updating these
                         self.encoder.write_bool(false, *prob);
                     }
@@ -269,8 +276,8 @@ impl<W: Write> Vp8Encoder<W> {
 
     fn write_macroblock_header(&mut self, macroblock_info: &MacroblockInfo, mbx: usize) {
         if self.frame_info.segments_enabled {
-            if let Some(segment_id) = macroblock_info.segment_id {
-                // TODO: set segment
+            if let Some(_segment_id) = macroblock_info.segment_id {
+                // TODO: set segment for macroblock
                 todo!();
             }
         }
@@ -359,12 +366,7 @@ impl<W: Write> Vp8Encoder<W> {
         if plane == Plane::Y2 {
             // encode 0th coefficient of each luma
 
-            let mut coeffs0 = [0i32; 16];
-            for (coeff, first_coeff_value) in
-                coeffs0.iter_mut().zip(y_block_data.iter().step_by(16))
-            {
-                *coeff = *first_coeff_value;
-            }
+            let mut coeffs0 = get_coeffs0_from_block(&y_block_data);
 
             // wht here on the 0th coeffs
             transform::wht4x4(&mut coeffs0);
@@ -629,6 +631,11 @@ impl<W: Write> Vp8Encoder<W> {
             // reset left complexity / bpreds for left of image
             self.left_complexity = Complexity::default();
             self.left_b_pred = [IntraMode::default(); 4];
+
+            self.left_border_y = [129u8; 16 + 1];
+            self.left_border_u = [129u8; 8 + 1];
+            self.left_border_v = [129u8; 8 + 1];
+
             for mbx in 0..self.macroblock_width {
                 let macroblock_info =
                     self.macroblock_info[(mby * self.macroblock_width + mbx) as usize];
@@ -637,17 +644,14 @@ impl<W: Write> Vp8Encoder<W> {
                 self.write_macroblock_header(&macroblock_info, mbx.into());
 
                 if !macroblock_info.coeffs_skipped {
-                    let y_block_data = transform_luma_block(
+                    let y_block_data = self.transform_luma_block(
                         &y_bytes,
                         mbx.into(),
                         mby.into(),
-                        self.macroblock_width.into(),
-                        (self.macroblock_width * 16).into(),
-                        macroblock_info.luma_mode,
-                        macroblock_info.luma_bpred,
+                        &macroblock_info,
                     );
 
-                    let (u_block_data, v_block_data) = transform_chroma_blocks(
+                    let (u_block_data, v_block_data) = self.transform_chroma_blocks(
                         &u_bytes,
                         &v_bytes,
                         mbx.into(),
@@ -667,8 +671,10 @@ impl<W: Write> Vp8Encoder<W> {
                 } else {
                     // since coeffs are all zero, need to set all complexities to 0
                     // except if the luma mode is B then won't set Y2
-                    self.left_complexity.clear(macroblock_info.luma_mode != LumaMode::B);
-                    self.top_complexity[usize::from(mbx)].clear(macroblock_info.luma_mode != LumaMode::B);
+                    self.left_complexity
+                        .clear(macroblock_info.luma_mode != LumaMode::B);
+                    self.top_complexity[usize::from(mbx)]
+                        .clear(macroblock_info.luma_mode != LumaMode::B);
                 }
             }
         }
@@ -701,306 +707,399 @@ impl<W: Write> Vp8Encoder<W> {
 
         self.frame_info.token_probs = COEFF_PROBS;
 
+        // TODO: decide the quantization amount based on encoding parameters/the image
+        const QUANT_INDEX: u8 = 10;
+        const QUANT_INDEX_USIZE: usize = QUANT_INDEX as usize;
+
         self.frame_info.segments_enabled = false;
         let quantization_indices = QuantizationIndices {
-            yac_abs: 10,
+            yac_abs: QUANT_INDEX,
             ..Default::default()
         };
         self.frame_info.quantization_indices = quantization_indices;
 
         let segment = Segment {
-            ydc: DC_QUANT[10],
-            yac: AC_QUANT[10],
-            y2dc: DC_QUANT[10] * 2,
-            y2ac: ((i32::from(AC_QUANT[10]) * 155 / 100) as i16).max(8),
-            uvdc: DC_QUANT[10],
-            uvac: AC_QUANT[10],
+            ydc: DC_QUANT[QUANT_INDEX_USIZE],
+            yac: AC_QUANT[QUANT_INDEX_USIZE],
+            y2dc: DC_QUANT[QUANT_INDEX_USIZE] * 2,
+            y2ac: ((i32::from(AC_QUANT[QUANT_INDEX_USIZE]) * 155 / 100) as i16).max(8),
+            uvdc: DC_QUANT[QUANT_INDEX_USIZE],
+            uvac: AC_QUANT[QUANT_INDEX_USIZE],
             ..Default::default()
         };
         self.segments[0] = segment;
+
+        self.left_border_y = [129u8; 16 + 1];
+        self.left_border_u = [129u8; 8 + 1];
+        self.left_border_v = [129u8; 8 + 1];
+
+        self.top_border_y = vec![127u8; usize::from(self.macroblock_width) * 16 + 4];
+        self.top_border_u = vec![127u8; usize::from(self.macroblock_width) * 8];
+        self.top_border_v = vec![127u8; usize::from(self.macroblock_width) * 8];
     }
-}
 
-fn get_macroblock_info(
-    y_bytes: &[u8],
-    u_bytes: &[u8],
-    v_bytes: &[u8],
-    macroblock_x: usize,
-    macroblock_y: usize,
-) -> MacroblockInfo {
-    // TODO: select prediction mode properly
-    let luma_prediction = LumaMode::default();
-    let chroma_prediction = ChromaMode::default();
-    // TODO: choose whether to use segment for this macroblock
-    let segment_id = None;
+    /// Transforms the luma macroblock in the following ways
+    /// 1. Does the luma prediction and subtracts from the block
+    /// 2. Converts the block so each 4x4 subblock is contiguous within the block
+    /// 3. Does the DCT on each subblock
+    /// 4. Quantizes the block and dequantizes each subblock
+    /// 5. Calculates the quantized block - this can be used to calculate how accurate the
+    /// result is and is used to populate the borders for the next macroblock
+    fn transform_luma_block(
+        &mut self,
+        y_data: &[u8],
+        mbx: usize,
+        mby: usize,
+        macroblock_info: &MacroblockInfo,
+    ) -> [i32; 16 * 16] {
+        let stride = 1usize + 16 + 4;
 
-    let luma_bpred = None;
+        let mbw = self.macroblock_width;
+        let width = usize::from(mbw * 16);
 
-    MacroblockInfo {
-        luma_mode: luma_prediction,
-        luma_bpred: luma_bpred,
-        chroma_mode: chroma_prediction,
-        segment_id,
-        coeffs_skipped: false,
-    }
-}
+        let mut y_with_border = create_border_luma(
+            mbx,
+            mby,
+            mbw.into(),
+            &self.top_border_y,
+            &self.left_border_y,
+        );
 
-/// Transforms the luma macroblock in the following ways
-/// 1. Does the luma prediction and subtracts from the block
-/// 2. Converts the block so each 4x4 subblock is contiguous within the block
-/// 3. Does the DCT on each subblock
-fn transform_luma_block(
-    y_data: &[u8],
-    mbx: usize,
-    mby: usize,
-    mbw: usize,
-    width: usize,
-    prediction: LumaMode,
-    bpred_modes: Option<[IntraMode; 16]>,
-) -> [i32; 16 * 16] {
-    let stride = 1usize + 16 + 4;
-
-    let top_border_y = if mby == 0 {
-        // will get ignored
-        &Vec::new()
-    } else {
-        let index = (mby * 16 - 1) * width;
-        &y_data[index..][..width]
-    };
-    const LEFT_BORDER_SIZE: usize = 16 + 1;
-    let mut left_border_y = [129u8; LEFT_BORDER_SIZE];
-    if mbx != 0 {
-        // if mby is 0, ignore the top left pixel
-        let (start_index, border_num, start_border_index) = if mby == 0 {
-            (mby * 16 * width + mbx * 16 - 1, LEFT_BORDER_SIZE - 1, 1)
-        } else {
-            ((mby * 16 - 1) * width + mbx * 16 - 1, LEFT_BORDER_SIZE, 0)
-        };
-        for (index, border_val) in (start_index..)
-            .step_by(width)
-            .take(border_num)
-            .zip(left_border_y[start_border_index..].iter_mut())
-        {
-            *border_val = y_data[index];
+        // do the prediction
+        match macroblock_info.luma_mode {
+            LumaMode::V => predict_vpred(&mut y_with_border, 16, 1, 1, stride),
+            LumaMode::H => predict_hpred(&mut y_with_border, 16, 1, 1, stride),
+            LumaMode::TM => predict_tmpred(&mut y_with_border, 16, 1, 1, stride),
+            LumaMode::DC => predict_dcpred(&mut y_with_border, 16, stride, mby != 0, mbx != 0),
+            LumaMode::B => {
+                if let Some(bpred_modes) = macroblock_info.luma_bpred {
+                    return self.transform_luma_blocks_4x4(
+                        y_data,
+                        y_with_border,
+                        bpred_modes,
+                        mbx,
+                        mby,
+                    );
+                } else {
+                    panic!("Invalid, need bpred modes");
+                }
+            }
         }
-    }
 
-    let mut y_with_border = create_border_luma(mbx, mby, mbw, top_border_y, &left_border_y);
+        let mut luma_blocks = [0i32; 16 * 16];
+        let segment = self.segments[0];
 
-    // do the prediction
-    match prediction {
-        LumaMode::V => predict_vpred(&mut y_with_border, 16, 1, 1, stride),
-        LumaMode::H => predict_hpred(&mut y_with_border, 16, 1, 1, stride),
-        LumaMode::TM => predict_tmpred(&mut y_with_border, 16, 1, 1, stride),
-        LumaMode::DC => predict_dcpred(&mut y_with_border, 16, stride, mby != 0, mbx != 0),
-        LumaMode::B => {
-            if let Some(bpred_modes) = bpred_modes {
-                let mut luma_blocks = [0i32; 16 * 16];
+        for block_y in 0..4 {
+            for block_x in 0..4 {
+                // the index on the luma block
+                let block_index = block_y * 16 * 4 + block_x * 16;
+                let border_block_index = (block_y * 4 + 1) * stride + block_x * 4 + 1;
+                let y_data_block_index = (mby * 16 + block_y * 4) * width + mbx * 16 + block_x * 4;
 
-                for sby in 0usize..4 {
-                    for sbx in 0usize..4 {
-                        let i = sby * 4 + sbx;
-                        let y0 = sby * 4 + 1;
-                        let x0 = sbx * 4 + 1;
-
-                        match bpred_modes[i] {
-                            IntraMode::TM => predict_tmpred(&mut y_with_border, 4, x0, y0, stride),
-                            IntraMode::VE => predict_bvepred(&mut y_with_border, x0, y0, stride),
-                            IntraMode::HE => predict_bhepred(&mut y_with_border, x0, y0, stride),
-                            IntraMode::DC => predict_bdcpred(&mut y_with_border, x0, y0, stride),
-                            IntraMode::LD => predict_bldpred(&mut y_with_border, x0, y0, stride),
-                            IntraMode::RD => predict_brdpred(&mut y_with_border, x0, y0, stride),
-                            IntraMode::VR => predict_bvrpred(&mut y_with_border, x0, y0, stride),
-                            IntraMode::VL => predict_bvlpred(&mut y_with_border, x0, y0, stride),
-                            IntraMode::HD => predict_bhdpred(&mut y_with_border, x0, y0, stride),
-                            IntraMode::HU => predict_bhupred(&mut y_with_border, x0, y0, stride),
-                        }
-
-                        let block_index = sby * 16 * 4 + sbx * 16;
-                        let mut current_subblock = [0i32; 16];
-
-                        // subtract actual values here
-                        let border_subblock_index = y0 * stride + x0;
-                        let y_data_block_index = (mby * 16 + sby * 4) * width + mbx * 16 + sbx * 4;
-                        for y in 0..4 {
-                            for x in 0..4 {
-                                let predicted_index = border_subblock_index + y * stride + x;
-                                let predicted_value = y_with_border[predicted_index];
-                                let actual_index = y_data_block_index + y * width + x;
-                                let actual_value = y_data[actual_index];
-                                current_subblock[y * 4 + x] =
-                                    i32::from(actual_value) - i32::from(predicted_value);
-
-                                // update predicted value to actual value for next subblocks
-                                // note we only actually need to update the borders, this might be slower than needed
-                                y_with_border[predicted_index] = actual_value;
-                            }
-                        }
-
-                        transform::dct4x4(&mut current_subblock);
-
-                        luma_blocks[block_index..][..16].copy_from_slice(&current_subblock);
+                let mut block = [0i32; 16];
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let predicted_index = border_block_index + y * stride + x;
+                        let predicted_value = y_with_border[predicted_index];
+                        let actual_index = y_data_block_index + y * width + x;
+                        let actual_value = y_data[actual_index];
+                        block[y * 4 + x] = i32::from(actual_value) - i32::from(predicted_value);
                     }
                 }
 
-                return luma_blocks;
+                // transform block before copying it into main block
+                transform::dct4x4(&mut block);
+
+                luma_blocks[block_index..][..16].copy_from_slice(&block);
+            }
+        }
+
+        // now we're essentially applying the same functions as the decoder in order to ensure
+        // that the border is the same as the one used for the decoder in the same macroblock
+
+        // first, quantize and de-quantize the y2 block
+        let mut coeffs0 = get_coeffs0_from_block(&luma_blocks);
+        transform::wht4x4(&mut coeffs0);
+        for (index, value) in coeffs0.iter_mut().enumerate() {
+            let quant = if index > 0 {
+                segment.y2ac
             } else {
-                panic!("Invalid, need bpred modes");
+                segment.y2dc
+            };
+            *value = (*value / i32::from(quant)) * i32::from(quant);
+        }
+        transform::iwht4x4(&mut coeffs0);
+
+        let mut quantized_luma_residue = [0i32; 16 * 16];
+        for k in 0usize..16 {
+            quantized_luma_residue[16 * k] = coeffs0[k];
+        }
+
+        // quantize and de-quantize the y blocks as well as do the inverse transform
+        for (y_block, luma_block) in luma_blocks
+            .chunks_exact(16)
+            .zip(quantized_luma_residue.chunks_exact_mut(16))
+        {
+            for (y_value, value) in y_block[1..].iter().zip(luma_block[1..].iter_mut()) {
+                *value = (*y_value / i32::from(segment.yac)) * i32::from(segment.yac);
+            }
+
+            transform::idct4x4(luma_block);
+        }
+
+        // re-use the y_with_border from earlier since the border pixels
+        // applies the same thing as the decoder so that the border
+        for y in 0usize..4 {
+            for x in 0usize..4 {
+                let i = x + y * 4;
+                // Create a reference to a [i32; 16] array for add_residue (slices of size 16 do not work).
+                let rb: &[i32; 16] = quantized_luma_residue[i * 16..][..16].try_into().unwrap();
+                let y0 = 1 + y * 4;
+                let x0 = 1 + x * 4;
+
+                add_residue(&mut y_with_border, rb, y0, x0, stride);
             }
         }
+
+        // set borders from values
+        for (y, border_value) in self.left_border_y.iter_mut().enumerate() {
+            *border_value = y_with_border[y * stride + 16];
+        }
+
+        for (x, border_value) in self.top_border_y[mbx * 16..][..16].iter_mut().enumerate() {
+            *border_value = y_with_border[16 * stride + x + 1];
+        }
+
+        luma_blocks
     }
 
-    let mut luma_blocks = [0i32; 16 * 16];
+    // this is for transforming the luma blocks for each subblock independently
+    // meaning the luma mode is B
+    fn transform_luma_blocks_4x4(
+        &mut self,
+        y_data: &[u8],
+        mut y_with_border: [u8; LUMA_BLOCK_SIZE],
+        bpred_modes: [IntraMode; 16],
+        mbx: usize,
+        mby: usize,
+    ) -> [i32; 16 * 16] {
+        let mut luma_blocks = [0i32; 16 * 16];
+        let stride = 1usize + 16 + 4;
+        let mbw = self.macroblock_width;
+        let width = usize::from(mbw * 16);
 
-    for block_y in 0..4 {
-        for block_x in 0..4 {
-            // the index on the luma block
-            let block_index = block_y * 16 * 4 + block_x * 16;
-            let border_block_index = (block_y * 4 + 1) * stride + block_x * 4 + 1;
-            let y_data_block_index = (mby * 16 + block_y * 4) * width + mbx * 16 + block_x * 4;
+        let segment = self.segments[0];
 
-            let mut block = [0i32; 16];
-            for y in 0..4 {
-                for x in 0..4 {
-                    let predicted_index = border_block_index + y * stride + x;
-                    let predicted_value = y_with_border[predicted_index];
-                    let actual_index = y_data_block_index + y * width + x;
-                    let actual_value = y_data[actual_index];
-                    block[y * 4 + x] = i32::from(actual_value) - i32::from(predicted_value);
+        for sby in 0usize..4 {
+            for sbx in 0usize..4 {
+                let i = sby * 4 + sbx;
+                let y0 = sby * 4 + 1;
+                let x0 = sbx * 4 + 1;
+
+                match bpred_modes[i] {
+                    IntraMode::TM => predict_tmpred(&mut y_with_border, 4, x0, y0, stride),
+                    IntraMode::VE => predict_bvepred(&mut y_with_border, x0, y0, stride),
+                    IntraMode::HE => predict_bhepred(&mut y_with_border, x0, y0, stride),
+                    IntraMode::DC => predict_bdcpred(&mut y_with_border, x0, y0, stride),
+                    IntraMode::LD => predict_bldpred(&mut y_with_border, x0, y0, stride),
+                    IntraMode::RD => predict_brdpred(&mut y_with_border, x0, y0, stride),
+                    IntraMode::VR => predict_bvrpred(&mut y_with_border, x0, y0, stride),
+                    IntraMode::VL => predict_bvlpred(&mut y_with_border, x0, y0, stride),
+                    IntraMode::HD => predict_bhdpred(&mut y_with_border, x0, y0, stride),
+                    IntraMode::HU => predict_bhupred(&mut y_with_border, x0, y0, stride),
                 }
-            }
 
-            transform::dct4x4(&mut block);
+                let block_index = sby * 16 * 4 + sbx * 16;
+                let mut current_subblock = [0i32; 16];
 
-            luma_blocks[block_index..][..16].copy_from_slice(&block);
-        }
-    }
-
-    luma_blocks
-}
-
-fn transform_chroma_blocks(
-    u_data: &[u8],
-    v_data: &[u8],
-    mbx: usize,
-    mby: usize,
-    chroma_width: usize,
-    prediction: ChromaMode,
-) -> ([i32; 16 * 4], [i32; 16 * 4]) {
-    let stride = 1usize + 8;
-
-    let top_border_u = create_top_border_chroma(u_data, mby, chroma_width);
-    let left_border_u = create_left_border_chroma(u_data, mbx, mby, chroma_width);
-    let top_border_v = create_top_border_chroma(v_data, mby, chroma_width);
-    let left_border_v = create_left_border_chroma(v_data, mbx, mby, chroma_width);
-
-    let mut u_with_border = create_border_chroma(mbx, mby, top_border_u, &left_border_u);
-    let mut v_with_border = create_border_chroma(mbx, mby, top_border_v, &left_border_v);
-
-    match prediction {
-        ChromaMode::DC => {
-            predict_dcpred(&mut u_with_border, 8, stride, mby != 0, mbx != 0);
-            predict_dcpred(&mut v_with_border, 8, stride, mby != 0, mbx != 0);
-        }
-        ChromaMode::V => {
-            predict_vpred(&mut u_with_border, 8, 1, 1, stride);
-            predict_vpred(&mut v_with_border, 8, 1, 1, stride);
-        }
-        ChromaMode::H => {
-            predict_hpred(&mut u_with_border, 8, 1, 1, stride);
-            predict_hpred(&mut v_with_border, 8, 1, 1, stride);
-        }
-        ChromaMode::TM => {
-            predict_tmpred(&mut u_with_border, 8, 1, 1, stride);
-            predict_tmpred(&mut v_with_border, 8, 1, 1, stride);
-        }
-    }
-
-    let mut u_blocks = [0i32; 16 * 4];
-    let mut v_blocks = [0i32; 16 * 4];
-
-    for block_y in 0..2 {
-        for block_x in 0..2 {
-            // the index on the chroma block
-            let block_index = block_y * 16 * 2 + block_x * 16;
-            let border_block_index = (block_y * 4 + 1) * stride + block_x * 4 + 1;
-            let chroma_data_block_index =
-                (mby * 8 + block_y * 4) * chroma_width + mbx * 8 + block_x * 4;
-
-            let mut u_block = [0i32; 16];
-            let mut v_block = [0i32; 16];
-            for y in 0..4 {
-                for x in 0..4 {
-                    let predicted_index = border_block_index + y * stride + x;
-                    let u_predicted_value = u_with_border[predicted_index];
-                    let v_predicted_value = v_with_border[predicted_index];
-                    let actual_index = chroma_data_block_index + y * chroma_width + x;
-                    let u_actual_value = u_data[actual_index];
-                    let v_actual_value = v_data[actual_index];
-                    u_block[y * 4 + x] = i32::from(u_actual_value) - i32::from(u_predicted_value);
-                    v_block[y * 4 + x] = i32::from(v_actual_value) - i32::from(v_predicted_value);
+                // subtract actual values here
+                let border_subblock_index = y0 * stride + x0;
+                let y_data_block_index = (mby * 16 + sby * 4) * width + mbx * 16 + sbx * 4;
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let predicted_index = border_subblock_index + y * stride + x;
+                        let predicted_value = y_with_border[predicted_index];
+                        let actual_index = y_data_block_index + y * width + x;
+                        let actual_value = y_data[actual_index];
+                        current_subblock[y * 4 + x] =
+                            i32::from(actual_value) - i32::from(predicted_value);
+                    }
                 }
-            }
 
-            transform::dct4x4(&mut u_block);
-            transform::dct4x4(&mut v_block);
+                transform::dct4x4(&mut current_subblock);
 
-            u_blocks[block_index..][..16].copy_from_slice(&u_block);
-            v_blocks[block_index..][..16].copy_from_slice(&v_block);
-        }
-    }
+                luma_blocks[block_index..][..16].copy_from_slice(&current_subblock);
 
-    (u_blocks, v_blocks)
-}
-
-fn create_top_border_chroma(buffer: &[u8], mby: usize, chroma_width: usize) -> &[u8] {
-    if mby == 0 {
-        // won't be used
-        &buffer[..]
-    } else {
-        let index = (mby * 8 - 1) * chroma_width;
-        &buffer[index..][..chroma_width]
-    }
-}
-
-fn create_left_border_chroma(
-    buffer: &[u8],
-    mbx: usize,
-    mby: usize,
-    chroma_width: usize,
-) -> [u8; 8 + 1] {
-    let mut left_border = [129u8; 8 + 1];
-    let left_border_size = 8 + 1;
-
-    if mby == 0 {
-        left_border[0] = 127;
-    }
-
-    if mbx != 0 {
-        if mby == 0 {
-            // start from point 1 to left
-            let index = mby * 8 * chroma_width + mbx * 8 - 1;
-            for (index, border_val) in (index..)
-                .step_by(chroma_width)
-                .take(left_border_size - 1)
-                .zip(left_border[1..].iter_mut())
-            {
-                *border_val = buffer[index];
-            }
-        } else {
-            // start from point 1 to top and left
-            let index = (mby * 8 - 1) * chroma_width + mbx * 8 - 1;
-            for (index, border_val) in (index..)
-                .step_by(chroma_width)
-                .take(left_border_size)
-                .zip(left_border.iter_mut())
-            {
-                *border_val = buffer[index];
+                // quantize and de-quantize the subblock
+                for (index, y_value) in current_subblock.iter_mut().enumerate() {
+                    let quant = if index > 0 { segment.yac } else { segment.ydc };
+                    *y_value = (*y_value / i32::from(quant)) * i32::from(quant);
+                }
+                transform::idct4x4(&mut current_subblock);
+                add_residue(&mut y_with_border, &current_subblock, y0, x0, stride);
             }
         }
+
+        // set borders from values
+        for (y, border_value) in self.left_border_y.iter_mut().enumerate() {
+            *border_value = y_with_border[y * stride + 16];
+        }
+
+        for (x, border_value) in self.top_border_y[mbx * 16..][..16].iter_mut().enumerate() {
+            *border_value = y_with_border[16 * stride + x + 1];
+        }
+
+        return luma_blocks;
     }
 
-    left_border
+    fn transform_chroma_blocks(
+        &mut self,
+        u_data: &[u8],
+        v_data: &[u8],
+        mbx: usize,
+        mby: usize,
+        chroma_width: usize,
+        prediction: ChromaMode,
+    ) -> ([i32; 16 * 4], [i32; 16 * 4]) {
+        let stride = 1usize + 8;
+
+        let mut u_with_border =
+            create_border_chroma(mbx, mby, &self.top_border_u, &self.left_border_u);
+        let mut v_with_border =
+            create_border_chroma(mbx, mby, &self.top_border_v, &self.left_border_v);
+
+        match prediction {
+            ChromaMode::DC => {
+                predict_dcpred(&mut u_with_border, 8, stride, mby != 0, mbx != 0);
+                predict_dcpred(&mut v_with_border, 8, stride, mby != 0, mbx != 0);
+            }
+            ChromaMode::V => {
+                predict_vpred(&mut u_with_border, 8, 1, 1, stride);
+                predict_vpred(&mut v_with_border, 8, 1, 1, stride);
+            }
+            ChromaMode::H => {
+                predict_hpred(&mut u_with_border, 8, 1, 1, stride);
+                predict_hpred(&mut v_with_border, 8, 1, 1, stride);
+            }
+            ChromaMode::TM => {
+                predict_tmpred(&mut u_with_border, 8, 1, 1, stride);
+                predict_tmpred(&mut v_with_border, 8, 1, 1, stride);
+            }
+        }
+
+        let mut u_blocks = [0i32; 16 * 4];
+        let mut v_blocks = [0i32; 16 * 4];
+
+        for block_y in 0..2 {
+            for block_x in 0..2 {
+                // the index on the chroma block
+                let block_index = block_y * 16 * 2 + block_x * 16;
+                let border_block_index = (block_y * 4 + 1) * stride + block_x * 4 + 1;
+                let chroma_data_block_index =
+                    (mby * 8 + block_y * 4) * chroma_width + mbx * 8 + block_x * 4;
+
+                let mut u_block = [0i32; 16];
+                let mut v_block = [0i32; 16];
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let predicted_index = border_block_index + y * stride + x;
+                        let u_predicted_value = u_with_border[predicted_index];
+                        let v_predicted_value = v_with_border[predicted_index];
+                        let actual_index = chroma_data_block_index + y * chroma_width + x;
+                        let u_actual_value = u_data[actual_index];
+                        let v_actual_value = v_data[actual_index];
+                        u_block[y * 4 + x] =
+                            i32::from(u_actual_value) - i32::from(u_predicted_value);
+                        v_block[y * 4 + x] =
+                            i32::from(v_actual_value) - i32::from(v_predicted_value);
+                    }
+                }
+
+                transform::dct4x4(&mut u_block);
+                transform::dct4x4(&mut v_block);
+
+                u_blocks[block_index..][..16].copy_from_slice(&u_block);
+                v_blocks[block_index..][..16].copy_from_slice(&v_block);
+            }
+        }
+
+        let segment = self.segments[0];
+
+        let mut quantized_u_residue = [0i32; 16 * 4];
+        let mut quantized_v_residue = [0i32; 16 * 4];
+
+        for (((u_residue_block, v_residue_block), transformed_u_block), transformed_v_block) in
+            quantized_u_residue
+                .chunks_exact_mut(16)
+                .zip(quantized_v_residue.chunks_exact_mut(16))
+                .zip(u_blocks.chunks_exact(16))
+                .zip(v_blocks.chunks_exact(16))
+        {
+            for ((((index, u_block), v_block), u_block_residue), v_block_residue) in u_residue_block
+                .iter_mut()
+                .enumerate()
+                .zip(v_residue_block.iter_mut())
+                .zip(transformed_u_block.iter())
+                .zip(transformed_v_block.iter())
+            {
+                let quant = if index > 0 {
+                    segment.uvac
+                } else {
+                    segment.uvdc
+                };
+                *u_block = (*u_block_residue / i32::from(quant)) * i32::from(quant);
+                *v_block = (*v_block_residue / i32::from(quant)) * i32::from(quant);
+            }
+
+            transform::idct4x4(u_residue_block);
+            transform::idct4x4(v_residue_block);
+        }
+
+        for y in 0usize..2 {
+            for x in 0usize..2 {
+                let i = x + y * 2;
+                let urb: &[i32; 16] = quantized_u_residue[i * 16..][..16].try_into().unwrap();
+
+                let y0 = 1 + y * 4;
+                let x0 = 1 + x * 4;
+                add_residue(&mut u_with_border, urb, y0, x0, stride);
+
+                let vrb: &[i32; 16] = quantized_v_residue[i * 16..][..16].try_into().unwrap();
+
+                add_residue(&mut v_with_border, vrb, y0, x0, stride);
+            }
+        }
+
+        // set borders
+        for ((y, u_border_value), v_border_value) in self
+            .left_border_u
+            .iter_mut()
+            .enumerate()
+            .zip(self.left_border_v.iter_mut())
+        {
+            *u_border_value = u_with_border[y * stride + 8];
+            *v_border_value = v_with_border[y * stride + 8];
+        }
+
+        for ((x, u_border_value), v_border_value) in self.top_border_u[mbx * 8..][..8]
+            .iter_mut()
+            .enumerate()
+            .zip(self.top_border_v[mbx * 8..][..8].iter_mut())
+        {
+            *u_border_value = u_with_border[8 * stride + x + 1];
+            *v_border_value = v_with_border[8 * stride + x + 1];
+        }
+
+        (u_blocks, v_blocks)
+    }
+}
+
+fn get_coeffs0_from_block(blocks: &[i32; 16 * 16]) -> [i32; 16] {
+    let mut coeffs0 = [0i32; 16];
+    for (coeff, first_coeff_value) in coeffs0.iter_mut().zip(blocks.iter().step_by(16)) {
+        *coeff = *first_coeff_value;
+    }
+    coeffs0
 }
 
 fn rgb_to_y(r: u8, g: u8, b: u8) -> u8 {

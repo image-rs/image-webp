@@ -1325,7 +1325,6 @@ impl<R: Read> Vp8Decoder<R> {
         for mby in 0..self.mbheight as usize {
             let p = mby % self.num_partitions as usize;
             self.left = MacroBlock::default();
-
             for mbx in 0..self.mbwidth as usize {
                 let mut mb = self.read_macroblock_header(mbx)?;
                 let blocks = if !mb.coeffs_skipped {
@@ -1380,7 +1379,6 @@ fn init_top_macroblocks(width: usize) -> Vec<MacroBlock> {
     vec![mb; mb_width]
 }
 
-
 // set border
 fn set_chroma_border(
     left_border: &mut [u8],
@@ -1402,23 +1400,6 @@ fn set_chroma_border(
         .zip(&chroma_block[8 * stride + 1..][..8])
     {
         *top = w;
-    }
-}
-
-
-
-// Only 16 elements from rblock are used to add residue, so it is restricted to 16 elements
-// to enable SIMD and other optimizations.
-//
-// Clippy suggests the clamp method, but it seems to optimize worse as of rustc 1.82.0 nightly.
-#[allow(clippy::manual_clamp)]
-fn add_residue(pblock: &mut [u8], rblock: &[i32; 16], y0: usize, x0: usize, stride: usize) {
-    let mut pos = y0 * stride + x0;
-    for row in rblock.chunks(4) {
-        for (p, &a) in pblock[pos..][..4].iter_mut().zip(row.iter()) {
-            *p = (a + i32::from(*p)).max(0).min(255) as u8;
-        }
-        pos += stride;
     }
 }
 
@@ -1447,7 +1428,6 @@ fn predict_4x4(ws: &mut [u8], stride: usize, modes: &[IntraMode], resdata: &[i32
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
