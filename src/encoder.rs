@@ -679,7 +679,7 @@ impl<W: Write> WebPEncoder<W> {
         let mut frame = Vec::new();
 
         let frame_chunk = if self.params.use_lossy {
-            encode_frame_lossy(&mut frame, data, width, height)?;
+            encode_frame_lossy(&mut frame, data, width, height, color)?;
             b"VP8 "
         } else {
             encode_frame(&mut frame, data, width, height, color, self.params)?;

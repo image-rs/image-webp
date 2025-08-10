@@ -8,6 +8,7 @@ use crate::transform;
 use crate::vp8_arithmetic_encoder::ArithmeticEncoder;
 use crate::vp8_common::*;
 use crate::vp8_prediction::*;
+use crate::ColorType;
 use crate::EncodingError;
 
 /// info about the frame that's stored in the header
@@ -613,13 +614,18 @@ impl<W: Write> Vp8Encoder<W> {
         end_of_block_index > 0
     }
 
-    fn encode_image(&mut self, data: &[u8], width: u16, height: u16) -> Result<(), EncodingError> {
+    fn encode_image(&mut self, data: &[u8], color: ColorType, width: u16, height: u16) -> Result<(), EncodingError> {
         self.frame_info.width = width;
         self.frame_info.height = height;
         self.macroblock_width = width.div_ceil(16);
         self.macroblock_height = height.div_ceil(16);
 
-        let (y_bytes, u_bytes, v_bytes) = convert_image_yuv(data, width, height);
+        let (y_bytes, u_bytes, v_bytes) = match color {
+            ColorType::Rgb8 => convert_image_yuv::<3>(data, width, height),
+            ColorType::Rgba8 => convert_image_yuv::<4>(data, width, height),
+            ColorType::L8 => convert_image_y::<1>(data, width, height),
+            ColorType::La8 => convert_image_y::<2>(data, width, height),
+        } ;
 
         self.setup_encoding();
 
@@ -1102,98 +1108,122 @@ fn get_coeffs0_from_block(blocks: &[i32; 16 * 16]) -> [i32; 16] {
     coeffs0
 }
 
-fn rgb_to_y(r: u8, g: u8, b: u8) -> u8 {
-    let luma = 0.2568 * f64::from(r) + 0.5041 * f64::from(g) + 0.0979 * f64::from(b) + 16.0;
-    luma as u8
-}
+// constants used for yuv -> rgb conversion, using ones from libwebp
+const YUV_FIX: i32 = 16;
+const YUV_HALF: i32 = 1 << (YUV_FIX - 1);
 
-fn rgb_to_u(r: u8, g: u8, b: u8) -> u8 {
-    let u = -0.1482 * f64::from(r) - 0.2910 * f64::from(g) + 0.4392 * f64::from(b) + 128.0;
-    u as u8
-}
-
-fn rgb_to_v(r: u8, g: u8, b: u8) -> u8 {
-    let v = 0.4392 * f64::from(r) - 0.3678 * f64::from(g) - 0.0714 * f64::from(b) + 128.0;
-    v as u8
-}
-
-// converts the whole image to yuv data and adds values on the end to make it match the macroblock sizes
-// downscales the u/v data as well so it's half the width and height of the y data
-fn convert_image_yuv(image_data: &[u8], width: u16, height: u16) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+/// converts the whole image to yuv data and adds values on the end to make it match the macroblock sizes
+/// downscales the u/v data as well so it's half the width and height of the y data
+fn convert_image_yuv<const BPP: usize>(image_data: &[u8], width: u16, height: u16) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let width = usize::from(width);
     let height = usize::from(height);
     let mb_width = width.div_ceil(16);
     let mb_height = height.div_ceil(16);
     let y_size = 16 * mb_width * 16 * mb_height;
+    let luma_width = 16 * mb_width;
+    let chroma_width = 8 * mb_width;
+    let chroma_size = 8 * mb_width * 8 * mb_height;
     let mut y_bytes = vec![0u8; y_size];
-    for y in 0..height {
-        for x in 0..width {
-            if let [r, g, b] = image_data[3 * (y * width + x)..][..3] {
-                y_bytes[y * 16 * mb_width + x] = rgb_to_y(r, g, b);
-            }
+    let mut u_bytes = vec![0u8; chroma_size];
+    let mut v_bytes = vec![0u8; chroma_size];
+
+    // loop through two rows at a time so that we can calculate the average of the 2x2 pixels
+    // for averaging for the chroma pixels when downscaling
+    for (((image_rows, y_rows), u_row), v_row) in image_data.chunks_exact(BPP * width * 2)
+        .zip(y_bytes.chunks_exact_mut(luma_width * 2))
+        .zip(u_bytes.chunks_exact_mut(chroma_width)) 
+        .zip(v_bytes.chunks_exact_mut(chroma_width)) 
+    {
+        let (image_row_1, image_row_2) = image_rows.split_at(BPP * width);
+        let (y_row_1, y_row_2) = y_rows.split_at_mut(luma_width);
+
+        for (((((row_1, row_2), y_pixels_1), y_pixels_2), u_pixel), v_pixel) in image_row_1.chunks_exact(BPP * 2)
+            .zip(image_row_2.chunks_exact(BPP * 2))
+            .zip(y_row_1.chunks_exact_mut(2))
+            .zip(y_row_2.chunks_exact_mut(2))
+            .zip(u_row.iter_mut())
+            .zip(v_row.iter_mut())
+        {
+            let (rgb1, rgb2) = row_1.split_at(BPP);
+            let (rgb3, rgb4) = row_2.split_at(BPP);
+
+            y_pixels_1[0] = rgb_to_y(rgb1);
+            y_pixels_1[1] = rgb_to_y(rgb2);
+            y_pixels_2[0] = rgb_to_y(rgb3);
+            y_pixels_2[1] = rgb_to_y(rgb4);
+
+            *u_pixel = rgb_to_u_avg(rgb1, rgb2, rgb3, rgb4);
+            *v_pixel = rgb_to_v_avg(rgb1, rgb2, rgb3, rgb4);
         }
     }
-
-    let (u_bytes, v_bytes) = get_uv_buffers(image_data, width, height);
 
     (y_bytes, u_bytes, v_bytes)
 }
 
-// need to handle u and v separately since they need to be downscaled
-// TODO: something like gamma subsampling, similar to libwebp e.g.
-// https://github.com/mozilla/mozjpeg/issues/193
-// https://en.wikipedia.org/wiki/Chroma_subsampling#4:2:0
-// currently just doing something simple where we take the average of the 4 pixels around
-fn get_uv_buffers(rgb_image_data: &[u8], width: usize, height: usize) -> (Vec<u8>, Vec<u8>) {
-    const BPP: usize = 3;
+fn convert_image_y<const BPP: usize>(image_data: &[u8], width: u16, height: u16) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let width = usize::from(width);
+    let height = usize::from(height);
     let mb_width = width.div_ceil(16);
     let mb_height = height.div_ceil(16);
-    let chroma_width = mb_width * 8;
-    let chroma_height = mb_height * 8;
-    let chroma_size = chroma_width * chroma_height;
+    let y_size = 16 * mb_width * 16 * mb_height;
+    let luma_width = 16 * mb_width;
+    let chroma_size = 8 * mb_width * 8 * mb_height;
+    let mut y_bytes = vec![0u8; y_size];
+    let u_bytes = vec![127u8; chroma_size];
+    let v_bytes = vec![127u8; chroma_size];
 
-    let mut u_buffer = vec![0u8; chroma_size];
-    let mut v_buffer = vec![0u8; chroma_size];
-
-    for ((rgb_row, u_row), v_row) in rgb_image_data
-        .chunks_exact(BPP * width * 2)
-        .zip(u_buffer.chunks_exact_mut(chroma_width))
-        .zip(v_buffer.chunks_exact_mut(chroma_width))
+    for (image_row, y_row) in image_data.chunks_exact(BPP * width)
+        .zip(y_bytes.chunks_exact_mut(luma_width))
     {
-        let (rgb_row1, rgb_row2) = rgb_row.split_at(BPP * width);
-
-        for (((rgb1, rgb2), u), v) in (rgb_row1.chunks_exact(BPP * 2))
-            .zip(rgb_row2.chunks_exact(BPP * 2))
-            .zip(u_row.iter_mut())
-            .zip(v_row.iter_mut())
+        for (image_value, y_pixel) in image_row.chunks_exact(BPP)
+            .zip(y_row.iter_mut())
         {
-            let (rgb1_1, rgb1_2) = rgb1.split_at(BPP);
-            let (rgb2_1, rgb2_2) = rgb2.split_at(BPP);
-
-            let u1 = rgb_to_u(rgb1_1[0], rgb1_1[1], rgb1_1[2]);
-            let u2 = rgb_to_u(rgb1_2[0], rgb1_2[1], rgb1_2[2]);
-            let u3 = rgb_to_u(rgb2_1[0], rgb2_1[1], rgb2_1[2]);
-            let u4 = rgb_to_u(rgb2_2[0], rgb2_2[1], rgb2_2[2]);
-
-            let v1 = rgb_to_v(rgb1_1[0], rgb1_1[1], rgb1_1[2]);
-            let v2 = rgb_to_v(rgb1_2[0], rgb1_2[1], rgb1_2[2]);
-            let v3 = rgb_to_v(rgb2_1[0], rgb2_1[1], rgb2_1[2]);
-            let v4 = rgb_to_v(rgb2_2[0], rgb2_2[1], rgb2_2[2]);
-
-            let u_val = avg4(u1, u2, u3, u4);
-            let v_val = avg4(v1, v2, v3, v4);
-
-            *u = u_val;
-            *v = v_val;
+            *y_pixel = image_value[0];
         }
     }
 
-    (u_buffer, v_buffer)
+    (y_bytes, u_bytes, v_bytes)
 }
 
-fn avg4(val1: u8, val2: u8, val3: u8, val4: u8) -> u8 {
-    let total = u16::from(val1) + u16::from(val2) + u16::from(val3) + u16::from(val4);
-    (total / 4) as u8
+// values come from libwebp
+// Y = 0.2568 * R + 0.5041 * G + 0.0979 * B + 16
+// U = -0.1482 * R - 0.2910 * G + 0.4392 * B + 128
+// V = 0.4392 * R - 0.3678 * G - 0.0714 * B + 128
+
+// this is converted to 16 bit fixed point by multiplying by 2^16 
+// and shifting back
+
+fn rgb_to_y(rgb: &[u8]) -> u8 {
+    let luma = 16839 * i32::from(rgb[0]) + 33059 * i32::from(rgb[1]) + 6420 * i32::from(rgb[2]);
+    ((luma + YUV_HALF + (16 << YUV_FIX)) >> YUV_FIX) as u8
+}
+
+// get the average of the four surrounding pixels
+fn rgb_to_u_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
+    let u1 = rgb_to_u_raw(rgb1);
+    let u2 = rgb_to_u_raw(rgb2);
+    let u3 = rgb_to_u_raw(rgb3);
+    let u4 = rgb_to_u_raw(rgb4);
+
+    ((u1 + u2 + u3 + u4) >> (YUV_FIX + 2)) as u8
+}
+
+    // get the average of the four surrounding pixels
+fn rgb_to_v_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
+    let v1 = rgb_to_v_raw(rgb1);
+    let v2 = rgb_to_v_raw(rgb2);
+    let v3 = rgb_to_v_raw(rgb3);
+    let v4 = rgb_to_v_raw(rgb4);
+
+    ((v1 + v2 + v3 + v4) >> (YUV_FIX + 2)) as u8
+}
+
+fn rgb_to_u_raw(rgb: &[u8]) -> i32 {
+    -9719 * i32::from(rgb[0]) - 19081 * i32::from(rgb[1]) + 28800 * i32::from(rgb[2]) + (128 << YUV_FIX)
+}
+
+fn rgb_to_v_raw(rgb: &[u8]) -> i32 {
+    28800 * i32::from(rgb[0]) - 24116 * i32::from(rgb[1]) - 4684 * i32::from(rgb[2]) + (128 << YUV_FIX)
 }
 
 pub(crate) fn encode_frame_lossy<W: Write>(
@@ -1201,6 +1231,7 @@ pub(crate) fn encode_frame_lossy<W: Write>(
     data: &[u8],
     width: u32,
     height: u32,
+    color: ColorType,
 ) -> Result<(), EncodingError> {
     let mut vp8_encoder = Vp8Encoder::new(writer);
 
@@ -1211,7 +1242,7 @@ pub(crate) fn encode_frame_lossy<W: Write>(
         .try_into()
         .map_err(|_| EncodingError::InvalidDimensions)?;
 
-    vp8_encoder.encode_image(data, width, height)?;
+    vp8_encoder.encode_image(data, color, width, height)?;
 
     Ok(())
 }
