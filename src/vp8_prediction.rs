@@ -473,6 +473,8 @@ pub(crate) fn predict_bhupred(a: &mut [u8], x0: usize, y0: usize, stride: usize)
 #[cfg(all(test, feature = "_benchmarks"))]
 mod benches {
     use super::*;
+    use crate::vp8::predict_4x4;
+    use crate::vp8_common::*;
     use test::{black_box, Bencher};
 
     const W: usize = 256;
