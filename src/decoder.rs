@@ -271,6 +271,43 @@ pub enum LoopCount {
     Times(NonZeroU16),
 }
 
+/// WebP decoder configuration options
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct WebPDecodeOptions {
+    /// The upsampling method used in conversion from lossy yuv to rgb
+    ///
+    /// Defaults to `Bilinear`.
+    pub lossy_upsampling: UpsamplingMethod,
+}
+
+impl Default for WebPDecodeOptions {
+    fn default() -> Self {
+        Self {
+            lossy_upsampling: UpsamplingMethod::Bilinear,
+        }
+    }
+}
+
+/// Methods for upsampling the chroma values in lossy decoding
+///
+/// The chroma red and blue planes are encoded in VP8 as half the size of the luma plane
+/// Therefore we need to upsample these values up to fit each pixel in the image.
+#[derive(Clone, Copy, Default)]
+pub enum UpsamplingMethod {
+    /// Fancy upsampling
+    ///
+    /// Does bilinear interpolation using the 4 values nearest to the pixel, weighting based on the distance
+    /// from the pixel.
+    #[default]
+    Bilinear,
+    /// Simple upsampling, just uses the closest u/v value to the pixel when upsampling
+    ///
+    /// Matches the -nofancy option in dwebp.
+    /// Should be faster but may lead to slightly jagged edges.
+    Simple,
+}
+
 /// WebP image format decoder.
 pub struct WebPDecoder<R> {
     r: R,
@@ -289,12 +326,23 @@ pub struct WebPDecoder<R> {
     loop_duration: u64,
 
     chunks: HashMap<WebPRiffChunk, Range<u64>>,
+
+    webp_decode_options: WebPDecodeOptions,
 }
 
 impl<R: BufRead + Seek> WebPDecoder<R> {
     /// Create a new `WebPDecoder` from the reader `r`. The decoder performs many small reads, so the
     /// reader should be buffered.
     pub fn new(r: R) -> Result<Self, DecodingError> {
+        Self::new_with_options(r, WebPDecodeOptions::default())
+    }
+
+    /// Create a new `WebPDecoder` from the reader `r` with the options `WebPDecodeOptions`. The decoder
+    /// performs many small reads, so the reader should be buffered.
+    pub fn new_with_options(
+        r: R,
+        webp_decode_options: WebPDecodeOptions,
+    ) -> Result<Self, DecodingError> {
         let mut decoder = Self {
             r,
             width: 0,
@@ -308,6 +356,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             has_alpha: false,
             loop_count: LoopCount::Times(NonZeroU16::new(1).unwrap()),
             loop_duration: 0,
+            webp_decode_options,
         };
         decoder.read_data()?;
         Ok(decoder)
@@ -653,7 +702,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             }
 
             if self.has_alpha() {
-                frame.fill_rgba(buf);
+                frame.fill_rgba(buf, self.webp_decode_options.lossy_upsampling);
 
                 let range = self
                     .chunks
@@ -684,7 +733,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     }
                 }
             } else {
-                frame.fill_rgb(buf);
+                frame.fill_rgb(buf, self.webp_decode_options.lossy_upsampling);
             }
         }
 
@@ -758,7 +807,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     return Err(DecodingError::InconsistentImageSizes);
                 }
                 let mut rgb_frame = vec![0; frame_width as usize * frame_height as usize * 3];
-                raw_frame.fill_rgb(&mut rgb_frame);
+                raw_frame.fill_rgb(&mut rgb_frame, self.webp_decode_options.lossy_upsampling);
                 (rgb_frame, false)
             }
             WebPRiffChunk::VP8L => {
@@ -789,7 +838,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 let frame = Vp8Decoder::decode_frame((&mut self.r).take(next_chunk_size))?;
 
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
-                frame.fill_rgba(&mut rgba_frame);
+                frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
 
                 for y in 0..frame.height {
                     for x in 0..frame.width {
@@ -879,6 +928,11 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         self.animation.next_frame = 0;
         self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
         self.animation.dispose_next_frame = true;
+    }
+
+    /// Sets the upsampling method that is used in lossy decoding
+    pub fn set_lossy_upsampling(&mut self, upsampling_method: UpsamplingMethod) {
+        self.webp_decode_options.lossy_upsampling = upsampling_method;
     }
 }
 
