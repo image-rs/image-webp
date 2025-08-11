@@ -113,7 +113,7 @@ impl ChromaMode {
         })
     }
 
-    pub(crate) const fn to_i8(&self) -> i8 {
+    pub(crate) const fn to_i8(self) -> i8 {
         match self {
             ChromaMode::DC => DC_PRED,
             ChromaMode::V => V_PRED,

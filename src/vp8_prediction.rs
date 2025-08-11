@@ -5,7 +5,7 @@
 /// Luma prediction block includes the 1 pixel border to the left and on top
 /// as well as 4 pixels to the top right of the block
 pub(crate) const LUMA_BLOCK_SIZE: usize = (1 + 16 + 4) * (1 + 16);
-const LUMA_STRIDE: usize = 1 + 16 + 4;
+pub(crate) const LUMA_STRIDE: usize = 1 + 16 + 4;
 
 // creates the luma block with the border from the buffers
 pub(crate) fn create_border_luma(
@@ -72,7 +72,8 @@ pub(crate) fn create_border_luma(
 }
 
 /// Chroma blocks only need the 1 pixel border left and above block
-const CHROMA_BLOCK_SIZE: usize = (8 + 1) * (8 + 1);
+pub(crate) const CHROMA_BLOCK_SIZE: usize = (8 + 1) * (8 + 1);
+pub(crate) const CHROMA_STRIDE: usize = 8 + 1;
 
 // creates the left and top border for chroma prediction
 pub(crate) fn create_border_chroma(
@@ -81,12 +82,11 @@ pub(crate) fn create_border_chroma(
     top: &[u8],
     left: &[u8],
 ) -> [u8; CHROMA_BLOCK_SIZE] {
-    let stride: usize = 1usize + 8;
     let mut chroma_block = [0u8; CHROMA_BLOCK_SIZE];
 
     // above
     {
-        let above = &mut chroma_block[1..stride];
+        let above = &mut chroma_block[1..CHROMA_STRIDE];
         if mby == 0 {
             for above in above.iter_mut() {
                 *above = 127;
@@ -101,11 +101,11 @@ pub(crate) fn create_border_chroma(
     // left
     if mbx == 0 {
         for y in 0usize..8 {
-            chroma_block[(y + 1) * stride] = 129;
+            chroma_block[(y + 1) * CHROMA_STRIDE] = 129;
         }
     } else {
         for (y, &left) in (0usize..8).zip(&left[1..]) {
-            chroma_block[(y + 1) * stride] = left;
+            chroma_block[(y + 1) * CHROMA_STRIDE] = left;
         }
     }
 

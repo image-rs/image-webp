@@ -1,9 +1,9 @@
-// direct translation of the encoder given in the vp8 specification
-// TODO: optimise to be faster, similar to the decoder
+// currently just a direct translation of the encoder given in the vp8 specification
 #[derive(Default)]
 pub(crate) struct ArithmeticEncoder {
+    /// the entropy values that have been encoded so far
     writer: Vec<u8>,
-    /// value of the current byte being encoded
+    /// value of the current bytes being encoded
     bottom: u32,
     /// the range for the next bit, must be between 128 and 255 inclusive
     range: u32,
@@ -31,12 +31,13 @@ impl ArithmeticEncoder {
         }
     }
 
+    // writes a flag
     pub(crate) fn write_flag(&mut self, flag_bool: bool) {
         self.write_bool(flag_bool, 128);
     }
 
     pub(crate) fn write_bool(&mut self, bool_to_write: bool, probability: u8) {
-        let split = 1 + (((u32::from(self.range) - 1) * u32::from(probability)) >> 8);
+        let split = 1 + (((self.range - 1) * u32::from(probability)) >> 8);
 
         if bool_to_write {
             self.bottom += split;
@@ -67,7 +68,7 @@ impl ArithmeticEncoder {
 
     pub(crate) fn write_literal(&mut self, num_bits: u8, value: u8) {
         for bit in (0..num_bits).rev() {
-            let bool_encode = if (1 << bit) & value > 0 { true } else { false };
+            let bool_encode = (1 << bit) & value > 0;
             self.write_bool(bool_encode, 128);
         }
     }
@@ -75,14 +76,20 @@ impl ArithmeticEncoder {
     pub(crate) fn write_optional_signed_value(&mut self, num_bits: u8, value: Option<i8>) {
         self.write_flag(value.is_some());
         if let Some(value) = value {
-            let abs_value = value.abs() as u8;
+            let abs_value = value.unsigned_abs();
             self.write_literal(num_bits, abs_value);
-            let sign = if value >= 0 { true } else { false };
+            let sign = value >= 0;
             self.write_flag(sign);
         }
     }
 
-    pub(crate) fn write_with_tree(
+    pub(crate) fn write_with_tree(&mut self, tree: &[i8], probabilities: &[u8], value: i8) {
+        self.write_with_tree_start_index(tree, probabilities, value, 0);
+    }
+
+    // Could optimise to be faster by processing the trees as const, similar to the decoder
+    // especially encoding of trees
+    pub(crate) fn write_with_tree_start_index(
         &mut self,
         tree: &[i8],
         probabilities: &[u8],
@@ -119,10 +126,9 @@ impl ArithmeticEncoder {
             let previous_index = tree
                 .iter()
                 .position(|x| *x == (current_index as i8))
-                .expect(&format!(
-                    "Failed to encode {} for tree {:?} and probs {:?}",
-                    value, tree, probabilities
-                ));
+                .unwrap_or_else(|| {
+                    panic!("Failed to encode {value} for tree {tree:?} and probs {probabilities:?}")
+                });
             current_index = previous_index;
         }
 
@@ -139,16 +145,16 @@ impl ArithmeticEncoder {
         if self.bottom & (1 << (32 - self.bit_num)) != 0 {
             self.add_one_to_output();
         }
-        v = v << (c & 0b111);
+        v <<= c & 0b111;
         c = (c >> 3) - 1;
         while c >= 0 {
-            v = v << 8;
+            v <<= 8;
             c -= 1;
         }
         c = 3;
         while c >= 0 {
             self.writer.push((v >> 24) as u8);
-            v = v << 8;
+            v <<= 8;
             c -= 1;
         }
         self.writer
@@ -228,7 +234,7 @@ mod tests {
     #[test]
     fn test_encoder_tree() {
         let mut encoder = ArithmeticEncoder::new();
-        encoder.write_with_tree(&KEYFRAME_YMODE_TREE, &KEYFRAME_YMODE_PROBS, TM_PRED, 0);
+        encoder.write_with_tree(&KEYFRAME_YMODE_TREE, &KEYFRAME_YMODE_PROBS, TM_PRED);
         let write_buffer = encoder.flush_and_get_buffer();
         assert_eq!(&[233, 64, 0, 0], &*write_buffer);
     }

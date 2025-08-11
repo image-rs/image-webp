@@ -59,6 +59,15 @@ struct MacroblockInfo {
     coeffs_skipped: bool,
 }
 
+struct Luma16x16Coeffs {
+    y2_coeffs: [i32; 16],
+    y_coeffs: LumaYCoeffs,
+}
+
+type LumaYCoeffs = [i32; 16 * 16];
+
+type ChromaCoeffs = [i32; 16 * 4];
+
 // note that in decoder it actually stores this information on the macroblock but that's super confusing
 // because it doesn't update the macroblock, just the complexity values as we decode
 // this is used as the complexity per 13.3 in the decoder
@@ -84,9 +93,8 @@ impl Complexity {
 struct Vp8Encoder<W> {
     writer: W,
     frame_info: FrameInfo,
+    /// The encoder for the macroblock headers and the compressed frame header
     encoder: ArithmeticEncoder,
-    /// info on all the macroblocks in the image
-    macroblock_info: Vec<MacroblockInfo>,
     segments: [Segment; MAX_SEGMENTS],
     top_complexity: Vec<Complexity>,
     left_complexity: Complexity,
@@ -113,13 +121,17 @@ struct Vp8Encoder<W> {
 impl<W: Write> Vp8Encoder<W> {
     fn new(writer: W) -> Self {
         let segment = Segment::default();
-        let frame_info = FrameInfo::default();
+        let frame_info = FrameInfo {
+            filter_type: false,
+            filter_level: 63,
+            sharpness_level: 7,
+            ..Default::default()
+        };
 
         Self {
             writer,
             frame_info,
             encoder: ArithmeticEncoder::new(),
-            macroblock_info: Vec::new(),
             segments: [segment; MAX_SEGMENTS],
 
             top_complexity: Vec::new(),
@@ -158,7 +170,7 @@ impl<W: Write> Vp8Encoder<W> {
 
         if keyframe {
             let magic_bytes_buffer: [u8; 3] = [0x9d, 0x01, 0x2a];
-            self.writer.write(&magic_bytes_buffer)?;
+            self.writer.write_all(&magic_bytes_buffer)?;
 
             let width = self.frame_info.width & 0x3FFF;
             let height = self.frame_info.height & 0x3FFF;
@@ -225,13 +237,13 @@ impl<W: Write> Vp8Encoder<W> {
             for partition in partitions_bytes[..partitions_bytes.len() - 1].iter() {
                 self.writer
                     .write_u24::<LittleEndian>(partition.len() as u32)?;
-                self.writer.write(&partition)?;
+                self.writer.write_all(partition)?;
             }
         }
 
         // write the final partition
         self.writer
-            .write(&partitions_bytes[partitions_bytes.len() - 1])?;
+            .write_all(&partitions_bytes[partitions_bytes.len() - 1])?;
 
         Ok(())
     }
@@ -263,10 +275,10 @@ impl<W: Write> Vp8Encoder<W> {
 
     // TODO: work out when we want to update these probabilities
     fn encode_updated_token_probabilities(&mut self) {
-        for (_i, is) in COEFF_UPDATE_PROBS.iter().enumerate() {
-            for (_j, js) in is.iter().enumerate() {
-                for (_k, ks) in js.iter().enumerate() {
-                    for (_t, prob) in ks.iter().enumerate() {
+        for is in COEFF_UPDATE_PROBS.iter() {
+            for js in is.iter() {
+                for ks in js.iter() {
+                    for prob in ks.iter() {
                         // not updating these
                         self.encoder.write_bool(false, *prob);
                     }
@@ -293,7 +305,6 @@ impl<W: Write> Vp8Encoder<W> {
             &KEYFRAME_YMODE_TREE,
             &KEYFRAME_YMODE_PROBS,
             macroblock_info.luma_mode.to_i8(),
-            0,
         );
 
         match macroblock_info.luma_mode.into_intra() {
@@ -310,7 +321,6 @@ impl<W: Write> Vp8Encoder<W> {
                                 &KEYFRAME_BPRED_MODE_TREE,
                                 probs,
                                 intra_mode.to_i8(),
-                                0,
                             );
                             left = intra_mode;
                             self.top_b_pred[mbx * 4 + x] = intra_mode;
@@ -338,7 +348,6 @@ impl<W: Write> Vp8Encoder<W> {
             &KEYFRAME_UV_MODE_TREE,
             &KEYFRAME_UV_MODE_PROBS,
             macroblock_info.chroma_mode.to_i8(),
-            0,
         );
     }
 
@@ -367,7 +376,7 @@ impl<W: Write> Vp8Encoder<W> {
         if plane == Plane::Y2 {
             // encode 0th coefficient of each luma
 
-            let mut coeffs0 = get_coeffs0_from_block(&y_block_data);
+            let mut coeffs0 = get_coeffs0_from_block(y_block_data);
 
             // wht here on the 0th coeffs
             transform::wht4x4(&mut coeffs0);
@@ -525,7 +534,12 @@ impl<W: Write> Vp8Encoder<W> {
 
             let token = match coeff.abs() {
                 0 => {
-                    encoder.write_with_tree(token_tree, token_probs, DCT_0, start_index_token_tree);
+                    encoder.write_with_tree_start_index(
+                        token_tree,
+                        token_probs,
+                        DCT_0,
+                        start_index_token_tree,
+                    );
 
                     // never going to have an end of block after a 0, so skip checking next coeff
                     skip_eob = true;
@@ -534,7 +548,7 @@ impl<W: Write> Vp8Encoder<W> {
 
                 // just encode as literal
                 literal @ 1..=4 => {
-                    encoder.write_with_tree(
+                    encoder.write_with_tree_start_index(
                         token_tree,
                         token_probs,
                         literal as i8,
@@ -546,7 +560,7 @@ impl<W: Write> Vp8Encoder<W> {
                 }
 
                 // encode in the category
-                value @ _ => {
+                value => {
                     let category = match value {
                         5..=6 => DCT_CAT1,
                         7..=10 => DCT_CAT2,
@@ -557,7 +571,7 @@ impl<W: Write> Vp8Encoder<W> {
                         _ => unreachable!(),
                     };
 
-                    encoder.write_with_tree(
+                    encoder.write_with_tree_start_index(
                         token_tree,
                         token_probs,
                         category,
@@ -578,7 +592,7 @@ impl<W: Write> Vp8Encoder<W> {
                         if prob == 0 {
                             break;
                         }
-                        let extra_bool = if extra & mask > 0 { true } else { false };
+                        let extra_bool = extra & mask > 0;
                         encoder.write_bool(extra_bool, prob);
                         mask >>= 1;
                     }
@@ -607,14 +621,20 @@ impl<W: Write> Vp8Encoder<W> {
             let band_index = usize::max(first_coeff, end_of_block_index);
             let band = usize::from(COEFF_BANDS[band_index]);
             let probabilities = &probs[band][complexity];
-            encoder.write_with_tree(&DCT_TOKEN_TREE, probabilities, DCT_EOB, 0);
+            encoder.write_with_tree(&DCT_TOKEN_TREE, probabilities, DCT_EOB);
         }
 
         // whether the block has a non zero coefficient
         end_of_block_index > 0
     }
 
-    fn encode_image(&mut self, data: &[u8], color: ColorType, width: u16, height: u16) -> Result<(), EncodingError> {
+    fn encode_image(
+        &mut self,
+        data: &[u8],
+        color: ColorType,
+        width: u16,
+        height: u16,
+    ) -> Result<(), EncodingError> {
         self.frame_info.width = width;
         self.frame_info.height = height;
         self.macroblock_width = width.div_ceil(16);
@@ -625,7 +645,21 @@ impl<W: Write> Vp8Encoder<W> {
             ColorType::Rgba8 => convert_image_yuv::<4>(data, width, height),
             ColorType::L8 => convert_image_y::<1>(data, width, height),
             ColorType::La8 => convert_image_y::<2>(data, width, height),
-        } ;
+        };
+
+        let bytes_per_pixel = match color {
+            ColorType::L8 => 1,
+            ColorType::La8 => 2,
+            ColorType::Rgb8 => 3,
+            ColorType::Rgba8 => 4,
+        };
+        assert_eq!(
+            (u64::from(width) * u64::from(height)).saturating_mul(bytes_per_pixel),
+            data.len() as u64,
+            "width/height doesn't match data length of {} for the color type {:?}",
+            data.len(),
+            color
+        );
 
         self.setup_encoding();
 
@@ -643,8 +677,13 @@ impl<W: Write> Vp8Encoder<W> {
             self.left_border_v = [129u8; 8 + 1];
 
             for mbx in 0..self.macroblock_width {
-                let macroblock_info =
-                    self.macroblock_info[(mby * self.macroblock_width + mbx) as usize];
+                let macroblock_info = self.choose_macroblock_info(
+                    &y_bytes,
+                    &u_bytes,
+                    &v_bytes,
+                    mbx.into(),
+                    mby.into(),
+                );
 
                 // write macroblock headers
                 self.write_macroblock_header(&macroblock_info, mbx.into());
@@ -662,7 +701,6 @@ impl<W: Write> Vp8Encoder<W> {
                         &v_bytes,
                         mbx.into(),
                         mby.into(),
-                        (self.macroblock_width * 8).into(),
                         macroblock_info.chroma_mode,
                     );
 
@@ -690,23 +728,253 @@ impl<W: Write> Vp8Encoder<W> {
 
         self.write_uncompressed_frame_header(compressed_header_bytes.len() as u32)?;
 
-        self.writer.write(&compressed_header_bytes)?;
+        self.writer.write_all(&compressed_header_bytes)?;
 
         self.write_partitions()?;
 
         Ok(())
     }
 
-    fn setup_encoding(&mut self) {
-        let macroblock_info = MacroblockInfo {
-            luma_mode: LumaMode::DC,
-            luma_bpred: None,
-            ..Default::default()
-        };
-        let macroblock_num =
-            usize::from(self.macroblock_width) * usize::from(self.macroblock_height);
-        self.macroblock_info = vec![macroblock_info; macroblock_num];
+    fn choose_macroblock_info(
+        &self,
+        y_data: &[u8],
+        u_data: &[u8],
+        v_data: &[u8],
+        mbx: usize,
+        mby: usize,
+    ) -> MacroblockInfo {
+        let (luma_mode, luma_bpred) = self.choose_luma_mode(y_data, mbx, mby);
+        let chroma_mode = self.choose_chroma_mode(u_data, v_data, mbx, mby);
 
+        MacroblockInfo {
+            luma_mode,
+            luma_bpred,
+            chroma_mode,
+            segment_id: None,
+            coeffs_skipped: false,
+        }
+    }
+
+    fn choose_luma_mode(
+        &self,
+        y_data: &[u8],
+        mbx: usize,
+        mby: usize,
+    ) -> (LumaMode, Option<[IntraMode; 16]>) {
+        const LUMA_MODES: [LumaMode; 4] = [LumaMode::DC, LumaMode::V, LumaMode::H, LumaMode::TM];
+
+        let mut current_luma_mode = LumaMode::DC;
+        let mut current_score = i32::MAX;
+
+        for luma_mode in LUMA_MODES {
+            let coeffs = self.get_luma_coeffs_for_macroblock_16x16(y_data, luma_mode, mbx, mby);
+
+            let new_score = Self::get_score_for_luma_coeffs_16x16(coeffs);
+            if new_score < current_score {
+                current_score = new_score;
+                current_luma_mode = luma_mode;
+            }
+        }
+
+        let (intra_modes, b_score) = self.choose_best_luma_b_modes(y_data, mbx, mby);
+        let mut current_intra_modes = None;
+
+        if b_score < current_score {
+            current_intra_modes = Some(intra_modes);
+            current_luma_mode = LumaMode::B;
+        }
+
+        (current_luma_mode, current_intra_modes)
+    }
+
+    fn choose_best_luma_b_modes(
+        &self,
+        y_data: &[u8],
+        mbx: usize,
+        mby: usize,
+    ) -> ([IntraMode; 16], i32) {
+        const INTRA_MODES: [IntraMode; 10] = [
+            IntraMode::DC,
+            IntraMode::TM,
+            IntraMode::VE,
+            IntraMode::HE,
+            IntraMode::LD,
+            IntraMode::RD,
+            IntraMode::VR,
+            IntraMode::VL,
+            IntraMode::HD,
+            IntraMode::HU,
+        ];
+
+        let mut intra_modes = [IntraMode::DC; 16];
+        let mut total_score = 0;
+        let mut y_with_border = create_border_luma(
+            mbx,
+            mby,
+            self.macroblock_width.into(),
+            &self.top_border_y,
+            &self.left_border_y,
+        );
+
+        let width = usize::from(self.macroblock_width * 16);
+
+        for sby in 0..4 {
+            for sbx in 0..4 {
+                let i = sby * 4 + sbx;
+
+                let x0 = sbx + 1;
+                let y0 = sby + 1;
+
+                let mut current_predicted_y = y_with_border;
+
+                let y_data_block_index = (mby * 16 + sby * 4) * width + mbx * 16 + sbx * 4;
+
+                let mut current_intra_mode = IntraMode::DC;
+                let mut sb_score = i32::MAX;
+
+                for intra_mode in INTRA_MODES {
+                    match intra_mode {
+                        IntraMode::TM => predict_tmpred(&mut y_with_border, 4, x0, y0, LUMA_STRIDE),
+                        IntraMode::VE => predict_bvepred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                        IntraMode::HE => predict_bhepred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                        IntraMode::DC => predict_bdcpred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                        IntraMode::LD => predict_bldpred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                        IntraMode::RD => predict_brdpred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                        IntraMode::VR => predict_bvrpred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                        IntraMode::VL => predict_bvlpred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                        IntraMode::HD => predict_bhdpred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                        IntraMode::HU => predict_bhupred(&mut y_with_border, x0, y0, LUMA_STRIDE),
+                    }
+
+                    let mut subblock = [0i32; 16];
+                    for y in 0..4 {
+                        for x in 0..4 {
+                            let predicted_value = y_with_border[(y0 + y) * LUMA_STRIDE + x0 + x];
+                            let actual_value = y_data[y_data_block_index + y * width + x];
+                            subblock[y * 4 + x] =
+                                i32::from(actual_value) - i32::from(predicted_value);
+                        }
+                    }
+                    transform::dct4x4(&mut subblock);
+
+                    let score = Self::get_score_for_subblock(&subblock);
+                    if score < sb_score {
+                        sb_score = score;
+                        current_intra_mode = intra_mode;
+                        current_predicted_y = y_with_border;
+                    }
+                }
+
+                y_with_border = current_predicted_y;
+                intra_modes[i] = current_intra_mode;
+                total_score += sb_score;
+            }
+        }
+
+        (intra_modes, total_score)
+    }
+
+    fn get_score_for_luma_coeffs_16x16(luma16x16_coeffs: Luma16x16Coeffs) -> i32 {
+        Self::get_score_for_subblock(&luma16x16_coeffs.y2_coeffs)
+            + luma16x16_coeffs
+                .y_coeffs
+                .chunks_exact(16)
+                .map(|block| Self::get_score_for_subblock(block))
+                .sum::<i32>()
+    }
+
+    /// Get a score for a subblock's coefficients
+    /// Lower score means it's better
+    fn get_score_for_subblock(subblock: &[i32]) -> i32 {
+        let max_score = subblock.iter().map(|x| x.abs()).max().unwrap();
+        let last_non_zero = subblock.iter().rposition(|&x| x != 0).unwrap_or(0);
+
+        if max_score == 0 {
+            0
+        } else {
+            (last_non_zero as i32) * max_score
+        }
+    }
+
+    fn get_luma_coeffs_for_macroblock_16x16(
+        &self,
+        y_data: &[u8],
+        luma_mode: LumaMode,
+        mbx: usize,
+        mby: usize,
+    ) -> Luma16x16Coeffs {
+        let y_with_border = self.get_predicted_luma_block_16x16(luma_mode, mbx, mby);
+        let luma_blocks =
+            self.get_luma_blocks_from_predicted_16x16(y_data, &y_with_border, mbx, mby);
+        self.get_luma_block_coeffs_16x16(luma_blocks)
+    }
+
+    fn get_score_for_chroma_coeffs(chroma_coeffs: ChromaCoeffs) -> i32 {
+        chroma_coeffs
+            .chunks_exact(16)
+            .map(|block| Self::get_score_for_subblock(block))
+            .sum::<i32>()
+    }
+
+    fn choose_chroma_mode(
+        &self,
+        u_data: &[u8],
+        v_data: &[u8],
+        mbx: usize,
+        mby: usize,
+    ) -> ChromaMode {
+        const CHROMA_MODES: [ChromaMode; 4] =
+            [ChromaMode::DC, ChromaMode::V, ChromaMode::H, ChromaMode::TM];
+
+        let mut current_chroma_mode = ChromaMode::DC;
+        let mut current_score = i32::MAX;
+
+        for chroma_mode in CHROMA_MODES.iter().copied() {
+            let u_coeffs = self.get_chroma_coeffs_for_macroblock(
+                u_data,
+                chroma_mode,
+                mbx,
+                mby,
+                &self.top_border_u,
+                &self.left_border_u,
+            );
+            let v_coeffs = self.get_chroma_coeffs_for_macroblock(
+                v_data,
+                chroma_mode,
+                mbx,
+                mby,
+                &self.top_border_v,
+                &self.left_border_v,
+            );
+
+            let new_score = Self::get_score_for_chroma_coeffs(u_coeffs)
+                + Self::get_score_for_chroma_coeffs(v_coeffs);
+            if new_score < current_score {
+                current_score = new_score;
+                current_chroma_mode = chroma_mode;
+            }
+        }
+
+        current_chroma_mode
+    }
+
+    fn get_chroma_coeffs_for_macroblock(
+        &self,
+        data: &[u8],
+        chroma_mode: ChromaMode,
+        mbx: usize,
+        mby: usize,
+        top_border: &[u8],
+        left_border: &[u8],
+    ) -> ChromaCoeffs {
+        let predicted_chroma =
+            self.get_predicted_chroma_block(chroma_mode, mbx, mby, top_border, left_border);
+        let chroma_blocks =
+            self.get_chroma_blocks_from_predicted(&predicted_chroma, data, mbx, mby);
+        self.get_chroma_block_coeffs(chroma_blocks)
+    }
+
+    fn setup_encoding(&mut self) {
         self.top_complexity = vec![Complexity::default(); usize::from(self.macroblock_width)];
         self.top_b_pred = vec![IntraMode::default(); 4 * usize::from(self.macroblock_width)];
         self.left_b_pred = [IntraMode::default(); 4];
@@ -744,24 +1012,16 @@ impl<W: Write> Vp8Encoder<W> {
         self.top_border_v = vec![127u8; usize::from(self.macroblock_width) * 8];
     }
 
-    /// Transforms the luma macroblock in the following ways
-    /// 1. Does the luma prediction and subtracts from the block
-    /// 2. Converts the block so each 4x4 subblock is contiguous within the block
-    /// 3. Does the DCT on each subblock
-    /// 4. Quantizes the block and dequantizes each subblock
-    /// 5. Calculates the quantized block - this can be used to calculate how accurate the
-    /// result is and is used to populate the borders for the next macroblock
-    fn transform_luma_block(
-        &mut self,
-        y_data: &[u8],
+    // this is for all the luma modes except B
+    fn get_predicted_luma_block_16x16(
+        &self,
+        luma_mode: LumaMode,
         mbx: usize,
         mby: usize,
-        macroblock_info: &MacroblockInfo,
-    ) -> [i32; 16 * 16] {
-        let stride = 1usize + 16 + 4;
+    ) -> [u8; LUMA_BLOCK_SIZE] {
+        let stride = LUMA_STRIDE;
 
         let mbw = self.macroblock_width;
-        let width = usize::from(mbw * 16);
 
         let mut y_with_border = create_border_luma(
             mbx,
@@ -772,28 +1032,28 @@ impl<W: Write> Vp8Encoder<W> {
         );
 
         // do the prediction
-        match macroblock_info.luma_mode {
+        match luma_mode {
             LumaMode::V => predict_vpred(&mut y_with_border, 16, 1, 1, stride),
             LumaMode::H => predict_hpred(&mut y_with_border, 16, 1, 1, stride),
             LumaMode::TM => predict_tmpred(&mut y_with_border, 16, 1, 1, stride),
             LumaMode::DC => predict_dcpred(&mut y_with_border, 16, stride, mby != 0, mbx != 0),
-            LumaMode::B => {
-                if let Some(bpred_modes) = macroblock_info.luma_bpred {
-                    return self.transform_luma_blocks_4x4(
-                        y_data,
-                        y_with_border,
-                        bpred_modes,
-                        mbx,
-                        mby,
-                    );
-                } else {
-                    panic!("Invalid, need bpred modes");
-                }
-            }
+            LumaMode::B => unreachable!(),
         }
 
+        y_with_border
+    }
+
+    // gets the luma blocks with the DCT applied to them
+    fn get_luma_blocks_from_predicted_16x16(
+        &self,
+        y_data: &[u8],
+        predicted_y_block: &[u8; LUMA_BLOCK_SIZE],
+        mbx: usize,
+        mby: usize,
+    ) -> [i32; 16 * 16] {
+        let stride = LUMA_STRIDE;
+        let width = usize::from(self.macroblock_width * 16);
         let mut luma_blocks = [0i32; 16 * 16];
-        let segment = self.segments[0];
 
         for block_y in 0..4 {
             for block_x in 0..4 {
@@ -806,7 +1066,7 @@ impl<W: Write> Vp8Encoder<W> {
                 for y in 0..4 {
                     for x in 0..4 {
                         let predicted_index = border_block_index + y * stride + x;
-                        let predicted_value = y_with_border[predicted_index];
+                        let predicted_value = predicted_y_block[predicted_index];
                         let actual_index = y_data_block_index + y * width + x;
                         let actual_value = y_data[actual_index];
                         block[y * 4 + x] = i32::from(actual_value) - i32::from(predicted_value);
@@ -820,11 +1080,14 @@ impl<W: Write> Vp8Encoder<W> {
             }
         }
 
-        // now we're essentially applying the same functions as the decoder in order to ensure
-        // that the border is the same as the one used for the decoder in the same macroblock
+        luma_blocks
+    }
 
-        // first, quantize and de-quantize the y2 block
+    // converts the predicted y block to the coeffs
+    fn get_luma_block_coeffs_16x16(&self, mut luma_blocks: [i32; 16 * 16]) -> Luma16x16Coeffs {
         let mut coeffs0 = get_coeffs0_from_block(&luma_blocks);
+        let segment = self.segments[0];
+        // wht transform the y2 block and quantize it
         transform::wht4x4(&mut coeffs0);
         for (index, value) in coeffs0.iter_mut().enumerate() {
             let quant = if index > 0 {
@@ -832,48 +1095,110 @@ impl<W: Write> Vp8Encoder<W> {
             } else {
                 segment.y2dc
             };
-            *value = (*value / i32::from(quant)) * i32::from(quant);
-        }
-        transform::iwht4x4(&mut coeffs0);
-
-        let mut quantized_luma_residue = [0i32; 16 * 16];
-        for k in 0usize..16 {
-            quantized_luma_residue[16 * k] = coeffs0[k];
+            *value /= i32::from(quant);
         }
 
-        // quantize and de-quantize the y blocks as well as do the inverse transform
-        for (y_block, luma_block) in luma_blocks
-            .chunks_exact(16)
-            .zip(quantized_luma_residue.chunks_exact_mut(16))
-        {
-            for (y_value, value) in y_block[1..].iter().zip(luma_block[1..].iter_mut()) {
-                *value = (*y_value / i32::from(segment.yac)) * i32::from(segment.yac);
+        // quantize the y blocks
+        for y_block in luma_blocks.chunks_exact_mut(16) {
+            for (index, y_value) in y_block.iter_mut().enumerate() {
+                if index == 0 {
+                    *y_value = 0;
+                } else {
+                    *y_value /= i32::from(segment.yac);
+                }
+            }
+        }
+
+        Luma16x16Coeffs {
+            y2_coeffs: coeffs0,
+            y_coeffs: luma_blocks,
+        }
+    }
+
+    fn get_dequantized_blocks_from_coeffs_luma_16x16(
+        &self,
+        coeffs: &mut Luma16x16Coeffs,
+    ) -> [i32; 16 * 16] {
+        let mut dequantized_luma_residue = [0i32; 16 * 16];
+        let segment = self.segments[0];
+
+        for (k, y2_coeff) in coeffs.y2_coeffs.iter_mut().enumerate() {
+            let quant = if k > 0 { segment.y2ac } else { segment.y2dc };
+            *y2_coeff *= i32::from(quant);
+        }
+        transform::iwht4x4(&mut coeffs.y2_coeffs);
+
+        // de-quantize the y blocks as well as do the inverse transform
+        for (k, luma_block) in coeffs.y_coeffs.chunks_exact_mut(16).enumerate() {
+            for y_value in luma_block[1..].iter_mut() {
+                *y_value *= i32::from(segment.yac);
             }
 
+            luma_block[0] = coeffs.y2_coeffs[k];
+
             transform::idct4x4(luma_block);
+
+            dequantized_luma_residue[k * 16..][..16].copy_from_slice(luma_block);
         }
 
-        // re-use the y_with_border from earlier since the border pixels
-        // applies the same thing as the decoder so that the border
+        dequantized_luma_residue
+    }
+
+    // Transforms the luma macroblock in the following ways
+    // 1. Does the luma prediction and subtracts from the block
+    // 2. Converts the block so each 4x4 subblock is contiguous within the block
+    // 3. Does the DCT on each subblock
+    // 4. Quantizes the block and dequantizes each subblock
+    // 5. Calculates the quantized block - this can be used to calculate how accurate the
+    // result is and is used to populate the borders for the next macroblock
+    fn transform_luma_block(
+        &mut self,
+        y_data: &[u8],
+        mbx: usize,
+        mby: usize,
+        macroblock_info: &MacroblockInfo,
+    ) -> [i32; 16 * 16] {
+        if macroblock_info.luma_mode == LumaMode::B {
+            if let Some(bpred_modes) = macroblock_info.luma_bpred {
+                return self.transform_luma_blocks_4x4(y_data, bpred_modes, mbx, mby);
+            } else {
+                panic!("Invalid, need bpred modes for luma mode B");
+            }
+        }
+
+        let mut y_with_border =
+            self.get_predicted_luma_block_16x16(macroblock_info.luma_mode, mbx, mby);
+        let luma_blocks =
+            self.get_luma_blocks_from_predicted_16x16(y_data, &y_with_border, mbx, mby);
+
+        // get coeffs
+        let mut coeffs = self.get_luma_block_coeffs_16x16(luma_blocks);
+
+        // now we're essentially applying the same functions as the decoder in order to ensure
+        // that the border is the same as the one used for the decoder in the same macroblock
+        let dequantized_blocks = self.get_dequantized_blocks_from_coeffs_luma_16x16(&mut coeffs);
+
+        // re-use the y_with_border from earlier since the prediction is still valid
+        // applies the same thing as the decoder so that the border will line up
         for y in 0usize..4 {
             for x in 0usize..4 {
                 let i = x + y * 4;
                 // Create a reference to a [i32; 16] array for add_residue (slices of size 16 do not work).
-                let rb: &[i32; 16] = quantized_luma_residue[i * 16..][..16].try_into().unwrap();
+                let rb: &[i32; 16] = dequantized_blocks[i * 16..][..16].try_into().unwrap();
                 let y0 = 1 + y * 4;
                 let x0 = 1 + x * 4;
 
-                add_residue(&mut y_with_border, rb, y0, x0, stride);
+                add_residue(&mut y_with_border, rb, y0, x0, LUMA_STRIDE);
             }
         }
 
         // set borders from values
         for (y, border_value) in self.left_border_y.iter_mut().enumerate() {
-            *border_value = y_with_border[y * stride + 16];
+            *border_value = y_with_border[y * LUMA_STRIDE + 16];
         }
 
         for (x, border_value) in self.top_border_y[mbx * 16..][..16].iter_mut().enumerate() {
-            *border_value = y_with_border[16 * stride + x + 1];
+            *border_value = y_with_border[16 * LUMA_STRIDE + x + 1];
         }
 
         luma_blocks
@@ -884,7 +1209,6 @@ impl<W: Write> Vp8Encoder<W> {
     fn transform_luma_blocks_4x4(
         &mut self,
         y_data: &[u8],
-        mut y_with_border: [u8; LUMA_BLOCK_SIZE],
         bpred_modes: [IntraMode; 16],
         mbx: usize,
         mby: usize,
@@ -893,6 +1217,14 @@ impl<W: Write> Vp8Encoder<W> {
         let stride = 1usize + 16 + 4;
         let mbw = self.macroblock_width;
         let width = usize::from(mbw * 16);
+
+        let mut y_with_border = create_border_luma(
+            mbx,
+            mby,
+            mbw.into(),
+            &self.top_border_y,
+            &self.left_border_y,
+        );
 
         let segment = self.segments[0];
 
@@ -955,46 +1287,54 @@ impl<W: Write> Vp8Encoder<W> {
             *border_value = y_with_border[16 * stride + x + 1];
         }
 
-        return luma_blocks;
+        luma_blocks
     }
 
-    fn transform_chroma_blocks(
-        &mut self,
-        u_data: &[u8],
-        v_data: &[u8],
+    fn get_predicted_chroma_block(
+        &self,
+        chroma_mode: ChromaMode,
         mbx: usize,
         mby: usize,
-        chroma_width: usize,
-        prediction: ChromaMode,
-    ) -> ([i32; 16 * 4], [i32; 16 * 4]) {
-        let stride = 1usize + 8;
+        top_border: &[u8],
+        left_border: &[u8],
+    ) -> [u8; CHROMA_BLOCK_SIZE] {
+        let mut chroma_with_border = create_border_chroma(mbx, mby, top_border, left_border);
 
-        let mut u_with_border =
-            create_border_chroma(mbx, mby, &self.top_border_u, &self.left_border_u);
-        let mut v_with_border =
-            create_border_chroma(mbx, mby, &self.top_border_v, &self.left_border_v);
-
-        match prediction {
+        match chroma_mode {
             ChromaMode::DC => {
-                predict_dcpred(&mut u_with_border, 8, stride, mby != 0, mbx != 0);
-                predict_dcpred(&mut v_with_border, 8, stride, mby != 0, mbx != 0);
+                predict_dcpred(
+                    &mut chroma_with_border,
+                    8,
+                    CHROMA_STRIDE,
+                    mby != 0,
+                    mbx != 0,
+                );
             }
             ChromaMode::V => {
-                predict_vpred(&mut u_with_border, 8, 1, 1, stride);
-                predict_vpred(&mut v_with_border, 8, 1, 1, stride);
+                predict_vpred(&mut chroma_with_border, 8, 1, 1, CHROMA_STRIDE);
             }
             ChromaMode::H => {
-                predict_hpred(&mut u_with_border, 8, 1, 1, stride);
-                predict_hpred(&mut v_with_border, 8, 1, 1, stride);
+                predict_hpred(&mut chroma_with_border, 8, 1, 1, CHROMA_STRIDE);
             }
             ChromaMode::TM => {
-                predict_tmpred(&mut u_with_border, 8, 1, 1, stride);
-                predict_tmpred(&mut v_with_border, 8, 1, 1, stride);
+                predict_tmpred(&mut chroma_with_border, 8, 1, 1, CHROMA_STRIDE);
             }
         }
 
-        let mut u_blocks = [0i32; 16 * 4];
-        let mut v_blocks = [0i32; 16 * 4];
+        chroma_with_border
+    }
+
+    fn get_chroma_blocks_from_predicted(
+        &self,
+        predicted_chroma: &[u8; CHROMA_BLOCK_SIZE],
+        chroma_data: &[u8],
+        mbx: usize,
+        mby: usize,
+    ) -> [i32; 16 * 4] {
+        let mut chroma_blocks = [0i32; 16 * 4];
+        let stride = CHROMA_STRIDE;
+
+        let chroma_width = usize::from(self.macroblock_width * 8);
 
         for block_y in 0..2 {
             for block_x in 0..2 {
@@ -1004,62 +1344,111 @@ impl<W: Write> Vp8Encoder<W> {
                 let chroma_data_block_index =
                     (mby * 8 + block_y * 4) * chroma_width + mbx * 8 + block_x * 4;
 
-                let mut u_block = [0i32; 16];
-                let mut v_block = [0i32; 16];
+                let mut chroma_block = [0i32; 16];
                 for y in 0..4 {
                     for x in 0..4 {
                         let predicted_index = border_block_index + y * stride + x;
-                        let u_predicted_value = u_with_border[predicted_index];
-                        let v_predicted_value = v_with_border[predicted_index];
+                        let predicted_value = predicted_chroma[predicted_index];
                         let actual_index = chroma_data_block_index + y * chroma_width + x;
-                        let u_actual_value = u_data[actual_index];
-                        let v_actual_value = v_data[actual_index];
-                        u_block[y * 4 + x] =
-                            i32::from(u_actual_value) - i32::from(u_predicted_value);
-                        v_block[y * 4 + x] =
-                            i32::from(v_actual_value) - i32::from(v_predicted_value);
+                        let actual_value = chroma_data[actual_index];
+                        chroma_block[y * 4 + x] =
+                            i32::from(actual_value) - i32::from(predicted_value);
                     }
                 }
 
-                transform::dct4x4(&mut u_block);
-                transform::dct4x4(&mut v_block);
+                transform::dct4x4(&mut chroma_block);
 
-                u_blocks[block_index..][..16].copy_from_slice(&u_block);
-                v_blocks[block_index..][..16].copy_from_slice(&v_block);
+                chroma_blocks[block_index..][..16].copy_from_slice(&chroma_block);
             }
         }
 
+        chroma_blocks
+    }
+
+    fn get_chroma_block_coeffs(&self, chroma_blocks: [i32; 16 * 4]) -> ChromaCoeffs {
+        let mut chroma_coeffs: ChromaCoeffs = [0i32; 16 * 4];
         let segment = self.segments[0];
 
-        let mut quantized_u_residue = [0i32; 16 * 4];
-        let mut quantized_v_residue = [0i32; 16 * 4];
-
-        for (((u_residue_block, v_residue_block), transformed_u_block), transformed_v_block) in
-            quantized_u_residue
-                .chunks_exact_mut(16)
-                .zip(quantized_v_residue.chunks_exact_mut(16))
-                .zip(u_blocks.chunks_exact(16))
-                .zip(v_blocks.chunks_exact(16))
+        for (block, coeff_block) in chroma_blocks
+            .chunks_exact(16)
+            .zip(chroma_coeffs.chunks_exact_mut(16))
         {
-            for ((((index, u_block), v_block), u_block_residue), v_block_residue) in u_residue_block
-                .iter_mut()
+            for ((index, &value), coeff) in block.iter().enumerate().zip(coeff_block.iter_mut()) {
+                let quant = if index > 0 {
+                    segment.uvac
+                } else {
+                    segment.uvdc
+                };
+                *coeff = value / i32::from(quant);
+            }
+        }
+
+        chroma_coeffs
+    }
+
+    fn get_dequantized_blocks_from_coeffs_chroma(
+        &self,
+        chroma_coeffs: &ChromaCoeffs,
+    ) -> [i32; 16 * 4] {
+        let mut dequantized_blocks = [0i32; 16 * 4];
+        let segment = self.segments[0];
+
+        for (coeffs_block, dequant_block) in chroma_coeffs
+            .chunks_exact(16)
+            .zip(dequantized_blocks.chunks_exact_mut(16))
+        {
+            for ((index, &coeff), dequant_value) in coeffs_block
+                .iter()
                 .enumerate()
-                .zip(v_residue_block.iter_mut())
-                .zip(transformed_u_block.iter())
-                .zip(transformed_v_block.iter())
+                .zip(dequant_block.iter_mut())
             {
                 let quant = if index > 0 {
                     segment.uvac
                 } else {
                     segment.uvdc
                 };
-                *u_block = (*u_block_residue / i32::from(quant)) * i32::from(quant);
-                *v_block = (*v_block_residue / i32::from(quant)) * i32::from(quant);
+                *dequant_value = coeff * i32::from(quant);
             }
 
-            transform::idct4x4(u_residue_block);
-            transform::idct4x4(v_residue_block);
+            transform::idct4x4(dequant_block);
         }
+
+        dequantized_blocks
+    }
+
+    fn transform_chroma_blocks(
+        &mut self,
+        u_data: &[u8],
+        v_data: &[u8],
+        mbx: usize,
+        mby: usize,
+        chroma_mode: ChromaMode,
+    ) -> ([i32; 16 * 4], [i32; 16 * 4]) {
+        let stride = CHROMA_STRIDE;
+
+        let mut predicted_u = self.get_predicted_chroma_block(
+            chroma_mode,
+            mbx,
+            mby,
+            &self.top_border_u,
+            &self.left_border_u,
+        );
+        let mut predicted_v = self.get_predicted_chroma_block(
+            chroma_mode,
+            mbx,
+            mby,
+            &self.top_border_v,
+            &self.left_border_v,
+        );
+
+        let u_blocks = self.get_chroma_blocks_from_predicted(&predicted_u, u_data, mbx, mby);
+        let v_blocks = self.get_chroma_blocks_from_predicted(&predicted_v, v_data, mbx, mby);
+
+        let u_coeffs = self.get_chroma_block_coeffs(u_blocks);
+        let v_coeffs = self.get_chroma_block_coeffs(v_blocks);
+
+        let quantized_u_residue = self.get_dequantized_blocks_from_coeffs_chroma(&u_coeffs);
+        let quantized_v_residue = self.get_dequantized_blocks_from_coeffs_chroma(&v_coeffs);
 
         for y in 0usize..2 {
             for x in 0usize..2 {
@@ -1068,11 +1457,11 @@ impl<W: Write> Vp8Encoder<W> {
 
                 let y0 = 1 + y * 4;
                 let x0 = 1 + x * 4;
-                add_residue(&mut u_with_border, urb, y0, x0, stride);
+                add_residue(&mut predicted_u, urb, y0, x0, stride);
 
                 let vrb: &[i32; 16] = quantized_v_residue[i * 16..][..16].try_into().unwrap();
 
-                add_residue(&mut v_with_border, vrb, y0, x0, stride);
+                add_residue(&mut predicted_v, vrb, y0, x0, stride);
             }
         }
 
@@ -1083,8 +1472,8 @@ impl<W: Write> Vp8Encoder<W> {
             .enumerate()
             .zip(self.left_border_v.iter_mut())
         {
-            *u_border_value = u_with_border[y * stride + 8];
-            *v_border_value = v_with_border[y * stride + 8];
+            *u_border_value = predicted_u[y * stride + 8];
+            *v_border_value = predicted_v[y * stride + 8];
         }
 
         for ((x, u_border_value), v_border_value) in self.top_border_u[mbx * 8..][..8]
@@ -1092,8 +1481,8 @@ impl<W: Write> Vp8Encoder<W> {
             .enumerate()
             .zip(self.top_border_v[mbx * 8..][..8].iter_mut())
         {
-            *u_border_value = u_with_border[8 * stride + x + 1];
-            *v_border_value = v_with_border[8 * stride + x + 1];
+            *u_border_value = predicted_u[8 * stride + x + 1];
+            *v_border_value = predicted_v[8 * stride + x + 1];
         }
 
         (u_blocks, v_blocks)
@@ -1114,7 +1503,11 @@ const YUV_HALF: i32 = 1 << (YUV_FIX - 1);
 
 /// converts the whole image to yuv data and adds values on the end to make it match the macroblock sizes
 /// downscales the u/v data as well so it's half the width and height of the y data
-fn convert_image_yuv<const BPP: usize>(image_data: &[u8], width: u16, height: u16) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+fn convert_image_yuv<const BPP: usize>(
+    image_data: &[u8],
+    width: u16,
+    height: u16,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let width = usize::from(width);
     let height = usize::from(height);
     let mb_width = width.div_ceil(16);
@@ -1129,15 +1522,17 @@ fn convert_image_yuv<const BPP: usize>(image_data: &[u8], width: u16, height: u1
 
     // loop through two rows at a time so that we can calculate the average of the 2x2 pixels
     // for averaging for the chroma pixels when downscaling
-    for (((image_rows, y_rows), u_row), v_row) in image_data.chunks_exact(BPP * width * 2)
+    for (((image_rows, y_rows), u_row), v_row) in image_data
+        .chunks_exact(BPP * width * 2)
         .zip(y_bytes.chunks_exact_mut(luma_width * 2))
-        .zip(u_bytes.chunks_exact_mut(chroma_width)) 
-        .zip(v_bytes.chunks_exact_mut(chroma_width)) 
+        .zip(u_bytes.chunks_exact_mut(chroma_width))
+        .zip(v_bytes.chunks_exact_mut(chroma_width))
     {
         let (image_row_1, image_row_2) = image_rows.split_at(BPP * width);
         let (y_row_1, y_row_2) = y_rows.split_at_mut(luma_width);
 
-        for (((((row_1, row_2), y_pixels_1), y_pixels_2), u_pixel), v_pixel) in image_row_1.chunks_exact(BPP * 2)
+        for (((((row_1, row_2), y_pixels_1), y_pixels_2), u_pixel), v_pixel) in image_row_1
+            .chunks_exact(BPP * 2)
             .zip(image_row_2.chunks_exact(BPP * 2))
             .zip(y_row_1.chunks_exact_mut(2))
             .zip(y_row_2.chunks_exact_mut(2))
@@ -1160,7 +1555,11 @@ fn convert_image_yuv<const BPP: usize>(image_data: &[u8], width: u16, height: u1
     (y_bytes, u_bytes, v_bytes)
 }
 
-fn convert_image_y<const BPP: usize>(image_data: &[u8], width: u16, height: u16) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+fn convert_image_y<const BPP: usize>(
+    image_data: &[u8],
+    width: u16,
+    height: u16,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let width = usize::from(width);
     let height = usize::from(height);
     let mb_width = width.div_ceil(16);
@@ -1172,12 +1571,11 @@ fn convert_image_y<const BPP: usize>(image_data: &[u8], width: u16, height: u16)
     let u_bytes = vec![127u8; chroma_size];
     let v_bytes = vec![127u8; chroma_size];
 
-    for (image_row, y_row) in image_data.chunks_exact(BPP * width)
+    for (image_row, y_row) in image_data
+        .chunks_exact(BPP * width)
         .zip(y_bytes.chunks_exact_mut(luma_width))
     {
-        for (image_value, y_pixel) in image_row.chunks_exact(BPP)
-            .zip(y_row.iter_mut())
-        {
+        for (image_value, y_pixel) in image_row.chunks_exact(BPP).zip(y_row.iter_mut()) {
             *y_pixel = image_value[0];
         }
     }
@@ -1190,7 +1588,7 @@ fn convert_image_y<const BPP: usize>(image_data: &[u8], width: u16, height: u16)
 // U = -0.1482 * R - 0.2910 * G + 0.4392 * B + 128
 // V = 0.4392 * R - 0.3678 * G - 0.0714 * B + 128
 
-// this is converted to 16 bit fixed point by multiplying by 2^16 
+// this is converted to 16 bit fixed point by multiplying by 2^16
 // and shifting back
 
 fn rgb_to_y(rgb: &[u8]) -> u8 {
@@ -1208,7 +1606,7 @@ fn rgb_to_u_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
     ((u1 + u2 + u3 + u4) >> (YUV_FIX + 2)) as u8
 }
 
-    // get the average of the four surrounding pixels
+// get the average of the four surrounding pixels
 fn rgb_to_v_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
     let v1 = rgb_to_v_raw(rgb1);
     let v2 = rgb_to_v_raw(rgb2);
@@ -1219,11 +1617,14 @@ fn rgb_to_v_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
 }
 
 fn rgb_to_u_raw(rgb: &[u8]) -> i32 {
-    -9719 * i32::from(rgb[0]) - 19081 * i32::from(rgb[1]) + 28800 * i32::from(rgb[2]) + (128 << YUV_FIX)
+    -9719 * i32::from(rgb[0]) - 19081 * i32::from(rgb[1])
+        + 28800 * i32::from(rgb[2])
+        + (128 << YUV_FIX)
 }
 
 fn rgb_to_v_raw(rgb: &[u8]) -> i32 {
-    28800 * i32::from(rgb[0]) - 24116 * i32::from(rgb[1]) - 4684 * i32::from(rgb[2]) + (128 << YUV_FIX)
+    28800 * i32::from(rgb[0]) - 24116 * i32::from(rgb[1]) - 4684 * i32::from(rgb[2])
+        + (128 << YUV_FIX)
 }
 
 pub(crate) fn encode_frame_lossy<W: Write>(

@@ -93,12 +93,12 @@ pub(crate) fn wht4x4(block: &mut [i32; 16]) {
 
     // vertical
     for i in 0..4 {
-        let a = fetch(block, i * 4 + 0) + fetch(block, i * 4 + 3);
+        let a = fetch(block, i * 4) + fetch(block, i * 4 + 3);
         let b = fetch(block, i * 4 + 1) + fetch(block, i * 4 + 2);
         let c = fetch(block, i * 4 + 1) - fetch(block, i * 4 + 2);
-        let d = fetch(block, i * 4 + 0) - fetch(block, i * 4 + 3);
+        let d = fetch(block, i * 4) - fetch(block, i * 4 + 3);
 
-        block[i * 4 + 0] = (a + b) as i32;
+        block[i * 4] = (a + b) as i32;
         block[i * 4 + 1] = (c + d) as i32;
         block[i * 4 + 2] = (a - b) as i32;
         block[i * 4 + 3] = (d - c) as i32;
@@ -106,10 +106,10 @@ pub(crate) fn wht4x4(block: &mut [i32; 16]) {
 
     // horizontal
     for i in 0..4 {
-        let a1 = fetch(block, i + 0) + fetch(block, i + 12);
+        let a1 = fetch(block, i) + fetch(block, i + 12);
         let b1 = fetch(block, i + 4) + fetch(block, i + 8);
         let c1 = fetch(block, i + 4) - fetch(block, i + 8);
-        let d1 = fetch(block, i + 0) - fetch(block, i + 12);
+        let d1 = fetch(block, i) - fetch(block, i + 12);
 
         let a2 = a1 + b1;
         let b2 = c1 + d1;
@@ -121,7 +121,7 @@ pub(crate) fn wht4x4(block: &mut [i32; 16]) {
         let c3 = (c2 + if c2 > 0 { 1 } else { 0 }) / 2;
         let d3 = (d2 + if d2 > 0 { 1 } else { 0 }) / 2;
 
-        block[i + 0] = a3 as i32;
+        block[i] = a3 as i32;
         block[i + 4] = b3 as i32;
         block[i + 8] = c3 as i32;
         block[i + 12] = d3 as i32;
@@ -136,12 +136,12 @@ pub(crate) fn dct4x4(block: &mut [i32; 16]) {
 
     // vertical
     for i in 0..4 {
-        let a = (fetch(block, i * 4 + 0) + fetch(block, i * 4 + 3)) * 8;
+        let a = (fetch(block, i * 4) + fetch(block, i * 4 + 3)) * 8;
         let b = (fetch(block, i * 4 + 1) + fetch(block, i * 4 + 2)) * 8;
         let c = (fetch(block, i * 4 + 1) - fetch(block, i * 4 + 2)) * 8;
-        let d = (fetch(block, i * 4 + 0) - fetch(block, i * 4 + 3)) * 8;
+        let d = (fetch(block, i * 4) - fetch(block, i * 4 + 3)) * 8;
 
-        block[i * 4 + 0] = (a + b) as i32;
+        block[i * 4] = (a + b) as i32;
         block[i * 4 + 2] = (a - b) as i32;
         block[i * 4 + 1] = ((c * 2217 + d * 5352 + 14500) >> 12) as i32;
         block[i * 4 + 3] = ((d * 2217 - c * 5352 + 7500) >> 12) as i32;
@@ -149,12 +149,12 @@ pub(crate) fn dct4x4(block: &mut [i32; 16]) {
 
     // horizontal
     for i in 0..4 {
-        let a = fetch(block, i + 0) + fetch(block, i + 12);
+        let a = fetch(block, i) + fetch(block, i + 12);
         let b = fetch(block, i + 4) + fetch(block, i + 8);
         let c = fetch(block, i + 4) - fetch(block, i + 8);
-        let d = fetch(block, i + 0) - fetch(block, i + 12);
+        let d = fetch(block, i) - fetch(block, i + 12);
 
-        block[i + 0] = ((a + b + 7) >> 4) as i32;
+        block[i] = ((a + b + 7) >> 4) as i32;
         block[i + 8] = ((a - b + 7) >> 4) as i32;
         block[i + 4] = (((c * 2217 + d * 5352 + 12000) >> 16) + if d != 0 { 1 } else { 0 }) as i32;
         block[i + 12] = ((d * 2217 - c * 5352 + 51000) >> 16) as i32;
