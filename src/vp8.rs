@@ -15,9 +15,9 @@ use std::default::Default;
 use std::io::Read;
 
 use crate::decoder::{DecodingError, UpsamplingMethod};
-use crate::yuv;
 use crate::vp8_common::*;
 use crate::vp8_prediction::*;
+use crate::yuv;
 
 use super::vp8_arithmetic_decoder::ArithmeticDecoder;
 use super::{loop_filter, transform};
@@ -241,23 +241,6 @@ impl Frame {
     pub fn get_buf_size(&self) -> usize {
         self.ybuf.len() * 3
     }
-}
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Segment {
-    pub(crate) ydc: i16,
-    pub(crate) yac: i16,
-
-    pub(crate) y2dc: i16,
-    pub(crate) y2ac: i16,
-
-    pub(crate) uvdc: i16,
-    pub(crate) uvac: i16,
-
-    pub(crate) delta_values: bool,
-
-    pub(crate) quantizer_level: i8,
-    pub(crate) loopfilter_level: i8,
 }
 
 /// VP8 Decoder
