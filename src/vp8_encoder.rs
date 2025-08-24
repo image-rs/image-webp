@@ -156,7 +156,7 @@ impl<W: Write> Vp8Encoder<W> {
         }
     }
 
-    /// Writes the uncompressed part of the frame header
+    /// Writes the uncompressed part of the frame header (9.1)
     fn write_uncompressed_frame_header(
         &mut self,
         partition_size: u32,
@@ -184,8 +184,7 @@ impl<W: Write> Vp8Encoder<W> {
     }
 
     fn encode_compressed_frame_header(&mut self) {
-        // if keyframe
-        // color space must be 0
+        // if keyframe, color space must be 0
         self.encoder.write_literal(1, 0);
         // pixel type
         self.encoder.write_literal(1, 0);
@@ -281,7 +280,7 @@ impl<W: Write> Vp8Encoder<W> {
             for js in is.iter() {
                 for ks in js.iter() {
                     for prob in ks.iter() {
-                        // not updating these
+                        // currently just not updating these
                         self.encoder.write_bool(false, *prob);
                     }
                 }
@@ -353,7 +352,7 @@ impl<W: Write> Vp8Encoder<W> {
         );
     }
 
-    // 13
+    // 13 in specification, matches read_residual_data in the decoder
     fn encode_residual_data(
         &mut self,
         macroblock_info: &MacroblockInfo,
@@ -363,8 +362,6 @@ impl<W: Write> Vp8Encoder<W> {
         u_block_data: &[i32; 16 * 4],
         v_block_data: &[i32; 16 * 4],
     ) {
-        // TODO: set residual data if coeffs are not skipped
-
         let mut plane = if macroblock_info.luma_mode == LumaMode::B {
             Plane::YCoeff0
         } else {
@@ -377,7 +374,6 @@ impl<W: Write> Vp8Encoder<W> {
         // Y2
         if plane == Plane::Y2 {
             // encode 0th coefficient of each luma
-
             let mut coeffs0 = get_coeffs0_from_block(y_block_data);
 
             // wht here on the 0th coeffs
@@ -561,7 +557,7 @@ impl<W: Write> Vp8Encoder<W> {
                     literal as i8
                 }
 
-                // encode in the category
+                // encode the category
                 value => {
                     let category = match value {
                         5..=6 => DCT_CAT1,
@@ -636,6 +632,7 @@ impl<W: Write> Vp8Encoder<W> {
         color: ColorType,
         width: u16,
         height: u16,
+        lossy_quality: u8,
     ) -> Result<(), EncodingError> {
         self.frame_info.width = width;
         self.frame_info.height = height;
@@ -663,7 +660,7 @@ impl<W: Write> Vp8Encoder<W> {
             color
         );
 
-        self.setup_encoding();
+        self.setup_encoding(lossy_quality);
 
         self.encode_compressed_frame_header();
 
@@ -976,31 +973,36 @@ impl<W: Write> Vp8Encoder<W> {
         self.get_chroma_block_coeffs(chroma_blocks)
     }
 
-    fn setup_encoding(&mut self) {
+    // sets up the encoding of the encoder by setting all the encoder params based on the width and height
+    fn setup_encoding(&mut self, lossy_quality: u8) {
         self.top_complexity = vec![Complexity::default(); usize::from(self.macroblock_width)];
         self.top_b_pred = vec![IntraMode::default(); 4 * usize::from(self.macroblock_width)];
         self.left_b_pred = [IntraMode::default(); 4];
 
         self.frame_info.token_probs = COEFF_PROBS;
 
-        // TODO: decide the quantization amount based on encoding parameters/the image
-        const QUANT_INDEX: u8 = 10;
-        const QUANT_INDEX_USIZE: usize = QUANT_INDEX as usize;
+        // choosing the quantization quality based on the quality passed in
+        if lossy_quality > 100 {
+            panic!("lossy quality must be between 0 and 100");
+        }
+
+        let quant_index: u8 = (127 - u16::from(lossy_quality) * 127 / 100) as u8;
+        let quant_index_usize: usize = quant_index as usize;
 
         self.frame_info.segments_enabled = false;
         let quantization_indices = QuantizationIndices {
-            yac_abs: QUANT_INDEX,
+            yac_abs: quant_index,
             ..Default::default()
         };
         self.frame_info.quantization_indices = quantization_indices;
 
         let segment = Segment {
-            ydc: DC_QUANT[QUANT_INDEX_USIZE],
-            yac: AC_QUANT[QUANT_INDEX_USIZE],
-            y2dc: DC_QUANT[QUANT_INDEX_USIZE] * 2,
-            y2ac: ((i32::from(AC_QUANT[QUANT_INDEX_USIZE]) * 155 / 100) as i16).max(8),
-            uvdc: DC_QUANT[QUANT_INDEX_USIZE],
-            uvac: AC_QUANT[QUANT_INDEX_USIZE],
+            ydc: DC_QUANT[quant_index_usize],
+            yac: AC_QUANT[quant_index_usize],
+            y2dc: DC_QUANT[quant_index_usize] * 2,
+            y2ac: ((i32::from(AC_QUANT[quant_index_usize]) * 155 / 100) as i16).max(8),
+            uvdc: DC_QUANT[quant_index_usize],
+            uvac: AC_QUANT[quant_index_usize],
             ..Default::default()
         };
         self.segments[0] = segment;
@@ -1505,6 +1507,7 @@ pub(crate) fn encode_frame_lossy<W: Write>(
     width: u32,
     height: u32,
     color: ColorType,
+    lossy_quality: u8,
 ) -> Result<(), EncodingError> {
     let mut vp8_encoder = Vp8Encoder::new(writer);
 
@@ -1515,7 +1518,7 @@ pub(crate) fn encode_frame_lossy<W: Write>(
         .try_into()
         .map_err(|_| EncodingError::InvalidDimensions)?;
 
-    vp8_encoder.encode_image(data, color, width, height)?;
+    vp8_encoder.encode_image(data, color, width, height, lossy_quality)?;
 
     Ok(())
 }

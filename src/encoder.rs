@@ -357,8 +357,10 @@ fn write_run<W: Write>(
 pub struct EncoderParams {
     /// Use a predictor transform. Enabled by default.
     pub use_predictor_transform: bool,
-    /// Use the lossy encoding
+    /// Use the lossy encoding to encode the image using the VP8 compression format.
     pub use_lossy: bool,
+    /// A quality value for the lossy encoding that must be between 0 and 100. Defaults to 95.
+    pub lossy_quality: u8,
 }
 
 impl Default for EncoderParams {
@@ -366,6 +368,7 @@ impl Default for EncoderParams {
         Self {
             use_predictor_transform: true,
             use_lossy: false,
+            lossy_quality: 95,
         }
     }
 }
@@ -679,7 +682,14 @@ impl<W: Write> WebPEncoder<W> {
         let mut frame = Vec::new();
 
         let frame_chunk = if self.params.use_lossy {
-            encode_frame_lossy(&mut frame, data, width, height, color)?;
+            encode_frame_lossy(
+                &mut frame,
+                data,
+                width,
+                height,
+                color,
+                self.params.lossy_quality,
+            )?;
             b"VP8 "
         } else {
             encode_frame(&mut frame, data, width, height, color, self.params)?;
