@@ -114,6 +114,7 @@ fn should_filter_vertical(
 }
 
 fn should_filter_horizontal(interior_limit: u8, edge_limit: u8, pixels: &[u8]) -> bool {
+    assert!(pixels.len() >= 8); // one bounds check up front eliminates all subsequent checks in this function
     simple_threshold_horizontal(i32::from(edge_limit), pixels)
         // this looks like an erroneous way to compute differences between 8 points, but isn't:
         // there are actually only 6 diff comparisons required as per the spec:
