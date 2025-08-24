@@ -89,7 +89,7 @@ fn simple_threshold_vertical(
 
 #[inline]
 fn simple_threshold_horizontal(filter_limit: i32, pixels: &[u8]) -> bool {
-    _ = pixels[5]; // one bounds check up front eliminates all subsequent checks in this function
+    assert!(pixels.len() >= 6); // one bounds check up front eliminates all subsequent checks in this function
     i32::from(diff(pixels[3], pixels[4])) * 2 + i32::from(diff(pixels[2], pixels[5])) / 2
         <= filter_limit
 }
