@@ -1,5 +1,18 @@
 # Release Notes
 
+### Version 0.2.4
+
+Changes:
+ - Changed default upscaling to bilinear interpolation to match libwebp (#147)
+
+Bug fixes:
+ - Fixed all remaining divergences against libwebp in loop filtering (#148, #149)
+
+Optimizations:
+ - Optimized predictors in lossless_transform (#152)
+ - Improved performance of horizontal loop filtering (#151, #156)
+
+
 ### Version 0.2.3
 
 Changes:
