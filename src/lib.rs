@@ -24,6 +24,7 @@ mod lossless;
 mod lossless_transform;
 mod transform;
 mod vp8_arithmetic_decoder;
+mod vp8_arithmetic_encoder;
 mod vp8_common;
 mod vp8_prediction;
 mod yuv;
