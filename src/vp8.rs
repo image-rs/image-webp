@@ -824,7 +824,7 @@ impl<R: Read> Vp8Decoder<R> {
         &mut self,
         block: &mut [i32; 16],
         p: usize,
-        plane: usize,
+        plane: Plane,
         complexity: usize,
         dcq: i16,
         acq: i16,
@@ -833,8 +833,12 @@ impl<R: Read> Vp8Decoder<R> {
         // so that the compiler doesn't have to insert them in the hot loop below
         assert!(complexity <= 2);
 
-        let first = if plane == 0 { 1usize } else { 0usize };
-        let probs = &self.token_probs[plane];
+        let first_coeff = if plane == Plane::YCoeff1 {
+            1usize
+        } else {
+            0usize
+        };
+        let probs = &self.token_probs[plane as usize];
         let decoder = &mut self.partitions[p];
 
         let mut res = decoder.start_accumulated_result();
@@ -843,7 +847,7 @@ impl<R: Read> Vp8Decoder<R> {
         let mut has_coefficients = false;
         let mut skip = false;
 
-        for i in first..16usize {
+        for i in first_coeff..16usize {
             let band = COEFF_BANDS[i] as usize;
             let tree = &probs[band][complexity];
 
@@ -913,9 +917,13 @@ impl<R: Read> Vp8Decoder<R> {
     ) -> Result<[i32; 384], DecodingError> {
         let sindex = mb.segmentid as usize;
         let mut blocks = [0i32; 384];
-        let mut plane = if mb.luma_mode == LumaMode::B { 3 } else { 1 };
+        let mut plane = if mb.luma_mode == LumaMode::B {
+            Plane::YCoeff0
+        } else {
+            Plane::Y2
+        };
 
-        if plane == 1 {
+        if plane == Plane::Y2 {
             let complexity = self.top[mbx].complexity[0] + self.left.complexity[0];
             let mut block = [0i32; 16];
             let dcq = self.segment[sindex].y2dc;
@@ -931,7 +939,7 @@ impl<R: Read> Vp8Decoder<R> {
                 blocks[16 * k] = block[k];
             }
 
-            plane = 0;
+            plane = Plane::YCoeff1;
         }
 
         for y in 0usize..4 {
@@ -959,7 +967,7 @@ impl<R: Read> Vp8Decoder<R> {
             self.left.complexity[y + 1] = left;
         }
 
-        plane = 2;
+        plane = Plane::Chroma;
 
         for &j in &[5usize, 7usize] {
             for y in 0usize..2 {
