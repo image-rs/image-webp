@@ -146,7 +146,7 @@ pub struct Frame {
     /// Indicates whether this frame is a keyframe
     pub keyframe: bool,
 
-    version: u8,
+    pub(crate) version: u8,
 
     /// Indicates whether this frame is intended for display
     pub for_display: bool,
@@ -157,9 +157,9 @@ pub struct Frame {
     pub pixel_type: u8,
 
     // Section 9.4 and 15
-    filter_type: bool, //if true uses simple filter // if false uses normal filter
-    filter_level: u8,
-    sharpness_level: u8,
+    pub(crate) filter_type: bool, //if true uses simple filter // if false uses normal filter
+    pub(crate) filter_level: u8,
+    pub(crate) sharpness_level: u8,
 }
 
 impl Frame {
