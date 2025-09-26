@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 // currently just a direct translation of the encoder given in the vp8 specification
 #[derive(Default)]
 pub(crate) struct ArithmeticEncoder {
