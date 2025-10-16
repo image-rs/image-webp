@@ -290,6 +290,7 @@ impl<R: BufRead> LosslessDecoder<R> {
     }
 
     /// Reads huffman codes associated with an image
+    #[inline(never)]
     fn read_huffman_codes(
         &mut self,
         read_meta: bool,
