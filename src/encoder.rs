@@ -5,6 +5,8 @@ use std::slice::ChunksExact;
 
 use quick_error::quick_error;
 
+use crate::vp8_encoder::encode_frame_lossy;
+
 /// Color type of the image.
 ///
 /// Note that the WebP format doesn't have a concept of color type. All images are encoded as RGBA
@@ -355,22 +357,28 @@ fn write_run<W: Write>(
 pub struct EncoderParams {
     /// Use a predictor transform. Enabled by default.
     pub use_predictor_transform: bool,
+    /// Use the lossy encoding to encode the image using the VP8 compression format.
+    pub use_lossy: bool,
+    /// A quality value for the lossy encoding that must be between 0 and 100. Defaults to 95.
+    pub lossy_quality: u8,
 }
 
 impl Default for EncoderParams {
     fn default() -> Self {
         Self {
             use_predictor_transform: true,
+            use_lossy: false,
+            lossy_quality: 95,
         }
     }
 }
 
-/// Encode image data with the indicated color type.
+/// Encode image data losslessly with the indicated color type.
 ///
 /// # Panics
 ///
 /// Panics if the image data is not of the indicated dimensions.
-fn encode_frame<W: Write>(
+fn encode_frame_lossless<W: Write>(
     writer: W,
     data: &[u8],
     width: u32,
@@ -672,7 +680,21 @@ impl<W: Write> WebPEncoder<W> {
         color: ColorType,
     ) -> Result<(), EncodingError> {
         let mut frame = Vec::new();
-        encode_frame(&mut frame, data, width, height, color, self.params)?;
+
+        let frame_chunk = if self.params.use_lossy {
+            encode_frame_lossy(
+                &mut frame,
+                data,
+                width,
+                height,
+                color,
+                self.params.lossy_quality,
+            )?;
+            b"VP8 "
+        } else {
+            encode_frame_lossless(&mut frame, data, width, height, color, self.params)?;
+            b"VP8L"
+        };
 
         // If the image has no metadata, it can be encoded with the "simple" WebP container format.
         if self.icc_profile.is_empty()
@@ -683,7 +705,7 @@ impl<W: Write> WebPEncoder<W> {
             self.writer
                 .write_all(&(chunk_size(frame.len()) + 4).to_le_bytes())?;
             self.writer.write_all(b"WEBP")?;
-            write_chunk(&mut self.writer, b"VP8L", &frame)?;
+            write_chunk(&mut self.writer, frame_chunk, &frame)?;
         } else {
             let mut total_bytes = 22 + chunk_size(frame.len());
             if !self.icc_profile.is_empty() {
@@ -725,7 +747,7 @@ impl<W: Write> WebPEncoder<W> {
                 write_chunk(&mut self.writer, b"ICCP", &self.icc_profile)?;
             }
 
-            write_chunk(&mut self.writer, b"VP8L", &frame)?;
+            write_chunk(&mut self.writer, frame_chunk, &frame)?;
 
             if !self.exif_metadata.is_empty() {
                 write_chunk(&mut self.writer, b"EXIF", &self.exif_metadata)?;

@@ -295,7 +295,7 @@ pub(crate) const KEYFRAME_UV_MODE_TREE: [i8; 6] = [-DC_PRED, 2, -V_PRED, 4, -H_P
 pub(crate) const KEYFRAME_UV_MODE_PROBS: [Prob; 3] = [142, 114, 183];
 
 // Section 13.4
-type TokenProbTables = [[[[Prob; NUM_DCT_TOKENS - 1]; 3]; 8]; 4];
+pub(crate) type TokenProbTables = [[[[Prob; NUM_DCT_TOKENS - 1]; 3]; 8]; 4];
 
 // Probabilities that a token's probability will be updated
 pub(crate) const COEFF_UPDATE_PROBS: TokenProbTables = [
