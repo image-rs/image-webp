@@ -24,6 +24,12 @@ pub enum ColorType {
     Rgba8,
 }
 
+impl ColorType {
+    fn has_alpha(self) -> bool {
+        self == ColorType::La8 || self == ColorType::Rgba8
+    }
+}
+
 quick_error! {
     /// Error that can occur during encoding.
     #[derive(Debug)]
@@ -604,6 +610,51 @@ fn encode_frame_lossless<W: Write>(
     Ok(())
 }
 
+/// Encodes the alpha part of the image data losslessly.
+/// Used for lossy images that include transparency.
+///
+/// # Panics
+///
+/// Panics if the image data is not of the indicated dimensions.
+fn encode_alpha_lossless<W: Write>(
+    mut writer: W,
+    data: &[u8],
+    width: u32,
+    height: u32,
+    color: ColorType,
+) -> Result<(), EncodingError> {
+    let bytes_per_pixel = match color {
+        ColorType::La8 => 2,
+        ColorType::Rgba8 => 4,
+        _ => unreachable!(),
+    };
+    if width == 0 || width > 16384 || height == 0 || height > 16384 {
+        return Err(EncodingError::InvalidDimensions);
+    }
+
+    let preprocessing = 0u8;
+    let filtering_method = 0u8;
+    let compression_method = 0u8;
+
+    let initial_byte = preprocessing << 4 | filtering_method << 2 | compression_method;
+
+    writer.write_all(&[initial_byte])?;
+
+    // uncompressed raw alpha data
+    let alpha_data: Vec<u8> = data
+        .iter()
+        .skip(bytes_per_pixel - 1)
+        .step_by(bytes_per_pixel)
+        .copied()
+        .collect();
+
+    debug_assert_eq!(alpha_data.len(), (width * height) as usize);
+
+    writer.write_all(&alpha_data)?;
+
+    Ok(())
+}
+
 const fn chunk_size(inner_bytes: usize) -> u32 {
     if inner_bytes % 2 == 1 {
         (inner_bytes + 1) as u32 + 8
@@ -681,6 +732,8 @@ impl<W: Write> WebPEncoder<W> {
     ) -> Result<(), EncodingError> {
         let mut frame = Vec::new();
 
+        let lossy_with_alpha = self.params.use_lossy && color.has_alpha();
+
         let frame_chunk = if self.params.use_lossy {
             encode_frame_lossy(
                 &mut frame,
@@ -696,11 +749,14 @@ impl<W: Write> WebPEncoder<W> {
             b"VP8L"
         };
 
-        // If the image has no metadata, it can be encoded with the "simple" WebP container format.
-        if self.icc_profile.is_empty()
+        // If the image has no metadata and isn't lossy with alpha,
+        // it can be encoded with the "simple" WebP container format.
+        let use_simple_container = self.icc_profile.is_empty()
             && self.exif_metadata.is_empty()
             && self.xmp_metadata.is_empty()
-        {
+            && !lossy_with_alpha;
+
+        if use_simple_container {
             self.writer.write_all(b"RIFF")?;
             self.writer
                 .write_all(&(chunk_size(frame.len()) + 4).to_le_bytes())?;
@@ -718,6 +774,16 @@ impl<W: Write> WebPEncoder<W> {
                 total_bytes += chunk_size(self.xmp_metadata.len());
             }
 
+            let alpha_chunk_data = if lossy_with_alpha {
+                let mut alpha_chunk = Vec::new();
+                encode_alpha_lossless(&mut alpha_chunk, data, width, height, color)?;
+
+                total_bytes += chunk_size(alpha_chunk.len());
+                Some(alpha_chunk)
+            } else {
+                None
+            };
+
             let mut flags = 0;
             if !self.xmp_metadata.is_empty() {
                 flags |= 1 << 2;
@@ -725,7 +791,7 @@ impl<W: Write> WebPEncoder<W> {
             if !self.exif_metadata.is_empty() {
                 flags |= 1 << 3;
             }
-            if let ColorType::La8 | ColorType::Rgba8 = color {
+            if color.has_alpha() {
                 flags |= 1 << 4;
             }
             if !self.icc_profile.is_empty() {
@@ -745,6 +811,10 @@ impl<W: Write> WebPEncoder<W> {
 
             if !self.icc_profile.is_empty() {
                 write_chunk(&mut self.writer, b"ICCP", &self.icc_profile)?;
+            }
+
+            if let Some(alpha_chunk) = alpha_chunk_data {
+                write_chunk(&mut self.writer, b"ALPH", &alpha_chunk)?;
             }
 
             write_chunk(&mut self.writer, frame_chunk, &frame)?;
