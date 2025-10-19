@@ -381,6 +381,136 @@ fn fill_rgba_row_simple<const BPP: usize>(
     }
 }
 
+// constants used for yuv -> rgb conversion, using ones from libwebp
+const YUV_FIX: i32 = 16;
+const YUV_HALF: i32 = 1 << (YUV_FIX - 1);
+
+/// converts the whole image to yuv data and adds values on the end to make it match the macroblock sizes
+/// downscales the u/v data as well so it's half the width and height of the y data
+pub(crate) fn convert_image_yuv<const BPP: usize>(
+    image_data: &[u8],
+    width: u16,
+    height: u16,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let width = usize::from(width);
+    let height = usize::from(height);
+    let mb_width = width.div_ceil(16);
+    let mb_height = height.div_ceil(16);
+    let y_size = 16 * mb_width * 16 * mb_height;
+    let luma_width = 16 * mb_width;
+    let chroma_width = 8 * mb_width;
+    let chroma_size = 8 * mb_width * 8 * mb_height;
+    let mut y_bytes = vec![0u8; y_size];
+    let mut u_bytes = vec![0u8; chroma_size];
+    let mut v_bytes = vec![0u8; chroma_size];
+
+    // loop through two rows at a time so that we can calculate the average of the 2x2 pixels
+    // for averaging for the chroma pixels when downscaling
+    for (((image_rows, y_rows), u_row), v_row) in image_data
+        .chunks_exact(BPP * width * 2)
+        .zip(y_bytes.chunks_exact_mut(luma_width * 2))
+        .zip(u_bytes.chunks_exact_mut(chroma_width))
+        .zip(v_bytes.chunks_exact_mut(chroma_width))
+    {
+        let (image_row_1, image_row_2) = image_rows.split_at(BPP * width);
+        let (y_row_1, y_row_2) = y_rows.split_at_mut(luma_width);
+
+        for (((((row_1, row_2), y_pixels_1), y_pixels_2), u_pixel), v_pixel) in image_row_1
+            .chunks_exact(BPP * 2)
+            .zip(image_row_2.chunks_exact(BPP * 2))
+            .zip(y_row_1.chunks_exact_mut(2))
+            .zip(y_row_2.chunks_exact_mut(2))
+            .zip(u_row.iter_mut())
+            .zip(v_row.iter_mut())
+        {
+            let (rgb1, rgb2) = row_1.split_at(BPP);
+            let (rgb3, rgb4) = row_2.split_at(BPP);
+
+            y_pixels_1[0] = rgb_to_y(rgb1);
+            y_pixels_1[1] = rgb_to_y(rgb2);
+            y_pixels_2[0] = rgb_to_y(rgb3);
+            y_pixels_2[1] = rgb_to_y(rgb4);
+
+            *u_pixel = rgb_to_u_avg(rgb1, rgb2, rgb3, rgb4);
+            *v_pixel = rgb_to_v_avg(rgb1, rgb2, rgb3, rgb4);
+        }
+    }
+
+    (y_bytes, u_bytes, v_bytes)
+}
+
+pub(crate) fn convert_image_y<const BPP: usize>(
+    image_data: &[u8],
+    width: u16,
+    height: u16,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let width = usize::from(width);
+    let height = usize::from(height);
+    let mb_width = width.div_ceil(16);
+    let mb_height = height.div_ceil(16);
+    let y_size = 16 * mb_width * 16 * mb_height;
+    let luma_width = 16 * mb_width;
+    let chroma_size = 8 * mb_width * 8 * mb_height;
+    let mut y_bytes = vec![0u8; y_size];
+    let u_bytes = vec![127u8; chroma_size];
+    let v_bytes = vec![127u8; chroma_size];
+
+    for (image_row, y_row) in image_data
+        .chunks_exact(BPP * width)
+        .zip(y_bytes.chunks_exact_mut(luma_width))
+    {
+        for (image_value, y_pixel) in image_row.chunks_exact(BPP).zip(y_row.iter_mut()) {
+            *y_pixel = image_value[0];
+        }
+    }
+
+    (y_bytes, u_bytes, v_bytes)
+}
+
+// values come from libwebp
+// Y = 0.2568 * R + 0.5041 * G + 0.0979 * B + 16
+// U = -0.1482 * R - 0.2910 * G + 0.4392 * B + 128
+// V = 0.4392 * R - 0.3678 * G - 0.0714 * B + 128
+
+// this is converted to 16 bit fixed point by multiplying by 2^16
+// and shifting back
+
+fn rgb_to_y(rgb: &[u8]) -> u8 {
+    let luma = 16839 * i32::from(rgb[0]) + 33059 * i32::from(rgb[1]) + 6420 * i32::from(rgb[2]);
+    ((luma + YUV_HALF + (16 << YUV_FIX)) >> YUV_FIX) as u8
+}
+
+// get the average of the four surrounding pixels
+fn rgb_to_u_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
+    let u1 = rgb_to_u_raw(rgb1);
+    let u2 = rgb_to_u_raw(rgb2);
+    let u3 = rgb_to_u_raw(rgb3);
+    let u4 = rgb_to_u_raw(rgb4);
+
+    ((u1 + u2 + u3 + u4) >> (YUV_FIX + 2)) as u8
+}
+
+// get the average of the four surrounding pixels
+fn rgb_to_v_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
+    let v1 = rgb_to_v_raw(rgb1);
+    let v2 = rgb_to_v_raw(rgb2);
+    let v3 = rgb_to_v_raw(rgb3);
+    let v4 = rgb_to_v_raw(rgb4);
+
+    ((v1 + v2 + v3 + v4) >> (YUV_FIX + 2)) as u8
+}
+
+fn rgb_to_u_raw(rgb: &[u8]) -> i32 {
+    -9719 * i32::from(rgb[0]) - 19081 * i32::from(rgb[1])
+        + 28800 * i32::from(rgb[2])
+        + (128 << YUV_FIX)
+}
+
+fn rgb_to_v_raw(rgb: &[u8]) -> i32 {
+    28800 * i32::from(rgb[0]) - 24116 * i32::from(rgb[1]) - 4684 * i32::from(rgb[2])
+        + (128 << YUV_FIX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
