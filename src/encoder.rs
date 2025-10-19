@@ -638,19 +638,19 @@ fn encode_alpha_lossless<W: Write>(
 
     let initial_byte = preprocessing << 4 | filtering_method << 2 | compression_method;
 
-    writer.write(&[initial_byte])?;
+    writer.write_all(&[initial_byte])?;
 
     // uncompressed raw alpha data
     let alpha_data: Vec<u8> = data
         .iter()
         .skip(bytes_per_pixel - 1)
         .step_by(bytes_per_pixel)
-        .map(|x| *x)
+        .copied()
         .collect();
 
     debug_assert_eq!(alpha_data.len(), (width * height) as usize);
 
-    writer.write(&alpha_data)?;
+    writer.write_all(&alpha_data)?;
 
     Ok(())
 }
