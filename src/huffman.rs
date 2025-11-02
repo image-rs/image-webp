@@ -15,7 +15,7 @@ enum HuffmanTreeInner {
     Single(u16),
     Tree {
         table_mask: u16,
-        primary_table: Vec<u32>,
+        primary_table: Vec<u16>,
         secondary_table: Vec<u16>,
     },
 }
@@ -116,7 +116,7 @@ impl HuffmanTree {
                 let symbol = sorted_symbols[i];
                 i += 1;
 
-                let entry = ((length as u32) << 16) | symbol as u32;
+                let entry = ((length as u16) << 12) | symbol;
                 primary_table[codeword as usize] = entry;
 
                 codeword = Self::next_codeword(codeword, current_table_end as u16);
@@ -135,7 +135,7 @@ impl HuffmanTree {
             let mut subtable_prefix = !0;
             for length in (primary_table_bits + 1)..=max_length {
                 let subtable_size = 1 << (length - primary_table_bits);
-                let overflow_bits_mask = subtable_size as u32 - 1;
+                // let overflow_bits_mask = subtable_size as u32 - 1;
                 for _ in 0..histogram[length] {
                     // If the codeword's prefix doesn't match the current subtable, create a new
                     // subtable.
@@ -143,7 +143,8 @@ impl HuffmanTree {
                         subtable_prefix = codeword & primary_table_mask;
                         subtable_start = secondary_table.len();
                         primary_table[subtable_prefix as usize] =
-                            (subtable_start as u32) | (overflow_bits_mask << 24);
+                            ((length as u16) << 12) | subtable_start as u16;
+                        // (subtable_start as u32) | (overflow_bits_mask << 24);
                         secondary_table.resize(subtable_start + subtable_size, 0);
                     }
 
@@ -160,10 +161,11 @@ impl HuffmanTree {
                 // If there are more codes with the same subtable prefix, extend the subtable.
                 if length < max_length && codeword & primary_table_mask == subtable_prefix {
                     secondary_table.extend_from_within(subtable_start..);
-                    let subtable_size = secondary_table.len() - subtable_start;
-                    let overflow_bits_mask = subtable_size as u32 - 1;
+                    // let subtable_size = secondary_table.len() - subtable_start;
+                    // let overflow_bits_mask = subtable_size as u32 - 1;
                     primary_table[subtable_prefix as usize] =
-                        (subtable_start as u32) | (overflow_bits_mask << 24);
+                        (((length + 1) as u16) << 12) | subtable_start as u16;
+                    // (subtable_start as u32) | (overflow_bits_mask << 24);
                 }
             }
         }
@@ -181,7 +183,7 @@ impl HuffmanTree {
 
     pub(crate) fn build_two_node(zero: u16, one: u16) -> Self {
         Self(HuffmanTreeInner::Tree {
-            primary_table: vec![(1 << 16) | u32::from(zero), (1 << 16) | u32::from(one)],
+            primary_table: vec![(1 << 12) | zero, (1 << 12) | one],
             table_mask: 0x1,
             secondary_table: Vec::new(),
         })
@@ -195,11 +197,13 @@ impl HuffmanTree {
     fn read_symbol_slowpath<R: BufRead>(
         secondary_table: &[u16],
         v: u16,
-        primary_table_entry: u32,
+        primary_table_entry: u16,
         bit_reader: &mut BitReader<R>,
     ) -> Result<u16, DecodingError> {
-        let secondary_index = (primary_table_entry as u16 as usize)
-            + ((v >> MAX_TABLE_BITS) as usize & (primary_table_entry >> 24) as usize);
+        let length = primary_table_entry >> 12;
+        let mask = (1 << (length - MAX_TABLE_BITS as u16)) - 1;
+        let secondary_index = ((primary_table_entry & 0xfff) as usize)
+            + ((v >> MAX_TABLE_BITS) as usize & mask as usize);
         let secondary_entry = secondary_table[secondary_index];
         bit_reader.consume((secondary_entry & 0xf) as u8)?;
         Ok(secondary_entry >> 4)
@@ -221,9 +225,9 @@ impl HuffmanTree {
             } => {
                 let v = bit_reader.peek_full() as u16;
                 let entry = primary_table[(v & table_mask) as usize];
-                if (entry >> 16) <= MAX_TABLE_BITS as u32 {
-                    bit_reader.consume((entry >> 16) as u8)?;
-                    return Ok(entry as u16);
+                if (entry >> 12) <= MAX_TABLE_BITS as u16 {
+                    bit_reader.consume((entry >> 12) as u8)?;
+                    return Ok(entry & 0xfff);
                 }
 
                 Self::read_symbol_slowpath(secondary_table, v, entry, bit_reader)
@@ -251,8 +255,8 @@ impl HuffmanTree {
             } => {
                 let v = bit_reader.peek_full() as u16;
                 let entry = primary_table[(v & table_mask) as usize];
-                if (entry >> 16) <= MAX_TABLE_BITS as u32 {
-                    return Some(((entry >> 16) as u8, entry as u16));
+                if (entry >> 12) <= MAX_TABLE_BITS as u16 {
+                    return Some(((entry >> 12) as u8, entry & 0xfff));
                 }
                 None
             }
