@@ -149,7 +149,7 @@ impl HuffmanTree {
 
                     // Insert the symbol into the secondary table and advance to the next codeword.
                     secondary_table[subtable_start + (codeword >> primary_table_bits) as usize] =
-                        ((symbol as u16) << 4) | (length as u16);
+                        (symbol << 4) | (length as u16);
                     codeword = Self::next_codeword(codeword, 1 << length);
                 }
 
