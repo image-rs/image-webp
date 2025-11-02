@@ -1,11 +1,7 @@
-//! Rudimentary utility for reading Canonical Huffman Codes.
-//! Based off <https://github.com/webmproject/libwebp/blob/7f8472a610b61ec780ef0a8873cd954ac512a505/src/utils/huffman.c>
-
 use std::io::BufRead;
 
 use crate::decoder::DecodingError;
-
-use super::lossless::BitReader;
+use crate::lossless::BitReader;
 
 const MAX_ALLOWED_CODE_LENGTH: usize = 15;
 const MAX_TABLE_BITS: u8 = 10;
@@ -135,7 +131,6 @@ impl HuffmanTree {
             let mut subtable_prefix = !0;
             for length in (primary_table_bits + 1)..=max_length {
                 let subtable_size = 1 << (length - primary_table_bits);
-                // let overflow_bits_mask = subtable_size as u32 - 1;
                 for _ in 0..histogram[length] {
                     // If the codeword's prefix doesn't match the current subtable, create a new
                     // subtable.
@@ -144,7 +139,6 @@ impl HuffmanTree {
                         subtable_start = secondary_table.len();
                         primary_table[subtable_prefix as usize] =
                             ((length as u16) << 12) | subtable_start as u16;
-                        // (subtable_start as u32) | (overflow_bits_mask << 24);
                         secondary_table.resize(subtable_start + subtable_size, 0);
                     }
 
@@ -161,11 +155,8 @@ impl HuffmanTree {
                 // If there are more codes with the same subtable prefix, extend the subtable.
                 if length < max_length && codeword & primary_table_mask == subtable_prefix {
                     secondary_table.extend_from_within(subtable_start..);
-                    // let subtable_size = secondary_table.len() - subtable_start;
-                    // let overflow_bits_mask = subtable_size as u32 - 1;
                     primary_table[subtable_prefix as usize] =
                         (((length + 1) as u16) << 12) | subtable_start as u16;
-                    // (subtable_start as u32) | (overflow_bits_mask << 24);
                 }
             }
         }
@@ -231,12 +222,6 @@ impl HuffmanTree {
                 }
 
                 Self::read_symbol_slowpath(secondary_table, v, entry, bit_reader)
-
-                // let secondary_index = (entry as u16 as usize)
-                //     + ((v >> MAX_TABLE_BITS) as usize & (entry >> 24) as usize);
-                // let secondary_entry = secondary_table[secondary_index];
-                // bit_reader.consume((secondary_entry & 0xf) as u8)?;
-                // Ok(secondary_entry >> 4)
             }
             HuffmanTreeInner::Single(symbol) => Ok(*symbol),
         }
