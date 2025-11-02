@@ -42,6 +42,7 @@ impl HuffmanTree {
     }
 
     /// Builds a tree implicitly, just from code lengths
+    #[allow(clippy::needless_range_loop)]
     pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<Self, DecodingError> {
         // Count symbols and build histogram
         let mut num_symbols = 0;
