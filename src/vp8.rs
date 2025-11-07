@@ -143,9 +143,6 @@ pub struct Frame {
     /// The red plane of the frame
     pub vbuf: Vec<u8>,
 
-    /// Indicates whether this frame is a keyframe
-    pub keyframe: bool,
-
     pub(crate) version: u8,
 
     /// Indicates whether this frame is intended for display
@@ -269,9 +266,6 @@ pub struct Vp8Decoder<R> {
     segment_tree_nodes: [TreeNode; 3],
     token_probs: Box<TokenProbTreeNodes>,
 
-    // Section 9.10
-    prob_intra: Prob,
-
     // Section 9.11
     prob_skip_false: Option<Prob>,
 
@@ -331,9 +325,6 @@ impl<R: Read> Vp8Decoder<R> {
 
             segment_tree_nodes: SEGMENT_TREE_NODE_DEFAULTS,
             token_probs: Box::new(COEFF_PROB_NODES),
-
-            // Section 9.10
-            prob_intra: 0u8,
 
             // Section 9.11
             prob_skip_false: None,
@@ -513,50 +504,52 @@ impl<R: Read> Vp8Decoder<R> {
     fn read_frame_header(&mut self) -> Result<(), DecodingError> {
         let tag = self.r.read_u24::<LittleEndian>()?;
 
-        self.frame.keyframe = tag & 1 == 0;
+        let keyframe = tag & 1 == 0;
+        if !keyframe {
+            return Err(DecodingError::UnsupportedFeature(
+                "Non-keyframe frames".to_owned(),
+            ));
+        }
+
         self.frame.version = ((tag >> 1) & 7) as u8;
         self.frame.for_display = (tag >> 4) & 1 != 0;
 
         let first_partition_size = tag >> 5;
 
-        if self.frame.keyframe {
-            let mut tag = [0u8; 3];
-            self.r.read_exact(&mut tag)?;
+        let mut tag = [0u8; 3];
+        self.r.read_exact(&mut tag)?;
 
-            if tag != [0x9d, 0x01, 0x2a] {
-                return Err(DecodingError::Vp8MagicInvalid(tag));
-            }
-
-            let w = self.r.read_u16::<LittleEndian>()?;
-            let h = self.r.read_u16::<LittleEndian>()?;
-
-            self.frame.width = w & 0x3FFF;
-            self.frame.height = h & 0x3FFF;
-
-            self.top = init_top_macroblocks(self.frame.width as usize);
-            // Almost always the first macro block, except when non exists (i.e. `width == 0`)
-            self.left = self.top.first().copied().unwrap_or_default();
-
-            self.mbwidth = self.frame.width.div_ceil(16);
-            self.mbheight = self.frame.height.div_ceil(16);
-
-            self.frame.ybuf =
-                vec![0u8; usize::from(self.mbwidth) * 16 * usize::from(self.mbheight) * 16];
-            self.frame.ubuf =
-                vec![0u8; usize::from(self.mbwidth) * 8 * usize::from(self.mbheight) * 8];
-            self.frame.vbuf =
-                vec![0u8; usize::from(self.mbwidth) * 8 * usize::from(self.mbheight) * 8];
-
-            self.top_border_y = vec![127u8; self.frame.width as usize + 4 + 16];
-            self.left_border_y = vec![129u8; 1 + 16];
-
-            // 8 pixels per macroblock
-            self.top_border_u = vec![127u8; 8 * self.mbwidth as usize];
-            self.left_border_u = vec![129u8; 1 + 8];
-
-            self.top_border_v = vec![127u8; 8 * self.mbwidth as usize];
-            self.left_border_v = vec![129u8; 1 + 8];
+        if tag != [0x9d, 0x01, 0x2a] {
+            return Err(DecodingError::Vp8MagicInvalid(tag));
         }
+
+        let w = self.r.read_u16::<LittleEndian>()?;
+        let h = self.r.read_u16::<LittleEndian>()?;
+
+        self.frame.width = w & 0x3FFF;
+        self.frame.height = h & 0x3FFF;
+
+        self.top = init_top_macroblocks(self.frame.width as usize);
+        // Almost always the first macro block, except when non exists (i.e. `width == 0`)
+        self.left = self.top.first().copied().unwrap_or_default();
+
+        self.mbwidth = self.frame.width.div_ceil(16);
+        self.mbheight = self.frame.height.div_ceil(16);
+
+        self.frame.ybuf =
+            vec![0u8; usize::from(self.mbwidth) * 16 * usize::from(self.mbheight) * 16];
+        self.frame.ubuf = vec![0u8; usize::from(self.mbwidth) * 8 * usize::from(self.mbheight) * 8];
+        self.frame.vbuf = vec![0u8; usize::from(self.mbwidth) * 8 * usize::from(self.mbheight) * 8];
+
+        self.top_border_y = vec![127u8; self.frame.width as usize + 4 + 16];
+        self.left_border_y = vec![129u8; 1 + 16];
+
+        // 8 pixels per macroblock
+        self.top_border_u = vec![127u8; 8 * self.mbwidth as usize];
+        self.left_border_u = vec![129u8; 1 + 8];
+
+        self.top_border_v = vec![127u8; 8 * self.mbwidth as usize];
+        self.left_border_v = vec![129u8; 1 + 8];
 
         let size = first_partition_size as usize;
         let mut buf = vec![[0; 4]; size.div_ceil(4)];
@@ -567,13 +560,11 @@ impl<R: Read> Vp8Decoder<R> {
         self.b.init(buf, size)?;
 
         let mut res = self.b.start_accumulated_result();
-        if self.frame.keyframe {
-            let color_space = self.b.read_literal(1).or_accumulate(&mut res);
-            self.frame.pixel_type = self.b.read_literal(1).or_accumulate(&mut res);
+        let color_space = self.b.read_literal(1).or_accumulate(&mut res);
+        self.frame.pixel_type = self.b.read_literal(1).or_accumulate(&mut res);
 
-            if color_space != 0 {
-                return Err(DecodingError::ColorSpaceInvalid(color_space));
-            }
+        if color_space != 0 {
+            return Err(DecodingError::ColorSpaceInvalid(color_space));
         }
 
         self.segments_enabled = self.b.read_flag().or_accumulate(&mut res);
@@ -598,14 +589,6 @@ impl<R: Read> Vp8Decoder<R> {
 
         self.read_quantization_indices()?;
 
-        if !self.frame.keyframe {
-            // 9.7 refresh golden frame and altref frame
-            // FIXME: support this?
-            return Err(DecodingError::UnsupportedFeature(
-                "Non-keyframe frames".to_owned(),
-            ));
-        }
-
         // Refresh entropy probs ?????
         let _ = self.b.read_literal(1);
 
@@ -619,19 +602,6 @@ impl<R: Read> Vp8Decoder<R> {
             None
         };
         self.b.check(res, ())?;
-
-        if !self.frame.keyframe {
-            // 9.10 remaining frame data
-            self.prob_intra = 0;
-
-            // FIXME: support this?
-            return Err(DecodingError::UnsupportedFeature(
-                "Non-keyframe frames".to_owned(),
-            ));
-        } else {
-            // Reset motion vectors
-        }
-
         Ok(())
     }
 
@@ -650,56 +620,42 @@ impl<R: Read> Vp8Decoder<R> {
             false
         };
 
-        let inter_predicted = if !self.frame.keyframe {
-            self.b.read_bool(self.prob_intra).or_accumulate(&mut res)
-        } else {
-            false
-        };
+        // intra prediction
+        let luma = (self.b.read_with_tree(&KEYFRAME_YMODE_NODES)).or_accumulate(&mut res);
+        mb.luma_mode =
+            LumaMode::from_i8(luma).ok_or(DecodingError::LumaPredictionModeInvalid(luma))?;
 
-        if inter_predicted {
-            return Err(DecodingError::UnsupportedFeature(
-                "VP8 inter-prediction".to_owned(),
-            ));
-        }
+        match mb.luma_mode.into_intra() {
+            // `LumaMode::B` - This is predicted individually
+            None => {
+                for y in 0usize..4 {
+                    for x in 0usize..4 {
+                        let top = self.top[mbx].bpred[12 + x];
+                        let left = self.left.bpred[y];
+                        let intra = self.b.read_with_tree(
+                            &KEYFRAME_BPRED_MODE_NODES[top as usize][left as usize],
+                        );
+                        let intra = intra.or_accumulate(&mut res);
+                        let bmode = IntraMode::from_i8(intra)
+                            .ok_or(DecodingError::IntraPredictionModeInvalid(intra))?;
+                        mb.bpred[x + y * 4] = bmode;
 
-        if self.frame.keyframe {
-            // intra prediction
-            let luma = (self.b.read_with_tree(&KEYFRAME_YMODE_NODES)).or_accumulate(&mut res);
-            mb.luma_mode =
-                LumaMode::from_i8(luma).ok_or(DecodingError::LumaPredictionModeInvalid(luma))?;
-
-            match mb.luma_mode.into_intra() {
-                // `LumaMode::B` - This is predicted individually
-                None => {
-                    for y in 0usize..4 {
-                        for x in 0usize..4 {
-                            let top = self.top[mbx].bpred[12 + x];
-                            let left = self.left.bpred[y];
-                            let intra = self.b.read_with_tree(
-                                &KEYFRAME_BPRED_MODE_NODES[top as usize][left as usize],
-                            );
-                            let intra = intra.or_accumulate(&mut res);
-                            let bmode = IntraMode::from_i8(intra)
-                                .ok_or(DecodingError::IntraPredictionModeInvalid(intra))?;
-                            mb.bpred[x + y * 4] = bmode;
-
-                            self.top[mbx].bpred[12 + x] = bmode;
-                            self.left.bpred[y] = bmode;
-                        }
-                    }
-                }
-                Some(mode) => {
-                    for i in 0usize..4 {
-                        mb.bpred[12 + i] = mode;
-                        self.left.bpred[i] = mode;
+                        self.top[mbx].bpred[12 + x] = bmode;
+                        self.left.bpred[y] = bmode;
                     }
                 }
             }
-
-            let chroma = (self.b.read_with_tree(&KEYFRAME_UV_MODE_NODES)).or_accumulate(&mut res);
-            mb.chroma_mode = ChromaMode::from_i8(chroma)
-                .ok_or(DecodingError::ChromaPredictionModeInvalid(chroma))?;
+            Some(mode) => {
+                for i in 0usize..4 {
+                    mb.bpred[12 + i] = mode;
+                    self.left.bpred[i] = mode;
+                }
+            }
         }
+
+        let chroma = (self.b.read_with_tree(&KEYFRAME_UV_MODE_NODES)).or_accumulate(&mut res);
+        mb.chroma_mode = ChromaMode::from_i8(chroma)
+            .ok_or(DecodingError::ChromaPredictionModeInvalid(chroma))?;
 
         self.top[mbx].chroma_mode = mb.chroma_mode;
         self.top[mbx].luma_mode = mb.luma_mode;
@@ -1269,25 +1225,14 @@ impl<R: Read> Vp8Decoder<R> {
             interior_limit = 1;
         }
 
-        //high edge variance threshold
-        let mut hev_threshold = 0;
-
-        #[allow(clippy::collapsible_else_if)]
-        if self.frame.keyframe {
-            if filter_level >= 40 {
-                hev_threshold = 2;
-            } else if filter_level >= 15 {
-                hev_threshold = 1;
-            }
+        // high edge variance threshold
+        let hev_threshold = if filter_level >= 40 {
+            2
+        } else if filter_level >= 15 {
+            1
         } else {
-            if filter_level >= 40 {
-                hev_threshold = 3;
-            } else if filter_level >= 20 {
-                hev_threshold = 2;
-            } else if filter_level >= 15 {
-                hev_threshold = 1;
-            }
-        }
+            0
+        };
 
         (filter_level, interior_limit, hev_threshold)
     }

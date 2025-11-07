@@ -148,24 +148,20 @@ impl<W: Write> Vp8Encoder<W> {
         &mut self,
         partition_size: u32,
     ) -> Result<(), EncodingError> {
-        let keyframe = self.frame.keyframe;
         let version = u32::from(self.frame.version);
         let for_display = if self.frame.for_display { 1 } else { 0 };
 
-        let keyframe_bit = if keyframe { 0 } else { 1 };
-
+        let keyframe_bit = 0;
         let tag = (partition_size << 5) | (for_display << 4) | (version << 1) | (keyframe_bit);
         self.writer.write_u24::<LittleEndian>(tag)?;
 
-        if keyframe {
-            let magic_bytes_buffer: [u8; 3] = [0x9d, 0x01, 0x2a];
-            self.writer.write_all(&magic_bytes_buffer)?;
+        let magic_bytes_buffer: [u8; 3] = [0x9d, 0x01, 0x2a];
+        self.writer.write_all(&magic_bytes_buffer)?;
 
-            let width = self.frame.width & 0x3FFF;
-            let height = self.frame.height & 0x3FFF;
-            self.writer.write_u16::<LittleEndian>(width)?;
-            self.writer.write_u16::<LittleEndian>(height)?;
-        }
+        let width = self.frame.width & 0x3FFF;
+        let height = self.frame.height & 0x3FFF;
+        self.writer.write_u16::<LittleEndian>(width)?;
+        self.writer.write_u16::<LittleEndian>(height)?;
 
         Ok(())
     }
@@ -737,7 +733,6 @@ impl<W: Write> Vp8Encoder<W> {
             ubuf: u_buf,
             vbuf: v_buf,
 
-            keyframe: true,
             version: 0,
 
             for_display: true,
