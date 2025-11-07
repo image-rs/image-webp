@@ -529,12 +529,12 @@ impl<R: Read> Vp8Decoder<R> {
         self.frame.width = w & 0x3FFF;
         self.frame.height = h & 0x3FFF;
 
-        self.top = init_top_macroblocks(self.frame.width as usize);
-        // Almost always the first macro block, except when non exists (i.e. `width == 0`)
-        self.left = self.top.first().copied().unwrap_or_default();
-
         self.mbwidth = self.frame.width.div_ceil(16);
         self.mbheight = self.frame.height.div_ceil(16);
+
+        self.top = vec![MacroBlock::default(); self.mbwidth.into()];
+        // Almost always the first macro block, except when non exists (i.e. `width == 0`)
+        self.left = self.top.first().copied().unwrap_or_default();
 
         self.frame.ybuf =
             vec![0u8; usize::from(self.mbwidth) * 16 * usize::from(self.mbheight) * 16];
@@ -1289,19 +1289,6 @@ impl<R: Read> Vp8Decoder<R> {
 
         Ok(self.frame)
     }
-}
-
-fn init_top_macroblocks(width: usize) -> Vec<MacroBlock> {
-    let mb_width = width.div_ceil(16);
-
-    let mb = MacroBlock {
-        // Section 11.3 #3
-        bpred: [IntraMode::DC; 16],
-        luma_mode: LumaMode::DC,
-        ..MacroBlock::default()
-    };
-
-    vec![mb; mb_width]
 }
 
 // set border
