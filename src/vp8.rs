@@ -852,7 +852,7 @@ impl<R: Read> Vp8Decoder<R> {
                 2
             };
 
-            if decoder.read_flag().or_accumulate(&mut res) {
+            if decoder.read_sign().or_accumulate(&mut res) {
                 abs_value = -abs_value;
             }
 
