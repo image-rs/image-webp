@@ -117,12 +117,20 @@ const COEFF_PROB_NODES: TokenProbTreeNodes = {
 #[derive(Default, Clone, Copy)]
 struct MacroBlock {
     bpred: [IntraMode; 16],
-    complexity: [u8; 9],
     luma_mode: LumaMode,
     chroma_mode: ChromaMode,
     segmentid: u8,
     coeffs_skipped: bool,
     non_zero_dct: bool,
+}
+
+/// Info required from a previously decoded macro block in future
+/// For the top macroblocks this will be the bottom values, for the left macroblock the right values
+#[derive(Default, Clone, Copy)]
+struct PreviousMacroBlock {
+    bpred: [IntraMode; 4],
+    // complexity is laid out like: y2,y,y,y,y,u,u,v,v
+    complexity: [u8; 9],
 }
 
 /// A Representation of the last decoded video frame
@@ -269,8 +277,8 @@ pub struct Vp8Decoder<R> {
     // Section 9.11
     prob_skip_false: Option<Prob>,
 
-    top: Vec<MacroBlock>,
-    left: MacroBlock,
+    top: Vec<PreviousMacroBlock>,
+    left: PreviousMacroBlock,
 
     // The borders from the previous macroblock, used for predictions
     // See Section 12
@@ -291,7 +299,6 @@ impl<R: Read> Vp8Decoder<R> {
     fn new(r: R) -> Self {
         let f = Frame::default();
         let s = Segment::default();
-        let m = MacroBlock::default();
 
         Self {
             r,
@@ -330,7 +337,7 @@ impl<R: Read> Vp8Decoder<R> {
             prob_skip_false: None,
 
             top: Vec::new(),
-            left: m,
+            left: PreviousMacroBlock::default(),
 
             top_border_y: Vec::new(),
             left_border_y: Vec::new(),
@@ -529,12 +536,12 @@ impl<R: Read> Vp8Decoder<R> {
         self.frame.width = w & 0x3FFF;
         self.frame.height = h & 0x3FFF;
 
-        self.top = init_top_macroblocks(self.frame.width as usize);
-        // Almost always the first macro block, except when non exists (i.e. `width == 0`)
-        self.left = self.top.first().copied().unwrap_or_default();
-
         self.mbwidth = self.frame.width.div_ceil(16);
         self.mbheight = self.frame.height.div_ceil(16);
+
+        // defaults are intra mode DC and complexity 0
+        self.top = vec![PreviousMacroBlock::default(); self.mbwidth.into()];
+        self.left = PreviousMacroBlock::default();
 
         self.frame.ybuf =
             vec![0u8; usize::from(self.mbwidth) * 16 * usize::from(self.mbheight) * 16];
@@ -630,7 +637,7 @@ impl<R: Read> Vp8Decoder<R> {
             None => {
                 for y in 0usize..4 {
                     for x in 0usize..4 {
-                        let top = self.top[mbx].bpred[12 + x];
+                        let top = self.top[mbx].bpred[x];
                         let left = self.left.bpred[y];
                         let intra = self.b.read_with_tree(
                             &KEYFRAME_BPRED_MODE_NODES[top as usize][left as usize],
@@ -640,7 +647,7 @@ impl<R: Read> Vp8Decoder<R> {
                             .ok_or(DecodingError::IntraPredictionModeInvalid(intra))?;
                         mb.bpred[x + y * 4] = bmode;
 
-                        self.top[mbx].bpred[12 + x] = bmode;
+                        self.top[mbx].bpred[x] = bmode;
                         self.left.bpred[y] = bmode;
                     }
                 }
@@ -657,9 +664,8 @@ impl<R: Read> Vp8Decoder<R> {
         mb.chroma_mode = ChromaMode::from_i8(chroma)
             .ok_or(DecodingError::ChromaPredictionModeInvalid(chroma))?;
 
-        self.top[mbx].chroma_mode = mb.chroma_mode;
-        self.top[mbx].luma_mode = mb.luma_mode;
-        self.top[mbx].bpred = mb.bpred;
+        // top should store the bottom of the current bpred, which is the final 4 values
+        self.top[mbx].bpred = mb.bpred[12..].try_into().unwrap();
 
         self.b.check(res, mb)
     }
@@ -1248,7 +1254,7 @@ impl<R: Read> Vp8Decoder<R> {
 
         for mby in 0..self.mbheight as usize {
             let p = mby % self.num_partitions as usize;
-            self.left = MacroBlock::default();
+            self.left = PreviousMacroBlock::default();
 
             for mbx in 0..self.mbwidth as usize {
                 let mut mb = self.read_macroblock_header(mbx)?;
@@ -1289,19 +1295,6 @@ impl<R: Read> Vp8Decoder<R> {
 
         Ok(self.frame)
     }
-}
-
-fn init_top_macroblocks(width: usize) -> Vec<MacroBlock> {
-    let mb_width = width.div_ceil(16);
-
-    let mb = MacroBlock {
-        // Section 11.3 #3
-        bpred: [IntraMode::DC; 16],
-        luma_mode: LumaMode::DC,
-        ..MacroBlock::default()
-    };
-
-    vec![mb; mb_width]
 }
 
 // set border
