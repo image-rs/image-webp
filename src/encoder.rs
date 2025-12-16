@@ -391,6 +391,7 @@ fn encode_frame_lossless<W: Write>(
     height: u32,
     color: ColorType,
     params: EncoderParams,
+    implicit_dimensions: bool,
 ) -> Result<(), EncodingError> {
     let w = &mut BitWriter {
         writer,
@@ -414,13 +415,14 @@ fn encode_frame_lossless<W: Write>(
         return Err(EncodingError::InvalidDimensions);
     }
 
-    w.write_bits(0x2f, 8)?; // signature
-    w.write_bits(u64::from(width) - 1, 14)?;
-    w.write_bits(u64::from(height) - 1, 14)?;
+    if !implicit_dimensions {
+        w.write_bits(0x2f, 8)?; // signature
+        w.write_bits(u64::from(width) - 1, 14)?;
+        w.write_bits(u64::from(height) - 1, 14)?;
 
-    w.write_bits(u64::from(is_alpha), 1)?; // alpha used
-    w.write_bits(0x0, 3)?; // version
-
+        w.write_bits(u64::from(is_alpha), 1)?; // alpha used
+        w.write_bits(0x0, 3)?; // version
+    }
     // subtract green transform
     w.write_bits(0b101, 3)?;
 
@@ -634,23 +636,33 @@ fn encode_alpha_lossless<W: Write>(
 
     let preprocessing = 0u8;
     let filtering_method = 0u8;
-    let compression_method = 0u8;
+    // 0 is raw alpha data
+    // 1 is using the lossless format to encode alpha data
+    let compression_method = 1u8;
 
     let initial_byte = preprocessing << 4 | filtering_method << 2 | compression_method;
 
     writer.write_all(&[initial_byte])?;
 
     // uncompressed raw alpha data
-    let alpha_data: Vec<u8> = data
+    let alpha_data = data
         .iter()
         .skip(bytes_per_pixel - 1)
-        .step_by(bytes_per_pixel)
-        .copied()
-        .collect();
+        .step_by(bytes_per_pixel);
 
-    debug_assert_eq!(alpha_data.len(), (width * height) as usize);
+    // convert to rgba for compressing
+    let alpha_as_green: Vec<u8> = alpha_data.flat_map(|a| [0, *a, 0, 0]).collect();
+    encode_frame_lossless(
+        writer,
+        &alpha_as_green,
+        width,
+        height,
+        ColorType::Rgba8,
+        EncoderParams::default(),
+        true,
+    )?;
 
-    writer.write_all(&alpha_data)?;
+    debug_assert_eq!(alpha_as_green.len(), (width * height * 4) as usize);
 
     Ok(())
 }
@@ -745,7 +757,7 @@ impl<W: Write> WebPEncoder<W> {
             )?;
             b"VP8 "
         } else {
-            encode_frame_lossless(&mut frame, data, width, height, color, self.params)?;
+            encode_frame_lossless(&mut frame, data, width, height, color, self.params, false)?;
             b"VP8L"
         };
 
