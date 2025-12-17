@@ -645,24 +645,24 @@ fn encode_alpha_lossless<W: Write>(
     writer.write_all(&[initial_byte])?;
 
     // uncompressed raw alpha data
-    let alpha_data = data
+    let alpha_data: Vec<u8> = data
         .iter()
         .skip(bytes_per_pixel - 1)
-        .step_by(bytes_per_pixel);
+        .step_by(bytes_per_pixel)
+        .copied()
+        .collect();
 
-    // convert to rgba for compressing
-    let alpha_as_green: Vec<u8> = alpha_data.flat_map(|a| [0, *a, 0, 0]).collect();
+    debug_assert_eq!(alpha_data.len(), (width * height) as usize);
+
     encode_frame_lossless(
         writer,
-        &alpha_as_green,
+        &alpha_data,
         width,
         height,
-        ColorType::Rgba8,
+        ColorType::L8,
         EncoderParams::default(),
         true,
     )?;
-
-    debug_assert_eq!(alpha_as_green.len(), (width * height * 4) as usize);
 
     Ok(())
 }
