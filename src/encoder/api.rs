@@ -64,6 +64,10 @@ pub enum EncodeError {
         /// Maximum allowed size (524,287).
         max: u32,
     },
+
+    /// Unsupported codec operation.
+    #[error(transparent)]
+    UnsupportedOperation(#[from] zencodec_types::UnsupportedOperation),
 }
 
 /// Result type alias using `At<EncodeError>` for automatic location tracking.
