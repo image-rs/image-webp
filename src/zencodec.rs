@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use zencodec_types::{
     CodecCapabilities, DecodeFrame, DecodeOutput, EncodeOutput, ImageFormat, ImageInfo,
-    ImageMetadata, PixelData, PixelDescriptor, PixelSlice, PixelSliceMut, ResourceLimits, Stop,
+    MetadataView, PixelData, PixelDescriptor, PixelSlice, PixelSliceMut, ResourceLimits, Stop,
 };
 
 use crate::encoder::config::EncoderConfig;
@@ -309,7 +309,7 @@ impl<'a> zencodec_types::EncodeJob<'a> for WebpEncodeJob<'a> {
         self
     }
 
-    fn with_metadata(mut self, meta: &'a ImageMetadata<'a>) -> Self {
+    fn with_metadata(mut self, meta: &'a MetadataView<'a>) -> Self {
         if let Some(icc) = meta.icc_profile {
             self.icc = Some(icc);
         }
