@@ -29,8 +29,8 @@ linear-srgb = "0.5.5"
 yuv = { version = "0.8", optional = true }
 png = { version = "0.18", optional = true }
 webp = { version = "0.3.0", optional = true }
-archmage = { version = "0.8.4", optional = true }
-magetypes = { version = "0.8.4", optional = true }
+archmage = { version = "0.8.6", optional = true }
+magetypes = { version = "0.8.6", optional = true }
 safe_unaligned_simd = { version = "0.2.4", optional = true }
 multiversed = { version = "0.3", optional = true }
 multiversion = { version = "0.8.0", optional = true }
@@ -38,7 +38,7 @@ rgb = { version = "0.8", optional = true, default-features = false, features = [
 imgref = { version = "1.12", optional = true, default-features = false }
 
 [dev-dependencies]
-archmage = { version = "0.8.4", features = ["std"] }
+archmage = { version = "0.8.6", features = ["std"] }
 paste = "1.0.14"
 png = "0.18"
 rand = "0.8.5"
