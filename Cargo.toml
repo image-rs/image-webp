@@ -92,6 +92,11 @@ _profiling = ["dep:png", "dep:webp"]
 _wasm_profiling = ["std"]
 
 [[bin]]
+name = "zenwebp-encode"
+path = "src/bin/zenwebp_encode.rs"
+required-features = ["_profiling"]
+
+[[bin]]
 name = "profile_encode"
 path = "benches/profile_encode.rs"
 required-features = ["_profiling"]
