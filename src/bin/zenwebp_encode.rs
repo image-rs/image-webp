@@ -43,11 +43,19 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--quality" => {
-                quality = args.get(i + 1).expect("--quality needs a value").parse().expect("invalid quality");
+                quality = args
+                    .get(i + 1)
+                    .expect("--quality needs a value")
+                    .parse()
+                    .expect("invalid quality");
                 i += 2;
             }
             "--method" => {
-                method = args.get(i + 1).expect("--method needs a value").parse().expect("invalid method");
+                method = args
+                    .get(i + 1)
+                    .expect("--method needs a value")
+                    .parse()
+                    .expect("invalid method");
                 i += 2;
             }
             "--lossless" => {

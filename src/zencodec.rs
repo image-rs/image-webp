@@ -9,12 +9,15 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use zencodec_types::{
-    CodecCapabilities, DecodeFrame, DecodeOutput, EncodeOutput, ImageFormat, ImageInfo,
-    MetadataView, PixelData, PixelDescriptor, PixelSlice, PixelSliceMut, ResourceLimits, Stop,
+    CodecCapabilities, DecodeFrame, DecodeOutput, EncodeFrame, EncodeOutput, FrameBlend,
+    FrameDisposal, ImageFormat, ImageInfo, MetadataView, PixelData, PixelDescriptor, PixelSlice,
+    PixelSliceMut, ResourceLimits, Stop,
 };
 
 use crate::encoder::config::EncoderConfig;
-use crate::mux::{AnimationConfig, AnimationDecoder, AnimationEncoder, MuxError};
+use crate::mux::{
+    AnimationConfig, AnimationDecoder, AnimationEncoder, BlendMethod, DisposeMethod, MuxError,
+};
 use crate::{DecodeConfig, DecodeError, DecodeRequest, EncodeError, EncodeRequest, PixelLayout};
 
 // ── Encoding ────────────────────────────────────────────────────────────────
@@ -160,6 +163,8 @@ static ENCODE_CAPS: CodecCapabilities = CodecCapabilities::new()
     .with_encode_xmp(true)
     .with_encode_cancel(true)
     .with_lossless(true)
+    .with_lossy(true)
+    .with_native_alpha(true)
     .with_effort_range(0, 10)
     .with_quality_range(0.0, 100.0)
     .with_encode_animation(true);
@@ -554,6 +559,59 @@ impl zencodec_types::FrameEncoder for WebpFrameEncoder<'_> {
         Ok(())
     }
 
+    fn push_encode_frame(&mut self, frame: EncodeFrame<'_>) -> Result<(), EncodeError> {
+        if let Some(stop) = self.stop {
+            stop.check().map_err(EncodeError::Cancelled)?;
+        }
+        let (buf, layout, w, h) = pixels_to_webp_input(&frame.pixels)?;
+
+        // Initialize the animation encoder lazily on first frame
+        if self.anim_enc.is_none() {
+            let config = AnimationConfig::default();
+            let enc = AnimationEncoder::new(w, h, config).map_err(mux_to_encode_err)?;
+            self.anim_enc = Some(enc);
+        }
+
+        // Map blend/disposal from zencodec-types to zenwebp types
+        let dispose = match frame.disposal {
+            FrameDisposal::None => DisposeMethod::None,
+            FrameDisposal::RestoreBackground => DisposeMethod::Background,
+            // WebP only supports None/Background; RestorePrevious maps to None
+            FrameDisposal::RestorePrevious => DisposeMethod::None,
+            _ => DisposeMethod::None,
+        };
+        let blend = match frame.blend {
+            FrameBlend::Source => BlendMethod::Overwrite,
+            FrameBlend::Over => BlendMethod::AlphaBlend,
+            _ => BlendMethod::Overwrite,
+        };
+
+        // Use frame_rect for sub-canvas positioning, or full canvas
+        let (frame_w, frame_h, x_off, y_off) = if let Some([x, y, fw, fh]) = frame.frame_rect {
+            (fw, fh, x, y)
+        } else {
+            (w, h, 0, 0)
+        };
+
+        let timestamp_ms = self.cumulative_ms;
+        let enc = self.anim_enc.as_mut().unwrap();
+        enc.add_frame_advanced(
+            &buf,
+            layout,
+            frame_w,
+            frame_h,
+            x_off,
+            y_off,
+            timestamp_ms,
+            &self.inner_config,
+            dispose,
+            blend,
+        )
+        .map_err(mux_to_encode_err)?;
+        self.cumulative_ms = self.cumulative_ms.saturating_add(frame.duration_ms);
+        Ok(())
+    }
+
     fn begin_frame(&mut self, _duration_ms: u32) -> Result<(), EncodeError> {
         Err(EncodeError::InvalidBufferSize(
             "WebP animation does not support row-level frame building".into(),
@@ -661,7 +719,12 @@ static DECODE_CAPS: CodecCapabilities = CodecCapabilities::new()
     .with_decode_xmp(true)
     .with_decode_cancel(true)
     .with_cheap_probe(true)
-    .with_decode_animation(true);
+    .with_decode_animation(true)
+    .with_native_alpha(true)
+    .with_decode_into(true)
+    .with_enforces_max_pixels(true)
+    .with_enforces_max_memory(true)
+    .with_enforces_max_file_size(true);
 
 static DECODE_DESCRIPTORS: &[PixelDescriptor] =
     &[PixelDescriptor::RGB8_SRGB, PixelDescriptor::RGBA8_SRGB];
