@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use rgb::{Gray, Rgb, Rgba};
 use zencodec_types::{
     DecodeFrame, DecodeOutput, EncodeOutput, ImageFormat, ImageInfo, MetadataView, OutputInfo,
-    PixelData, PixelDescriptor, PixelSlice, PixelSliceMut, ResourceLimits, Stop,
+    PixelBuffer, PixelDescriptor, PixelSlice, PixelSliceMut, ResourceLimits, Stop,
 };
 // Import trait names as _ to avoid conflict with crate-internal names.
 use zencodec_types::DecodeJob as _;
@@ -1171,11 +1171,11 @@ impl<'a> zencodec_types::DecodeJob<'a> for WebpDecodeJob<'a> {
         // Eagerly decode all frames (required because AnimationDecoder borrows data)
         let mut frames = Vec::new();
         while let Some(frame) = anim.next_frame()? {
-            let w = frame.width as usize;
-            let h = frame.height as usize;
             let rgba = bytes_to_rgba(&frame.data);
-            let img = zencodec_types::ImgVec::new(rgba, w, h);
-            frames.push((PixelData::Rgba8(img), frame.duration_ms));
+            let buf = PixelBuffer::from_pixels(rgba, frame.width, frame.height)
+                .map_err(|_| DecodeError::InvalidParameter("frame size mismatch".into()))?
+                .with_descriptor(PixelDescriptor::RGBA8_SRGB);
+            frames.push((buf.into(), frame.duration_ms));
         }
 
         Ok(WebpFrameDecoder {
@@ -1273,10 +1273,11 @@ impl WebpDecoder<'_> {
             // Decode as RGBA, swizzle to BGRA
             let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
-            let src = to_rgba8(pixels);
+            let src = pixels.to_rgba8();
+            let src = src.as_imgref();
             let row_bytes = w as usize * 4;
             for y in 0..h {
-                let src_row = &src.as_ref().rows().nth(y as usize).unwrap();
+                let src_row = &src.buf()[y as usize * src.stride()..][..src.width()];
                 let dst_row = &mut dst.row_mut(y)[..row_bytes];
                 for (i, px) in src_row.iter().enumerate() {
                     let off = i * 4;
@@ -1290,9 +1291,10 @@ impl WebpDecoder<'_> {
             // Decode as RGB, convert to luma
             let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
-            let src = to_rgb8(pixels);
+            let src = pixels.to_rgb8();
+            let src = src.as_imgref();
             for y in 0..h {
-                let src_row = src.as_ref().rows().nth(y as usize).unwrap();
+                let src_row = &src.buf()[y as usize * src.stride()..][..src.width()];
                 let dst_row = &mut dst.row_mut(y)[..w as usize];
                 for (i, px) in src_row.iter().enumerate() {
                     // ITU-R BT.601 luma
@@ -1305,10 +1307,11 @@ impl WebpDecoder<'_> {
             use linear_srgb::default::srgb_u8_to_linear;
             let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
-            let src = to_rgb8(pixels);
+            let src = pixels.to_rgb8();
+            let src = src.as_imgref();
             let row_bytes = w as usize * 12;
             for y in 0..h {
-                let src_row = src.as_ref().rows().nth(y as usize).unwrap();
+                let src_row = &src.buf()[y as usize * src.stride()..][..src.width()];
                 let dst_row = &mut dst.row_mut(y)[..row_bytes];
                 for (i, px) in src_row.iter().enumerate() {
                     let off = i * 12;
@@ -1323,10 +1326,11 @@ impl WebpDecoder<'_> {
             use linear_srgb::default::srgb_u8_to_linear;
             let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
-            let src = to_rgba8(pixels);
+            let src = pixels.to_rgba8();
+            let src = src.as_imgref();
             let row_bytes = w as usize * 16;
             for y in 0..h {
-                let src_row = src.as_ref().rows().nth(y as usize).unwrap();
+                let src_row = &src.buf()[y as usize * src.stride()..][..src.width()];
                 let dst_row = &mut dst.row_mut(y)[..row_bytes];
                 for (i, px) in src_row.iter().enumerate() {
                     let off = i * 16;
@@ -1343,10 +1347,11 @@ impl WebpDecoder<'_> {
             use linear_srgb::default::srgb_u8_to_linear;
             let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
-            let src = to_rgb8(pixels);
+            let src = pixels.to_rgb8();
+            let src = src.as_imgref();
             let row_bytes = w as usize * 4;
             for y in 0..h {
-                let src_row = src.as_ref().rows().nth(y as usize).unwrap();
+                let src_row = &src.buf()[y as usize * src.stride()..][..src.width()];
                 let dst_row = &mut dst.row_mut(y)[..row_bytes];
                 for (i, px) in src_row.iter().enumerate() {
                     let r = srgb_u8_to_linear(px.r);
@@ -1389,17 +1394,21 @@ impl WebpDecoder<'_> {
         }
 
         let (pixels, w, h, layout) = req.decode()?;
-        let w_usize = w as usize;
-        let h_usize = h as usize;
 
-        let pixel_data = match layout {
+        let (buf, has_alpha): (PixelBuffer, bool) = match layout {
             PixelLayout::Rgb8 => {
                 let rgb = bytes_to_rgb(&pixels);
-                PixelData::Rgb8(zencodec_types::ImgVec::new(rgb, w_usize, h_usize))
+                let pb = PixelBuffer::from_pixels(rgb, w, h)
+                    .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?
+                    .with_descriptor(PixelDescriptor::RGB8_SRGB);
+                (pb.into(), false)
             }
             PixelLayout::Rgba8 => {
                 let rgba = bytes_to_rgba(&pixels);
-                PixelData::Rgba8(zencodec_types::ImgVec::new(rgba, w_usize, h_usize))
+                let pb = PixelBuffer::from_pixels(rgba, w, h)
+                    .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?
+                    .with_descriptor(PixelDescriptor::RGBA8_SRGB);
+                (pb.into(), true)
             }
             _ => {
                 // Fallback: decode as RGBA
@@ -1410,7 +1419,10 @@ impl WebpDecoder<'_> {
                     rgba_req.decode_rgba()?
                 };
                 let rgba = bytes_to_rgba(&rgba_pixels);
-                PixelData::Rgba8(zencodec_types::ImgVec::new(rgba, rw as usize, rh as usize))
+                let pb = PixelBuffer::from_pixels(rgba, rw, rh)
+                    .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?
+                    .with_descriptor(PixelDescriptor::RGBA8_SRGB);
+                (pb.into(), true)
             }
         };
 
@@ -1418,101 +1430,21 @@ impl WebpDecoder<'_> {
         let info = if let Some(ref ni) = native_info {
             to_image_info(ni)
         } else {
-            ImageInfo::new(w, h, ImageFormat::WebP).with_alpha(pixel_data.has_alpha())
+            ImageInfo::new(w, h, ImageFormat::WebP).with_alpha(has_alpha)
         };
 
-        Ok(DecodeOutput::new(pixel_data, info))
-    }
-}
-
-fn to_rgb8(pixels: PixelData) -> zencodec_types::ImgVec<Rgb<u8>> {
-    match pixels {
-        PixelData::Rgb8(img) => img,
-        PixelData::Rgba8(img) => {
-            let w = img.width();
-            let h = img.height();
-            let buf: Vec<Rgb<u8>> = img
-                .into_buf()
-                .into_iter()
-                .map(|p| Rgb {
-                    r: p.r,
-                    g: p.g,
-                    b: p.b,
-                })
-                .collect();
-            zencodec_types::ImgVec::new(buf, w, h)
-        }
-        other => unreachable!("WebP decoder produced unexpected format: {other:?}"),
-    }
-}
-
-fn to_rgba8(pixels: PixelData) -> zencodec_types::ImgVec<Rgba<u8>> {
-    match pixels {
-        PixelData::Rgba8(img) => img,
-        PixelData::Rgb8(img) => {
-            let w = img.width();
-            let h = img.height();
-            let buf: Vec<Rgba<u8>> = img
-                .into_buf()
-                .into_iter()
-                .map(|p| Rgba {
-                    r: p.r,
-                    g: p.g,
-                    b: p.b,
-                    a: 255,
-                })
-                .collect();
-            zencodec_types::ImgVec::new(buf, w, h)
-        }
-        other => unreachable!("WebP decoder produced unexpected format: {other:?}"),
-    }
-}
-
-/// Convert PixelData to BGRA8 by swapping R and B channels.
-fn to_bgra8(pixels: PixelData) -> PixelData {
-    match pixels {
-        PixelData::Rgba8(img) => {
-            let w = img.width();
-            let h = img.height();
-            let buf: Vec<rgb::Bgra<u8>> = img
-                .into_buf()
-                .into_iter()
-                .map(|p| rgb::Bgra {
-                    b: p.b,
-                    g: p.g,
-                    r: p.r,
-                    a: p.a,
-                })
-                .collect();
-            PixelData::Bgra8(zencodec_types::ImgVec::new(buf, w, h))
-        }
-        PixelData::Rgb8(img) => {
-            let w = img.width();
-            let h = img.height();
-            let buf: Vec<rgb::Bgra<u8>> = img
-                .into_buf()
-                .into_iter()
-                .map(|p| rgb::Bgra {
-                    b: p.b,
-                    g: p.g,
-                    r: p.r,
-                    a: 255,
-                })
-                .collect();
-            PixelData::Bgra8(zencodec_types::ImgVec::new(buf, w, h))
-        }
-        other => other,
+        Ok(DecodeOutput::new(buf, info))
     }
 }
 
 /// Apply preferred format negotiation to decoded output.
-fn negotiate_format(pixels: PixelData, preferred: &[PixelDescriptor]) -> PixelData {
+fn negotiate_format(pixels: PixelBuffer, preferred: &[PixelDescriptor]) -> PixelBuffer {
     if preferred.is_empty() {
         return pixels;
     }
     // Check if any preferred descriptor is BGRA.
     if preferred.contains(&PixelDescriptor::BGRA8_SRGB) {
-        return to_bgra8(pixels);
+        return pixels.to_bgra8().into();
     }
     pixels
 }
@@ -1542,7 +1474,7 @@ impl zencodec_types::Decode for WebpDecoder<'_> {
 /// Pre-decodes all frames eagerly (required because the underlying
 /// [`AnimationDecoder`] borrows the input data).
 pub struct WebpFrameDecoder {
-    frames: Vec<(PixelData, u32)>,
+    frames: Vec<(PixelBuffer, u32)>,
     index: usize,
     info: Arc<ImageInfo>,
     total_frames: u32,
