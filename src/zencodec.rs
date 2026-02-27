@@ -4,15 +4,33 @@
 //! the 4-layer trait hierarchy from zencodec-types, wrapping the native zenwebp API.
 //!
 //! The native API remains untouched — this is a thin adapter layer.
+//!
+//! # Trait mapping
+//!
+//! | zencodec-types | zenwebp adapter |
+//! |----------------|-----------------|
+//! | `EncoderConfig` | [`WebpEncoderConfig`] |
+//! | `EncodeJob<'a>` | [`WebpEncodeJob`] |
+//! | `EncodeRgb8` etc. | [`WebpEncoder`] |
+//! | `FrameEncodeRgb8` etc. | [`WebpFrameEncoder`] |
+//! | `DecoderConfig` | [`WebpDecoderConfig`] |
+//! | `DecodeJob<'a>` | [`WebpDecodeJob`] |
+//! | `Decode` | [`WebpDecoder`] |
+//! | `FrameDecode` | [`WebpFrameDecoder`] |
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use rgb::{Gray, Rgb, Rgba};
 use zencodec_types::{
-    CodecCapabilities, DecodeFrame, DecodeOutput, EncodeFrame, EncodeOutput, FrameBlend,
-    FrameDisposal, ImageFormat, ImageInfo, MetadataView, PixelData, PixelDescriptor, PixelSlice,
-    PixelSliceMut, ResourceLimits, Stop,
+    DecodeFrame, DecodeOutput, EncodeOutput, ImageFormat, ImageInfo, MetadataView, OutputInfo,
+    PixelData, PixelDescriptor, PixelSlice, PixelSliceMut, ResourceLimits, Stop,
 };
+// Import trait names as _ to avoid conflict with crate-internal names.
+use zencodec_types::DecodeJob as _;
+use zencodec_types::DecoderConfig as _;
+use zencodec_types::EncodeJob as _;
+use zencodec_types::EncoderConfig as _;
 
 use crate::encoder::config::EncoderConfig;
 use crate::mux::{
@@ -155,19 +173,85 @@ impl WebpEncoderConfig {
     pub fn inner_mut(&mut self) -> &mut EncoderConfig {
         &mut self.inner
     }
-}
 
-static ENCODE_CAPS: CodecCapabilities = CodecCapabilities::new()
-    .with_encode_icc(true)
-    .with_encode_exif(true)
-    .with_encode_xmp(true)
-    .with_encode_cancel(true)
-    .with_lossless(true)
-    .with_lossy(true)
-    .with_native_alpha(true)
-    .with_effort_range(0, 10)
-    .with_quality_range(0.0, 100.0)
-    .with_encode_animation(true);
+    // --- Convenience methods (inherent, use trait flow internally) ---
+
+    /// Set calibrated quality (inherent convenience, delegates to trait).
+    #[must_use]
+    pub fn with_calibrated_quality(self, quality: f32) -> Self {
+        <Self as zencodec_types::EncoderConfig>::with_generic_quality(self, quality)
+    }
+
+    /// Get calibrated quality (inherent convenience, delegates to trait).
+    pub fn calibrated_quality(&self) -> Option<f32> {
+        <Self as zencodec_types::EncoderConfig>::generic_quality(self)
+    }
+
+    /// Set effort (inherent convenience, delegates to trait).
+    #[must_use]
+    pub fn with_effort(self, effort: i32) -> Self {
+        <Self as zencodec_types::EncoderConfig>::with_generic_effort(self, effort)
+    }
+
+    /// Get effort (inherent convenience, delegates to trait).
+    pub fn effort(&self) -> Option<i32> {
+        <Self as zencodec_types::EncoderConfig>::generic_effort(self)
+    }
+
+    /// Convenience: encode RGB8 pixels with this config.
+    pub fn encode_rgb8(
+        &self,
+        img: zencodec_types::ImgRef<'_, Rgb<u8>>,
+    ) -> Result<EncodeOutput, EncodeError> {
+        use zencodec_types::EncodeRgb8;
+        self.job().encoder()?.encode_rgb8(PixelSlice::from(img))
+    }
+
+    /// Convenience: encode RGBA8 pixels with this config.
+    pub fn encode_rgba8(
+        &self,
+        img: zencodec_types::ImgRef<'_, Rgba<u8>>,
+    ) -> Result<EncodeOutput, EncodeError> {
+        use zencodec_types::EncodeRgba8;
+        self.job().encoder()?.encode_rgba8(PixelSlice::from(img))
+    }
+
+    /// Convenience: encode Gray8 pixels with this config.
+    pub fn encode_gray8(
+        &self,
+        img: zencodec_types::ImgRef<'_, Gray<u8>>,
+    ) -> Result<EncodeOutput, EncodeError> {
+        use zencodec_types::EncodeGray8;
+        self.job().encoder()?.encode_gray8(PixelSlice::from(img))
+    }
+
+    /// Convenience: encode RGB f32 pixels with this config.
+    pub fn encode_rgb_f32(
+        &self,
+        img: zencodec_types::ImgRef<'_, Rgb<f32>>,
+    ) -> Result<EncodeOutput, EncodeError> {
+        use zencodec_types::EncodeRgbF32;
+        self.job().encoder()?.encode_rgb_f32(PixelSlice::from(img))
+    }
+
+    /// Convenience: encode RGBA f32 pixels with this config.
+    pub fn encode_rgba_f32(
+        &self,
+        img: zencodec_types::ImgRef<'_, Rgba<f32>>,
+    ) -> Result<EncodeOutput, EncodeError> {
+        use zencodec_types::EncodeRgbaF32;
+        self.job().encoder()?.encode_rgba_f32(PixelSlice::from(img))
+    }
+
+    /// Convenience: encode Gray f32 pixels with this config.
+    pub fn encode_gray_f32(
+        &self,
+        img: zencodec_types::ImgRef<'_, Gray<f32>>,
+    ) -> Result<EncodeOutput, EncodeError> {
+        use zencodec_types::EncodeGrayF32;
+        self.job().encoder()?.encode_gray_f32(PixelSlice::from(img))
+    }
+}
 
 static ENCODE_DESCRIPTORS: &[PixelDescriptor] =
     &[PixelDescriptor::RGB8_SRGB, PixelDescriptor::RGBA8_SRGB];
@@ -184,11 +268,7 @@ impl zencodec_types::EncoderConfig for WebpEncoderConfig {
         ENCODE_DESCRIPTORS
     }
 
-    fn capabilities() -> &'static CodecCapabilities {
-        &ENCODE_CAPS
-    }
-
-    fn with_effort(mut self, effort: i32) -> Self {
+    fn with_generic_effort(mut self, effort: i32) -> Self {
         let clamped = effort.clamp(0, 10);
         self.trait_effort = Some(clamped);
         let method = ((clamped as u64 * 6) / 10).min(6) as u8;
@@ -196,18 +276,18 @@ impl zencodec_types::EncoderConfig for WebpEncoderConfig {
         self
     }
 
-    fn effort(&self) -> Option<i32> {
+    fn generic_effort(&self) -> Option<i32> {
         self.trait_effort
     }
 
-    fn with_calibrated_quality(mut self, quality: f32) -> Self {
+    fn with_generic_quality(mut self, quality: f32) -> Self {
         let clamped = quality.clamp(0.0, 100.0);
         self.trait_quality = Some(clamped);
         self.inner = self.inner.with_quality(clamped);
         self
     }
 
-    fn calibrated_quality(&self) -> Option<f32> {
+    fn generic_quality(&self) -> Option<f32> {
         self.trait_quality
     }
 
@@ -306,8 +386,8 @@ impl<'a> WebpEncodeJob<'a> {
 
 impl<'a> zencodec_types::EncodeJob<'a> for WebpEncodeJob<'a> {
     type Error = EncodeError;
-    type Encoder = WebpEncoder<'a>;
-    type FrameEncoder = WebpFrameEncoder<'a>;
+    type Enc = WebpEncoder<'a>;
+    type FrameEnc = WebpFrameEncoder<'a>;
 
     fn with_stop(mut self, stop: &'a dyn Stop) -> Self {
         self.stop = Some(stop);
@@ -332,19 +412,19 @@ impl<'a> zencodec_types::EncodeJob<'a> for WebpEncodeJob<'a> {
         self
     }
 
-    fn encoder(self) -> WebpEncoder<'a> {
+    fn encoder(self) -> Result<WebpEncoder<'a>, EncodeError> {
         let inner_config = self.build_inner_config();
         let metadata = if self.has_metadata() {
             Some(self.build_metadata())
         } else {
             None
         };
-        WebpEncoder {
+        Ok(WebpEncoder {
             inner_config,
             stop: self.stop,
             metadata,
             limits: self.limits,
-        }
+        })
     }
 
     fn frame_encoder(self) -> Result<WebpFrameEncoder<'a>, EncodeError> {
@@ -361,6 +441,9 @@ impl<'a> zencodec_types::EncodeJob<'a> for WebpEncodeJob<'a> {
 // ── Encoder ─────────────────────────────────────────────────────────────────
 
 /// Single-image WebP encoder.
+///
+/// Implements per-format encode traits (`EncodeRgb8`, `EncodeRgba8`, etc.)
+/// and provides inherent `encode()` for type-erased single-shot encode.
 pub struct WebpEncoder<'a> {
     inner_config: EncoderConfig,
     stop: Option<&'a dyn Stop>,
@@ -396,12 +479,44 @@ impl<'a> WebpEncoder<'a> {
         let data = req.encode()?;
         Ok(EncodeOutput::new(data, ImageFormat::WebP))
     }
+
+    /// Type-erased single-shot encode (inherent method for backwards compat).
+    pub fn encode<P>(self, pixels: PixelSlice<'_, P>) -> Result<EncodeOutput, EncodeError> {
+        let pixels = pixels.erase();
+        let (buf, layout, w, h) = pixels_to_webp_input(&pixels)?;
+        self.do_encode(&buf, layout, w, h)
+    }
+
+    /// Push rows — not supported by WebP (returns error).
+    pub fn push_rows<P>(&mut self, _rows: PixelSlice<'_, P>) -> Result<(), EncodeError> {
+        Err(EncodeError::InvalidBufferSize(
+            "WebP does not support row-level push encoding".into(),
+        ))
+    }
+
+    /// Finish streaming encode — not supported by WebP (returns error).
+    pub fn finish(self) -> Result<EncodeOutput, EncodeError> {
+        Err(EncodeError::InvalidBufferSize(
+            "WebP does not support row-level push encoding".into(),
+        ))
+    }
+
+    /// Encode from a pull source — not supported by WebP (returns error).
+    pub fn encode_from(
+        self,
+        _source: &mut dyn FnMut(u32, PixelSliceMut<'_>) -> usize,
+    ) -> Result<EncodeOutput, EncodeError> {
+        Err(EncodeError::InvalidBufferSize(
+            "WebP does not support pull-from-source encoding".into(),
+        ))
+    }
 }
 
 /// Convert a PixelSlice to raw bytes + PixelLayout for the native WebP API.
 ///
 /// Returns `Cow::Borrowed` (zero-copy) for RGB8/RGBA8 when tightly packed,
 /// `Cow::Owned` when pixel format conversion or stride stripping is needed.
+#[allow(clippy::type_complexity)]
 fn pixels_to_webp_input<'a>(
     pixels: &PixelSlice<'a>,
 ) -> Result<(alloc::borrow::Cow<'a, [u8]>, PixelLayout, u32, u32), EncodeError> {
@@ -484,33 +599,112 @@ fn pixels_to_webp_input<'a>(
     }
 }
 
-impl zencodec_types::Encoder for WebpEncoder<'_> {
+// ── Per-format encode trait impls ────────────────────────────────────────────
+
+impl zencodec_types::EncodeRgb8 for WebpEncoder<'_> {
     type Error = EncodeError;
-
-    fn encode(self, pixels: PixelSlice<'_>) -> Result<EncodeOutput, EncodeError> {
-        let (buf, layout, w, h) = pixels_to_webp_input(&pixels)?;
-        self.do_encode(&buf, layout, w, h)
+    fn encode_rgb8(self, pixels: PixelSlice<'_, Rgb<u8>>) -> Result<EncodeOutput, EncodeError> {
+        let w = pixels.width();
+        let h = pixels.rows();
+        let data = pixels.contiguous_bytes();
+        self.do_encode(&data, PixelLayout::Rgb8, w, h)
     }
+}
 
-    fn push_rows(&mut self, _rows: PixelSlice<'_>) -> Result<(), EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP does not support row-level push encoding".into(),
-        ))
+impl zencodec_types::EncodeRgba8 for WebpEncoder<'_> {
+    type Error = EncodeError;
+    fn encode_rgba8(self, pixels: PixelSlice<'_, Rgba<u8>>) -> Result<EncodeOutput, EncodeError> {
+        let w = pixels.width();
+        let h = pixels.rows();
+        let data = pixels.contiguous_bytes();
+        self.do_encode(&data, PixelLayout::Rgba8, w, h)
     }
+}
 
-    fn finish(self) -> Result<EncodeOutput, EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP does not support row-level push encoding".into(),
-        ))
+impl zencodec_types::EncodeGray8 for WebpEncoder<'_> {
+    type Error = EncodeError;
+    fn encode_gray8(self, pixels: PixelSlice<'_, Gray<u8>>) -> Result<EncodeOutput, EncodeError> {
+        // Expand grayscale → RGB for WebP
+        let w = pixels.width();
+        let h = pixels.rows();
+        let raw = pixels.contiguous_bytes();
+        let rgb: Vec<u8> = raw.iter().flat_map(|&g| [g, g, g]).collect();
+        self.do_encode(&rgb, PixelLayout::Rgb8, w, h)
     }
+}
 
-    fn encode_from(
+impl zencodec_types::EncodeRgbF32 for WebpEncoder<'_> {
+    type Error = EncodeError;
+    fn encode_rgb_f32(self, pixels: PixelSlice<'_, Rgb<f32>>) -> Result<EncodeOutput, EncodeError> {
+        use linear_srgb::default::linear_to_srgb_u8;
+        let w = pixels.width();
+        let h = pixels.rows();
+        let raw = pixels.contiguous_bytes();
+        let rgb: Vec<u8> = raw
+            .chunks_exact(12)
+            .flat_map(|c| {
+                let r = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                let g = f32::from_le_bytes([c[4], c[5], c[6], c[7]]);
+                let b = f32::from_le_bytes([c[8], c[9], c[10], c[11]]);
+                [
+                    linear_to_srgb_u8(r.clamp(0.0, 1.0)),
+                    linear_to_srgb_u8(g.clamp(0.0, 1.0)),
+                    linear_to_srgb_u8(b.clamp(0.0, 1.0)),
+                ]
+            })
+            .collect();
+        self.do_encode(&rgb, PixelLayout::Rgb8, w, h)
+    }
+}
+
+impl zencodec_types::EncodeRgbaF32 for WebpEncoder<'_> {
+    type Error = EncodeError;
+    fn encode_rgba_f32(
         self,
-        _source: &mut dyn FnMut(u32, PixelSliceMut<'_>) -> usize,
+        pixels: PixelSlice<'_, Rgba<f32>>,
     ) -> Result<EncodeOutput, EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP does not support pull-from-source encoding".into(),
-        ))
+        use linear_srgb::default::linear_to_srgb_u8;
+        let w = pixels.width();
+        let h = pixels.rows();
+        let raw = pixels.contiguous_bytes();
+        let rgba: Vec<u8> = raw
+            .chunks_exact(16)
+            .flat_map(|c| {
+                let r = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                let g = f32::from_le_bytes([c[4], c[5], c[6], c[7]]);
+                let b = f32::from_le_bytes([c[8], c[9], c[10], c[11]]);
+                let a = f32::from_le_bytes([c[12], c[13], c[14], c[15]]);
+                [
+                    linear_to_srgb_u8(r.clamp(0.0, 1.0)),
+                    linear_to_srgb_u8(g.clamp(0.0, 1.0)),
+                    linear_to_srgb_u8(b.clamp(0.0, 1.0)),
+                    (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+                ]
+            })
+            .collect();
+        self.do_encode(&rgba, PixelLayout::Rgba8, w, h)
+    }
+}
+
+impl zencodec_types::EncodeGrayF32 for WebpEncoder<'_> {
+    type Error = EncodeError;
+    fn encode_gray_f32(
+        self,
+        pixels: PixelSlice<'_, Gray<f32>>,
+    ) -> Result<EncodeOutput, EncodeError> {
+        use linear_srgb::default::linear_to_srgb_u8;
+        let w = pixels.width();
+        let h = pixels.rows();
+        let raw = pixels.contiguous_bytes();
+        let rgb: Vec<u8> = raw
+            .chunks_exact(4)
+            .flat_map(|c| {
+                let v = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
+                let s = linear_to_srgb_u8(v.clamp(0.0, 1.0));
+                [s, s, s]
+            })
+            .collect();
+        self.do_encode(&rgb, PixelLayout::Rgb8, w, h)
     }
 }
 
@@ -518,9 +712,14 @@ impl zencodec_types::Encoder for WebpEncoder<'_> {
 
 /// Animation WebP frame encoder.
 ///
-/// Wraps [`AnimationEncoder`] and accepts frames via the trait interface.
-/// The animation encoder is created lazily on the first frame push
-/// (to determine canvas dimensions).
+/// Wraps [`AnimationEncoder`] and accepts frames via the per-format frame
+/// encode traits. The animation encoder is created lazily on the first frame
+/// push (to determine canvas dimensions).
+///
+/// Implements [`FrameEncodeRgb8`](zencodec_types::FrameEncodeRgb8) and
+/// [`FrameEncodeRgba8`](zencodec_types::FrameEncodeRgba8) for the trait
+/// interface. Also provides inherent methods for backwards-compatible
+/// type-erased frame pushing.
 pub struct WebpFrameEncoder<'a> {
     inner_config: EncoderConfig,
     stop: Option<&'a dyn Stop>,
@@ -537,10 +736,14 @@ fn mux_to_encode_err(e: MuxError) -> EncodeError {
     }
 }
 
-impl zencodec_types::FrameEncoder for WebpFrameEncoder<'_> {
-    type Error = EncodeError;
-
-    fn push_frame(&mut self, pixels: PixelSlice<'_>, duration_ms: u32) -> Result<(), EncodeError> {
+impl<'a> WebpFrameEncoder<'a> {
+    /// Push a type-erased frame (inherent method for backwards compat).
+    pub fn push_frame<P>(
+        &mut self,
+        pixels: PixelSlice<'_, P>,
+        duration_ms: u32,
+    ) -> Result<(), EncodeError> {
+        let pixels = pixels.erase();
         if let Some(stop) = self.stop {
             stop.check().map_err(EncodeError::Cancelled)?;
         }
@@ -559,7 +762,13 @@ impl zencodec_types::FrameEncoder for WebpFrameEncoder<'_> {
         Ok(())
     }
 
-    fn push_encode_frame(&mut self, frame: EncodeFrame<'_>) -> Result<(), EncodeError> {
+    /// Push an advanced encode frame with disposal/blend hints (inherent).
+    pub fn push_encode_frame(
+        &mut self,
+        frame: zencodec_types::EncodeFrame<'_>,
+    ) -> Result<(), EncodeError> {
+        use zencodec_types::{FrameBlend, FrameDisposal};
+
         if let Some(stop) = self.stop {
             stop.check().map_err(EncodeError::Cancelled)?;
         }
@@ -612,42 +821,80 @@ impl zencodec_types::FrameEncoder for WebpFrameEncoder<'_> {
         Ok(())
     }
 
-    fn begin_frame(&mut self, _duration_ms: u32) -> Result<(), EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP animation does not support row-level frame building".into(),
-        ))
-    }
-
-    fn push_rows(&mut self, _rows: PixelSlice<'_>) -> Result<(), EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP animation does not support row-level frame building".into(),
-        ))
-    }
-
-    fn end_frame(&mut self) -> Result<(), EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP animation does not support row-level frame building".into(),
-        ))
-    }
-
-    fn pull_frame(
-        &mut self,
-        _duration_ms: u32,
-        _source: &mut dyn FnMut(u32, PixelSliceMut<'_>) -> usize,
-    ) -> Result<(), EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP animation does not support pull-from-source encoding".into(),
-        ))
-    }
-
-    fn finish(self) -> Result<EncodeOutput, EncodeError> {
+    /// Finalize the animation (inherent, type-erased finish).
+    pub fn finish_animation(self) -> Result<EncodeOutput, EncodeError> {
         let enc = self
             .anim_enc
             .ok_or_else(|| EncodeError::InvalidBufferSize("no frames added".into()))?;
-        // Use the cumulative_ms as the last frame duration (or 0 if only one frame)
         let last_duration = 100; // default last frame duration
         let data = enc.finalize(last_duration).map_err(mux_to_encode_err)?;
         Ok(EncodeOutput::new(data, ImageFormat::WebP))
+    }
+}
+
+// ── Per-format frame encode trait impls ──────────────────────────────────────
+
+impl zencodec_types::FrameEncodeRgb8 for WebpFrameEncoder<'_> {
+    type Error = EncodeError;
+
+    fn push_frame_rgb8(
+        &mut self,
+        pixels: PixelSlice<'_, Rgb<u8>>,
+        duration_ms: u32,
+    ) -> Result<(), EncodeError> {
+        if let Some(stop) = self.stop {
+            stop.check().map_err(EncodeError::Cancelled)?;
+        }
+        let w = pixels.width();
+        let h = pixels.rows();
+        let data = pixels.contiguous_bytes();
+        if self.anim_enc.is_none() {
+            let config = AnimationConfig::default();
+            let enc = AnimationEncoder::new(w, h, config).map_err(mux_to_encode_err)?;
+            self.anim_enc = Some(enc);
+        }
+        let timestamp_ms = self.cumulative_ms;
+        let enc = self.anim_enc.as_mut().unwrap();
+        enc.add_frame(&data, PixelLayout::Rgb8, timestamp_ms, &self.inner_config)
+            .map_err(mux_to_encode_err)?;
+        self.cumulative_ms = self.cumulative_ms.saturating_add(duration_ms);
+        Ok(())
+    }
+
+    fn finish_rgb8(self) -> Result<EncodeOutput, EncodeError> {
+        self.finish_animation()
+    }
+}
+
+impl zencodec_types::FrameEncodeRgba8 for WebpFrameEncoder<'_> {
+    type Error = EncodeError;
+
+    fn push_frame_rgba8(
+        &mut self,
+        pixels: PixelSlice<'_, Rgba<u8>>,
+        duration_ms: u32,
+    ) -> Result<(), EncodeError> {
+        if let Some(stop) = self.stop {
+            stop.check().map_err(EncodeError::Cancelled)?;
+        }
+        let w = pixels.width();
+        let h = pixels.rows();
+        let data = pixels.contiguous_bytes();
+        if self.anim_enc.is_none() {
+            let config = AnimationConfig::default();
+            let enc = AnimationEncoder::new(w, h, config).map_err(mux_to_encode_err)?;
+            self.anim_enc = Some(enc);
+        }
+        let timestamp_ms = self.cumulative_ms;
+        let enc = self.anim_enc.as_mut().unwrap();
+        enc.add_frame(&data, PixelLayout::Rgba8, timestamp_ms, &self.inner_config)
+            .map_err(mux_to_encode_err)?;
+        self.cumulative_ms = self.cumulative_ms.saturating_add(duration_ms);
+        Ok(())
+    }
+
+    fn finish_rgba8(self) -> Result<EncodeOutput, EncodeError> {
+        self.finish_animation()
     }
 }
 
@@ -705,6 +952,79 @@ impl WebpDecoderConfig {
     pub fn inner_mut(&mut self) -> &mut DecodeConfig {
         &mut self.inner
     }
+
+    // --- Convenience methods (formerly on trait, now inherent) ---
+
+    /// Convenience: probe image header.
+    pub fn probe_header(&self, data: &[u8]) -> Result<ImageInfo, DecodeError> {
+        self.job().probe(data)
+    }
+
+    /// Convenience: probe full image metadata (may be expensive).
+    pub fn probe_full(&self, data: &[u8]) -> Result<ImageInfo, DecodeError> {
+        self.job().probe_full(data)
+    }
+
+    /// Convenience: decode image with this config.
+    pub fn decode(&self, data: &[u8]) -> Result<DecodeOutput, DecodeError> {
+        use zencodec_types::Decode;
+        self.job().decoder()?.decode(data, &[])
+    }
+
+    /// Convenience: decode into a pre-allocated RGB8 buffer.
+    pub fn decode_into_rgb8(
+        &self,
+        data: &[u8],
+        dst: zencodec_types::ImgRefMut<'_, Rgb<u8>>,
+    ) -> Result<ImageInfo, DecodeError> {
+        self.job()
+            .decoder()?
+            .decode_into(data, PixelSliceMut::from(dst))
+    }
+
+    /// Convenience: decode into a pre-allocated RGBA8 buffer.
+    pub fn decode_into_rgba8(
+        &self,
+        data: &[u8],
+        dst: zencodec_types::ImgRefMut<'_, Rgba<u8>>,
+    ) -> Result<ImageInfo, DecodeError> {
+        self.job()
+            .decoder()?
+            .decode_into(data, PixelSliceMut::from(dst))
+    }
+
+    /// Convenience: decode into a pre-allocated RGB f32 buffer.
+    pub fn decode_into_rgb_f32(
+        &self,
+        data: &[u8],
+        dst: zencodec_types::ImgRefMut<'_, Rgb<f32>>,
+    ) -> Result<ImageInfo, DecodeError> {
+        self.job()
+            .decoder()?
+            .decode_into(data, PixelSliceMut::from(dst))
+    }
+
+    /// Convenience: decode into a pre-allocated RGBA f32 buffer.
+    pub fn decode_into_rgba_f32(
+        &self,
+        data: &[u8],
+        dst: zencodec_types::ImgRefMut<'_, Rgba<f32>>,
+    ) -> Result<ImageInfo, DecodeError> {
+        self.job()
+            .decoder()?
+            .decode_into(data, PixelSliceMut::from(dst))
+    }
+
+    /// Convenience: decode into a pre-allocated Gray f32 buffer.
+    pub fn decode_into_gray_f32(
+        &self,
+        data: &[u8],
+        dst: zencodec_types::ImgRefMut<'_, Gray<f32>>,
+    ) -> Result<ImageInfo, DecodeError> {
+        self.job()
+            .decoder()?
+            .decode_into(data, PixelSliceMut::from(dst))
+    }
 }
 
 impl Default for WebpDecoderConfig {
@@ -713,21 +1033,11 @@ impl Default for WebpDecoderConfig {
     }
 }
 
-static DECODE_CAPS: CodecCapabilities = CodecCapabilities::new()
-    .with_decode_icc(true)
-    .with_decode_exif(true)
-    .with_decode_xmp(true)
-    .with_decode_cancel(true)
-    .with_cheap_probe(true)
-    .with_decode_animation(true)
-    .with_native_alpha(true)
-    .with_decode_into(true)
-    .with_enforces_max_pixels(true)
-    .with_enforces_max_memory(true)
-    .with_enforces_max_file_size(true);
-
-static DECODE_DESCRIPTORS: &[PixelDescriptor] =
-    &[PixelDescriptor::RGB8_SRGB, PixelDescriptor::RGBA8_SRGB];
+static DECODE_DESCRIPTORS: &[PixelDescriptor] = &[
+    PixelDescriptor::RGB8_SRGB,
+    PixelDescriptor::RGBA8_SRGB,
+    PixelDescriptor::BGRA8_SRGB,
+];
 
 impl zencodec_types::DecoderConfig for WebpDecoderConfig {
     type Error = DecodeError;
@@ -741,21 +1051,12 @@ impl zencodec_types::DecoderConfig for WebpDecoderConfig {
         DECODE_DESCRIPTORS
     }
 
-    fn capabilities() -> &'static CodecCapabilities {
-        &DECODE_CAPS
-    }
-
     fn job(&self) -> WebpDecodeJob<'_> {
         WebpDecodeJob {
             config: self,
             stop: None,
             limits: ResourceLimits::none(),
         }
-    }
-
-    fn probe_header(&self, data: &[u8]) -> Result<ImageInfo, DecodeError> {
-        let native = crate::ImageInfo::from_webp(data)?;
-        Ok(to_image_info(&native))
     }
 }
 
@@ -795,8 +1096,9 @@ impl<'a> WebpDecodeJob<'a> {
 
 impl<'a> zencodec_types::DecodeJob<'a> for WebpDecodeJob<'a> {
     type Error = DecodeError;
-    type Decoder = WebpDecoder<'a>;
-    type FrameDecoder = WebpFrameDecoder;
+    type Dec = WebpDecoder<'a>;
+    type FrameDec = WebpFrameDecoder;
+
     fn with_stop(mut self, stop: &'a dyn Stop) -> Self {
         self.stop = Some(stop);
         self
@@ -807,28 +1109,29 @@ impl<'a> zencodec_types::DecodeJob<'a> for WebpDecodeJob<'a> {
         self
     }
 
-    fn output_info(&self, data: &[u8]) -> Result<zencodec_types::OutputInfo, DecodeError> {
+    fn probe(&self, data: &[u8]) -> Result<ImageInfo, DecodeError> {
+        let native = crate::ImageInfo::from_webp(data)?;
+        Ok(to_image_info(&native))
+    }
+
+    fn output_info(&self, data: &[u8]) -> Result<OutputInfo, DecodeError> {
         let native = crate::ImageInfo::from_webp(data)?;
         let desc = if native.has_alpha {
             PixelDescriptor::RGBA8_SRGB
         } else {
             PixelDescriptor::RGB8_SRGB
         };
-        Ok(zencodec_types::OutputInfo::full_decode(
-            native.width,
-            native.height,
-            desc,
-        ))
+        Ok(OutputInfo::full_decode(native.width, native.height, desc))
     }
 
-    fn decoder(self) -> WebpDecoder<'a> {
+    fn decoder(self) -> Result<WebpDecoder<'a>, DecodeError> {
         let cfg = self.build_config();
-        WebpDecoder {
+        Ok(WebpDecoder {
             config: cfg,
             stop: self.stop,
             file_size_limit: self.effective_file_size_limit(),
             limits: self.limits,
-        }
+        })
     }
 
     fn frame_decoder(self, data: &[u8]) -> Result<WebpFrameDecoder, DecodeError> {
@@ -907,110 +1210,14 @@ impl WebpDecoder<'_> {
         }
         Ok(())
     }
-}
 
-fn to_rgb8(pixels: PixelData) -> zencodec_types::ImgVec<zencodec_types::Rgb<u8>> {
-    match pixels {
-        PixelData::Rgb8(img) => img,
-        PixelData::Rgba8(img) => {
-            let w = img.width();
-            let h = img.height();
-            let buf: Vec<zencodec_types::Rgb<u8>> = img
-                .into_buf()
-                .into_iter()
-                .map(|p| zencodec_types::Rgb {
-                    r: p.r,
-                    g: p.g,
-                    b: p.b,
-                })
-                .collect();
-            zencodec_types::ImgVec::new(buf, w, h)
-        }
-        other => unreachable!("WebP decoder produced unexpected format: {other:?}"),
-    }
-}
-
-fn to_rgba8(pixels: PixelData) -> zencodec_types::ImgVec<zencodec_types::Rgba<u8>> {
-    match pixels {
-        PixelData::Rgba8(img) => img,
-        PixelData::Rgb8(img) => {
-            let w = img.width();
-            let h = img.height();
-            let buf: Vec<zencodec_types::Rgba<u8>> = img
-                .into_buf()
-                .into_iter()
-                .map(|p| zencodec_types::Rgba {
-                    r: p.r,
-                    g: p.g,
-                    b: p.b,
-                    a: 255,
-                })
-                .collect();
-            zencodec_types::ImgVec::new(buf, w, h)
-        }
-        other => unreachable!("WebP decoder produced unexpected format: {other:?}"),
-    }
-}
-
-impl zencodec_types::Decoder for WebpDecoder<'_> {
-    type Error = DecodeError;
-
-    fn decode(self, data: &[u8]) -> Result<DecodeOutput, DecodeError> {
-        self.check_file_size(data)?;
-
-        // Pre-flight dimension check: probe dimensions before full decode
-        if let Ok(info) = crate::ImageInfo::from_webp(data) {
-            self.limits
-                .check_dimensions(info.width, info.height)
-                .map_err(|e| DecodeError::InvalidParameter(alloc::format!("{e}")))?;
-        }
-
-        let mut req = DecodeRequest::new(&self.config, data);
-        if let Some(stop) = self.stop {
-            req = req.stop(stop);
-        }
-
-        let (pixels, w, h, layout) = req.decode()?;
-        let w_usize = w as usize;
-        let h_usize = h as usize;
-
-        let pixel_data = match layout {
-            PixelLayout::Rgb8 => {
-                let rgb = bytes_to_rgb(&pixels);
-                PixelData::Rgb8(zencodec_types::ImgVec::new(rgb, w_usize, h_usize))
-            }
-            PixelLayout::Rgba8 => {
-                let rgba = bytes_to_rgba(&pixels);
-                PixelData::Rgba8(zencodec_types::ImgVec::new(rgba, w_usize, h_usize))
-            }
-            _ => {
-                // Fallback: decode as RGBA
-                let rgba_req = DecodeRequest::new(&self.config, data);
-                let (rgba_pixels, rw, rh) = if let Some(stop) = self.stop {
-                    rgba_req.stop(stop).decode_rgba()?
-                } else {
-                    rgba_req.decode_rgba()?
-                };
-                let rgba = bytes_to_rgba(&rgba_pixels);
-                PixelData::Rgba8(zencodec_types::ImgVec::new(rgba, rw as usize, rh as usize))
-            }
-        };
-
-        let native_info = crate::ImageInfo::from_webp(data).ok();
-        let info = if let Some(ref ni) = native_info {
-            to_image_info(ni)
-        } else {
-            ImageInfo::new(w, h, ImageFormat::WebP).with_alpha(pixel_data.has_alpha())
-        };
-
-        Ok(DecodeOutput::new(pixel_data, info))
-    }
-
-    fn decode_into(
+    /// Decode into a pre-allocated buffer (inherent method).
+    pub fn decode_into<P>(
         self,
         data: &[u8],
-        mut dst: PixelSliceMut<'_>,
+        dst: PixelSliceMut<'_, P>,
     ) -> Result<ImageInfo, DecodeError> {
+        let mut dst = dst.erase();
         self.check_file_size(data)?;
 
         let desc = dst.descriptor();
@@ -1064,7 +1271,7 @@ impl zencodec_types::Decoder for WebpDecoder<'_> {
             }
         } else if desc == PixelDescriptor::BGRA8_SRGB {
             // Decode as RGBA, swizzle to BGRA
-            let output = self.decode(data)?;
+            let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
             let src = to_rgba8(pixels);
             let row_bytes = w as usize * 4;
@@ -1081,7 +1288,7 @@ impl zencodec_types::Decoder for WebpDecoder<'_> {
             }
         } else if desc == PixelDescriptor::GRAY8_SRGB {
             // Decode as RGB, convert to luma
-            let output = self.decode(data)?;
+            let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
             let src = to_rgb8(pixels);
             for y in 0..h {
@@ -1096,7 +1303,7 @@ impl zencodec_types::Decoder for WebpDecoder<'_> {
             }
         } else if desc == PixelDescriptor::RGBF32_LINEAR {
             use linear_srgb::default::srgb_u8_to_linear;
-            let output = self.decode(data)?;
+            let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
             let src = to_rgb8(pixels);
             let row_bytes = w as usize * 12;
@@ -1114,7 +1321,7 @@ impl zencodec_types::Decoder for WebpDecoder<'_> {
             }
         } else if desc == PixelDescriptor::RGBAF32_LINEAR {
             use linear_srgb::default::srgb_u8_to_linear;
-            let output = self.decode(data)?;
+            let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
             let src = to_rgba8(pixels);
             let row_bytes = w as usize * 16;
@@ -1134,7 +1341,7 @@ impl zencodec_types::Decoder for WebpDecoder<'_> {
             }
         } else if desc == PixelDescriptor::GRAYF32_LINEAR {
             use linear_srgb::default::srgb_u8_to_linear;
-            let output = self.decode(data)?;
+            let output = self.do_decode(data)?;
             let pixels = output.into_pixels();
             let src = to_rgb8(pixels);
             let row_bytes = w as usize * 4;
@@ -1164,7 +1371,170 @@ impl zencodec_types::Decoder for WebpDecoder<'_> {
         };
         Ok(info)
     }
+
+    /// Internal: perform a full decode and return DecodeOutput.
+    fn do_decode(&self, data: &[u8]) -> Result<DecodeOutput, DecodeError> {
+        self.check_file_size(data)?;
+
+        // Pre-flight dimension check: probe dimensions before full decode
+        if let Ok(info) = crate::ImageInfo::from_webp(data) {
+            self.limits
+                .check_dimensions(info.width, info.height)
+                .map_err(|e| DecodeError::InvalidParameter(alloc::format!("{e}")))?;
+        }
+
+        let mut req = DecodeRequest::new(&self.config, data);
+        if let Some(stop) = self.stop {
+            req = req.stop(stop);
+        }
+
+        let (pixels, w, h, layout) = req.decode()?;
+        let w_usize = w as usize;
+        let h_usize = h as usize;
+
+        let pixel_data = match layout {
+            PixelLayout::Rgb8 => {
+                let rgb = bytes_to_rgb(&pixels);
+                PixelData::Rgb8(zencodec_types::ImgVec::new(rgb, w_usize, h_usize))
+            }
+            PixelLayout::Rgba8 => {
+                let rgba = bytes_to_rgba(&pixels);
+                PixelData::Rgba8(zencodec_types::ImgVec::new(rgba, w_usize, h_usize))
+            }
+            _ => {
+                // Fallback: decode as RGBA
+                let rgba_req = DecodeRequest::new(&self.config, data);
+                let (rgba_pixels, rw, rh) = if let Some(stop) = self.stop {
+                    rgba_req.stop(stop).decode_rgba()?
+                } else {
+                    rgba_req.decode_rgba()?
+                };
+                let rgba = bytes_to_rgba(&rgba_pixels);
+                PixelData::Rgba8(zencodec_types::ImgVec::new(rgba, rw as usize, rh as usize))
+            }
+        };
+
+        let native_info = crate::ImageInfo::from_webp(data).ok();
+        let info = if let Some(ref ni) = native_info {
+            to_image_info(ni)
+        } else {
+            ImageInfo::new(w, h, ImageFormat::WebP).with_alpha(pixel_data.has_alpha())
+        };
+
+        Ok(DecodeOutput::new(pixel_data, info))
+    }
 }
+
+fn to_rgb8(pixels: PixelData) -> zencodec_types::ImgVec<Rgb<u8>> {
+    match pixels {
+        PixelData::Rgb8(img) => img,
+        PixelData::Rgba8(img) => {
+            let w = img.width();
+            let h = img.height();
+            let buf: Vec<Rgb<u8>> = img
+                .into_buf()
+                .into_iter()
+                .map(|p| Rgb {
+                    r: p.r,
+                    g: p.g,
+                    b: p.b,
+                })
+                .collect();
+            zencodec_types::ImgVec::new(buf, w, h)
+        }
+        other => unreachable!("WebP decoder produced unexpected format: {other:?}"),
+    }
+}
+
+fn to_rgba8(pixels: PixelData) -> zencodec_types::ImgVec<Rgba<u8>> {
+    match pixels {
+        PixelData::Rgba8(img) => img,
+        PixelData::Rgb8(img) => {
+            let w = img.width();
+            let h = img.height();
+            let buf: Vec<Rgba<u8>> = img
+                .into_buf()
+                .into_iter()
+                .map(|p| Rgba {
+                    r: p.r,
+                    g: p.g,
+                    b: p.b,
+                    a: 255,
+                })
+                .collect();
+            zencodec_types::ImgVec::new(buf, w, h)
+        }
+        other => unreachable!("WebP decoder produced unexpected format: {other:?}"),
+    }
+}
+
+/// Convert PixelData to BGRA8 by swapping R and B channels.
+fn to_bgra8(pixels: PixelData) -> PixelData {
+    match pixels {
+        PixelData::Rgba8(img) => {
+            let w = img.width();
+            let h = img.height();
+            let buf: Vec<rgb::Bgra<u8>> = img
+                .into_buf()
+                .into_iter()
+                .map(|p| rgb::Bgra {
+                    b: p.b,
+                    g: p.g,
+                    r: p.r,
+                    a: p.a,
+                })
+                .collect();
+            PixelData::Bgra8(zencodec_types::ImgVec::new(buf, w, h))
+        }
+        PixelData::Rgb8(img) => {
+            let w = img.width();
+            let h = img.height();
+            let buf: Vec<rgb::Bgra<u8>> = img
+                .into_buf()
+                .into_iter()
+                .map(|p| rgb::Bgra {
+                    b: p.b,
+                    g: p.g,
+                    r: p.r,
+                    a: 255,
+                })
+                .collect();
+            PixelData::Bgra8(zencodec_types::ImgVec::new(buf, w, h))
+        }
+        other => other,
+    }
+}
+
+/// Apply preferred format negotiation to decoded output.
+fn negotiate_format(pixels: PixelData, preferred: &[PixelDescriptor]) -> PixelData {
+    if preferred.is_empty() {
+        return pixels;
+    }
+    // Check if any preferred descriptor is BGRA.
+    if preferred.contains(&PixelDescriptor::BGRA8_SRGB) {
+        return to_bgra8(pixels);
+    }
+    pixels
+}
+
+impl zencodec_types::Decode for WebpDecoder<'_> {
+    type Error = DecodeError;
+
+    fn decode(
+        self,
+        data: &[u8],
+        preferred: &[PixelDescriptor],
+    ) -> Result<DecodeOutput, DecodeError> {
+        let output = self.do_decode(data)?;
+        if preferred.is_empty() {
+            return Ok(output);
+        }
+        let info = output.info().clone();
+        let pixels = negotiate_format(output.into_pixels(), preferred);
+        Ok(DecodeOutput::new(pixels, info))
+    }
+}
+
 // ── Frame Decoder ───────────────────────────────────────────────────────────
 
 /// Animation WebP frame decoder.
@@ -1178,18 +1548,35 @@ pub struct WebpFrameDecoder {
     total_frames: u32,
 }
 
-impl zencodec_types::FrameDecoder for WebpFrameDecoder {
+impl WebpFrameDecoder {
+    /// Decode into a pre-allocated buffer for the next frame (inherent method).
+    pub fn next_frame_into<P>(
+        &mut self,
+        _dst: PixelSliceMut<'_, P>,
+        _prior_frame: Option<u32>,
+    ) -> Result<Option<ImageInfo>, DecodeError> {
+        Err(DecodeError::InvalidParameter(
+            "WebP animation decode_into not yet supported".into(),
+        ))
+    }
+}
+
+impl zencodec_types::FrameDecode for WebpFrameDecoder {
     type Error = DecodeError;
 
     fn frame_count(&self) -> Option<u32> {
         Some(self.total_frames)
     }
 
-    fn next_frame(&mut self) -> Result<Option<DecodeFrame>, DecodeError> {
+    fn next_frame(
+        &mut self,
+        preferred: &[PixelDescriptor],
+    ) -> Result<Option<DecodeFrame>, DecodeError> {
         if self.index >= self.frames.len() {
             return Ok(None);
         }
         let (pixels, duration_ms) = self.frames.remove(0);
+        let pixels = negotiate_format(pixels, preferred);
         let idx = self.index as u32;
         self.index += 1;
         Ok(Some(DecodeFrame::new(
@@ -1199,17 +1586,8 @@ impl zencodec_types::FrameDecoder for WebpFrameDecoder {
             idx,
         )))
     }
-
-    fn next_frame_into(
-        &mut self,
-        _dst: PixelSliceMut<'_>,
-        _prior_frame: Option<u32>,
-    ) -> Result<Option<ImageInfo>, DecodeError> {
-        Err(DecodeError::InvalidParameter(
-            "WebP animation decode_into not yet supported".into(),
-        ))
-    }
 }
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Convert a native `crate::ImageInfo` to a `zencodec_types::ImageInfo`.
@@ -1231,9 +1609,9 @@ fn to_image_info(native: &crate::ImageInfo) -> ImageInfo {
 }
 
 /// Convert raw RGB bytes to `Vec<Rgb<u8>>`.
-fn bytes_to_rgb(data: &[u8]) -> Vec<zencodec_types::Rgb<u8>> {
+fn bytes_to_rgb(data: &[u8]) -> Vec<Rgb<u8>> {
     data.chunks_exact(3)
-        .map(|c| zencodec_types::Rgb {
+        .map(|c| Rgb {
             r: c[0],
             g: c[1],
             b: c[2],
@@ -1242,9 +1620,9 @@ fn bytes_to_rgb(data: &[u8]) -> Vec<zencodec_types::Rgb<u8>> {
 }
 
 /// Convert raw RGBA bytes to `Vec<Rgba<u8>>`.
-fn bytes_to_rgba(data: &[u8]) -> Vec<zencodec_types::Rgba<u8>> {
+fn bytes_to_rgba(data: &[u8]) -> Vec<Rgba<u8>> {
     data.chunks_exact(4)
-        .map(|c| zencodec_types::Rgba {
+        .map(|c| Rgba {
             r: c[0],
             g: c[1],
             b: c[2],
@@ -1256,9 +1634,7 @@ fn bytes_to_rgba(data: &[u8]) -> Vec<zencodec_types::Rgba<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zencodec_types::{
-        Decoder, DecoderConfig, EncodeJob, Encoder, EncoderConfig, ImgVec, Rgb, Rgba,
-    };
+    use zencodec_types::{Decode, DecodeJob, DecoderConfig, EncodeJob, EncoderConfig, ImgVec};
 
     #[test]
     fn roundtrip_rgb8_lossy() {
@@ -1328,7 +1704,6 @@ mod tests {
 
     #[test]
     fn encode_gray8() {
-        use zencodec_types::Gray;
         let pixels: Vec<Gray<u8>> = (0..16 * 16).map(|i| Gray((i % 256) as u8)).collect();
         let img = ImgVec::new(pixels, 16, 16);
 
@@ -1347,6 +1722,7 @@ mod tests {
             .job()
             .with_stop(&Unstoppable)
             .encoder()
+            .unwrap()
             .encode(PixelSlice::from(img.as_ref()))
             .unwrap();
         assert!(!output.is_empty());
@@ -1355,7 +1731,6 @@ mod tests {
     #[test]
     fn f32_roundtrip_all_simd_tiers() {
         use archmage::testing::{for_each_token_permutation, CompileTimePolicy};
-        use zencodec_types::Gray;
 
         let report = for_each_token_permutation(CompileTimePolicy::Warn, |_perm| {
             // Encode linear f32 → WebP → decode back to f32
@@ -1454,7 +1829,6 @@ mod tests {
     #[test]
     fn f32_gray_decode_values() {
         use linear_srgb::default::srgb_u8_to_linear;
-        use zencodec_types::Gray;
 
         // Encode known sRGB gray values as RGB, decode to gray f32
         let pixels = vec![
@@ -1505,8 +1879,6 @@ mod tests {
 
     #[test]
     fn four_layer_encode_flow() {
-        use zencodec_types::EncodeJob;
-
         let pixels: Vec<Rgb<u8>> = vec![
             Rgb {
                 r: 100,
@@ -1521,6 +1893,7 @@ mod tests {
         let output = config
             .job()
             .encoder()
+            .unwrap()
             .encode(PixelSlice::from(img.as_ref()))
             .unwrap();
         assert!(!output.is_empty());
@@ -1529,8 +1902,6 @@ mod tests {
 
     #[test]
     fn four_layer_decode_flow() {
-        use zencodec_types::DecodeJob;
-
         let pixels: Vec<Rgb<u8>> = vec![
             Rgb {
                 r: 100,
@@ -1550,7 +1921,12 @@ mod tests {
         assert_eq!(info.width, 8);
         assert_eq!(info.height, 8);
 
-        let decoded = config.job().decoder().decode(encoded.bytes()).unwrap();
+        let decoded = config
+            .job()
+            .decoder()
+            .unwrap()
+            .decode(encoded.bytes(), &[])
+            .unwrap();
         assert_eq!(decoded.width(), 8);
         assert_eq!(decoded.height(), 8);
     }
@@ -1563,26 +1939,20 @@ mod tests {
 
         assert_eq!(config.calibrated_quality(), Some(75.0));
         assert_eq!(config.effort(), Some(5));
-        assert_eq!(config.is_lossless(), Some(false));
+        assert_eq!(
+            <WebpEncoderConfig as zencodec_types::EncoderConfig>::is_lossless(&config),
+            Some(false)
+        );
 
         let lossless = WebpEncoderConfig::lossless();
-        assert_eq!(lossless.is_lossless(), Some(true));
-    }
-
-    #[test]
-    fn capabilities_report() {
-        use zencodec_types::EncoderConfig;
-        let caps = WebpEncoderConfig::capabilities();
-        assert!(caps.lossless());
-        assert_eq!(caps.effort_range(), Some([0, 10]));
-        assert_eq!(caps.quality_range(), Some([0.0, 100.0]));
-        assert!(caps.encode_animation());
+        assert_eq!(
+            <WebpEncoderConfig as zencodec_types::EncoderConfig>::is_lossless(&lossless),
+            Some(true)
+        );
     }
 
     #[test]
     fn output_info_minimal() {
-        use zencodec_types::DecodeJob;
-
         let pixels: Vec<Rgb<u8>> = vec![Rgb { r: 0, g: 0, b: 0 }; 4 * 4];
         let img = ImgVec::new(pixels, 4, 4);
         let encoded = WebpEncoderConfig::lossy()

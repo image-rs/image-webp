@@ -135,7 +135,9 @@ pub use enough::{Stop, StopReason, Unstoppable};
 // Re-export VP8 decoder (public module)
 pub use decoder::vp8;
 
+#[cfg(feature = "zencodec")]
 mod zencodec;
+#[cfg(feature = "zencodec")]
 pub use zencodec::{
     WebpDecodeJob, WebpDecoder, WebpDecoderConfig, WebpEncodeJob, WebpEncoder, WebpEncoderConfig,
     WebpFrameDecoder, WebpFrameEncoder,
