@@ -31,7 +31,7 @@ png = { version = "0.18", optional = true }
 webp = { version = "0.3.0", optional = true }
 archmage = { version = "0.8.6", optional = true }
 magetypes = { version = "0.8.6", optional = true }
-safe_unaligned_simd = { version = "0.2.4", optional = true }
+safe_unaligned_simd = { version = "0.2.5", optional = true }
 multiversed = { version = "0.3", optional = true }
 multiversion = { version = "0.8.0", optional = true }
 rgb = { version = "0.8", optional = true, default-features = false, features = ["as-bytes"] }
