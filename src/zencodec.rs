@@ -24,7 +24,8 @@ use alloc::vec::Vec;
 use rgb::{Gray, Rgb, Rgba};
 use zencodec_types::{
     DecodeFrame, DecodeOutput, EncodeOutput, ImageFormat, ImageInfo, MetadataView, OutputInfo,
-    PixelBuffer, PixelDescriptor, PixelSlice, PixelSliceMut, ResourceLimits, Stop,
+    PixelBuffer, PixelBufferConvertExt as _, PixelDescriptor, PixelSlice, PixelSliceMut,
+    ResourceLimits, Stop,
 };
 // Import trait names as _ to avoid conflict with crate-internal names.
 use zencodec_types::DecodeJob as _;
