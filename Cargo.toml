@@ -3,7 +3,7 @@ name = "zenwebp"
 version = "0.3.2"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-rust-version = "1.92"
+rust-version = "1.89"
 
 description = "High-performance WebP encoding and decoding in pure Rust"
 homepage = "https://github.com/imazen/zenwebp"
