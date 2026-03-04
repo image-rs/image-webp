@@ -8,12 +8,14 @@ use std::time::Instant;
 use webpx::decode_rgb as lib_decode;
 use zenwebp::decode_rgb as zen_decode;
 
+fn zenwebp_test_images_dir() -> String {
+    env::var("ZENWEBP_TEST_IMAGES_DIR").unwrap_or_else(|_| "/mnt/v".into())
+}
+
 fn main() {
     let args: Vec<_> = env::args().collect();
-    let img_path = args
-        .get(1)
-        .map(|s| s.as_str())
-        .unwrap_or("/mnt/v/tiled_image.png");
+    let default_path = format!("{}/tiled_image.png", zenwebp_test_images_dir());
+    let img_path = args.get(1).unwrap_or(&default_path);
 
     // Load and encode PNG to WebP
     let file = fs::File::open(img_path).expect("Failed to open image");

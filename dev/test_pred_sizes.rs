@@ -1,3 +1,8 @@
+fn libwebp_bin(name: &str) -> String {
+    let dir = std::env::var("LIBWEBP_DIR").unwrap_or_else(|_| "/home/lilith/work/libwebp".into());
+    format!("{dir}/examples/{name}")
+}
+
 fn wrap_vp8l_in_riff(vp8l_data: &[u8]) -> Vec<u8> {
     let mut webp = Vec::new();
     webp.extend_from_slice(b"RIFF");
@@ -57,7 +62,7 @@ fn main() {
         std::fs::write(&path, &webp).unwrap();
 
         // Count unique modes via dwebp
-        let dwebp_ok = std::process::Command::new("/home/lilith/work/libwebp/examples/dwebp")
+        let dwebp_ok = std::process::Command::new(libwebp_bin("dwebp"))
             .args([&path, "-o", &format!("{}.ppm", path)])
             .output()
             .map(|o| o.status.success())

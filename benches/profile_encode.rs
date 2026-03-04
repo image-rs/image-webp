@@ -24,13 +24,18 @@ fn load_png(path: &Path) -> (Vec<u8>, u32, u32) {
     (rgb_data, info.width, info.height)
 }
 
+fn codec_corpus_dir() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
+    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    dir
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-
-    let image_path = args
-        .get(1)
-        .map(|s| s.as_str())
-        .unwrap_or("/mnt/v/work/codec-corpus/CID22/CID22-512/validation/792079.png");
+    let default_path = codec_corpus_dir().join("CID22/CID22-512/validation/792079.png").to_string_lossy().into_owned();
+    let image_path = args.get(1).unwrap_or(&default_path);
     let quality: f32 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(75.0);
     let iterations: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10);
     let method: u8 = args.get(4).and_then(|s| s.parse().ok()).unwrap_or(4);

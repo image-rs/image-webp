@@ -760,6 +760,19 @@ mod corpus_tests {
     #[allow(unused_imports)]
     use super::*;
 
+    fn png_codec_eval_dir() -> std::path::PathBuf {
+        let dir = std::path::PathBuf::from(
+            std::env::var("PNG_CODEC_EVAL_DIR")
+                .unwrap_or_else(|_| "/home/lilith/work/png-codec-eval".into()),
+        );
+        assert!(
+            dir.is_dir(),
+            "png-codec-eval not found: {}. Set PNG_CODEC_EVAL_DIR.",
+            dir.display()
+        );
+        dir
+    }
+
     fn load_png(path: &str) -> Option<(Vec<u8>, u32, u32)> {
         use std::fs::File;
         use std::io::BufReader;
@@ -971,7 +984,10 @@ mod corpus_tests {
         use std::time::Instant;
 
         // Use a single CID22 test image for quick testing
-        let test_images = ["/home/lilith/work/png-codec-eval/test_images/792079.png"];
+        let test_images = [png_codec_eval_dir()
+            .join("test_images/792079.png")
+            .to_string_lossy()
+            .into_owned()];
 
         println!("\n=== Multi-pass Encoding Comparison (zenwebp) ===");
         println!("(SNS=0, filter=0, segments=1 for diagnostic isolation)\n");
@@ -1124,9 +1140,12 @@ mod corpus_tests {
     /// Uses secant method to converge on target size.
     #[test]
     fn target_size_quality_search() {
-        let test_path = "/home/lilith/work/png-codec-eval/test_images/792079.png";
+        let test_path = png_codec_eval_dir()
+            .join("test_images/792079.png")
+            .to_string_lossy()
+            .into_owned();
 
-        if let Some((rgb, w, h)) = load_png(test_path) {
+        if let Some((rgb, w, h)) = load_png(&test_path) {
             // First encode without target_size to get a baseline
             let _cfg14 = zenwebp::encoder::EncoderConfig::new_lossy().with_quality(75.0);
             let baseline = EncodeRequest::new(&_cfg14, &rgb, PixelLayout::Rgb8, w, h)
@@ -1176,9 +1195,12 @@ mod corpus_tests {
     /// Test target_size with various target values.
     #[test]
     fn target_size_various_targets() {
-        let test_path = "/home/lilith/work/png-codec-eval/test_images/792079.png";
+        let test_path = png_codec_eval_dir()
+            .join("test_images/792079.png")
+            .to_string_lossy()
+            .into_owned();
 
-        if let Some((rgb, w, h)) = load_png(test_path) {
+        if let Some((rgb, w, h)) = load_png(&test_path) {
             // Test several target sizes
             let targets = [8000u32, 10000, 12000, 15000];
 

@@ -43,28 +43,35 @@ fn make_webp(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((webp, info.width, info.height))
 }
 
-/// Test image with metadata
-struct TestImage {
-    name: &'static str,
-    path: &'static str,
+fn zenwebp_test_images_dir() -> String {
+    std::env::var("ZENWEBP_TEST_IMAGES_DIR").unwrap_or_else(|_| "/mnt/v".into())
 }
 
-const TEST_IMAGES: &[TestImage] = &[
-    TestImage {
-        name: "tiled_517x517",
-        path: "/mnt/v/tiled_image.png",
-    },
-    TestImage {
-        name: "photo_512",
-        path: "/mnt/v/cid22/792079.png",
-    },
-];
+/// Test image with metadata
+struct TestImage {
+    name: String,
+    path: String,
+}
+
+fn test_images() -> Vec<TestImage> {
+    let base = zenwebp_test_images_dir();
+    vec![
+        TestImage {
+            name: "tiled_517x517".into(),
+            path: format!("{base}/tiled_image.png"),
+        },
+        TestImage {
+            name: "photo_512".into(),
+            path: format!("{base}/cid22/792079.png"),
+        },
+    ]
+}
 
 fn bench_decode(c: &mut Criterion) {
     let mut group = c.benchmark_group("decode");
 
-    for test in TEST_IMAGES {
-        let path = Path::new(test.path);
+    for test in &test_images() {
+        let path = Path::new(&test.path);
         if !path.exists() {
             eprintln!("Skipping {}: file not found", test.name);
             continue;
@@ -82,7 +89,7 @@ fn bench_decode(c: &mut Criterion) {
         group.throughput(Throughput::Elements(pixels));
 
         group.bench_with_input(
-            BenchmarkId::new("zenwebp", test.name),
+            BenchmarkId::new("zenwebp", &test.name),
             &webp_data,
             |b, data| {
                 b.iter(|| {
@@ -93,7 +100,7 @@ fn bench_decode(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("libwebp", test.name),
+            BenchmarkId::new("libwebp", &test.name),
             &webp_data,
             |b, data| {
                 b.iter(|| {
@@ -112,12 +119,13 @@ fn bench_decode_large(c: &mut Criterion) {
     let mut group = c.benchmark_group("decode_large");
     group.sample_size(20);
 
+    let base = zenwebp_test_images_dir();
     let clic_paths = [
-        "/mnt/v/clic/clic2025_test_image_000001.png",
-        "/mnt/v/clic/clic2025_test_image_000010.png",
+        format!("{base}/clic/clic2025_test_image_000001.png"),
+        format!("{base}/clic/clic2025_test_image_000010.png"),
     ];
 
-    for path_str in clic_paths {
+    for path_str in &clic_paths {
         let path = Path::new(path_str);
         if !path.exists() {
             continue;

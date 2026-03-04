@@ -2,6 +2,11 @@
 
 use std::process::Command;
 
+fn libwebp_bin(name: &str) -> String {
+    let dir = std::env::var("LIBWEBP_DIR").unwrap_or_else(|_| "/home/lilith/work/libwebp".into());
+    format!("{dir}/examples/{name}")
+}
+
 fn wrap_vp8l_in_riff(vp8l_data: &[u8]) -> Vec<u8> {
     let mut webp = Vec::new();
     webp.extend_from_slice(b"RIFF");
@@ -18,7 +23,7 @@ fn wrap_vp8l_in_riff(vp8l_data: &[u8]) -> Vec<u8> {
 }
 
 fn verify_dwebp(path: &str) -> bool {
-    let verify = Command::new("/home/lilith/work/libwebp/examples/dwebp")
+    let verify = Command::new(libwebp_bin("dwebp"))
         .args([path, "-o", &format!("{}.ppm", path)])
         .output();
     match verify {
@@ -210,7 +215,7 @@ fn test_photo() {
     );
 
     // Compare with libwebp
-    let _ = Command::new("/home/lilith/work/libwebp/examples/cwebp")
+    let _ = Command::new(libwebp_bin("cwebp"))
         .args([
             "-lossless",
             "-q",

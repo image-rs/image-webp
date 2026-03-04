@@ -44,13 +44,23 @@ fn load_png(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgb_data, info.width, info.height))
 }
 
-const DEFAULT_IMAGE: &str = "/home/lilith/work/codec-corpus/CID22/CID22-512/validation/792079.png";
+fn codec_corpus_dir() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
+    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    dir
+}
+
+fn default_image() -> String {
+    codec_corpus_dir().join("CID22/CID22-512/validation/792079.png").to_string_lossy().into_owned()
+}
 
 fn bench_methods_diagnostic(c: &mut Criterion) {
     let mut group = c.benchmark_group("method_diagnostic");
 
     let (rgb_data, width, height) =
-        load_png(Path::new(DEFAULT_IMAGE)).expect("Test image not found");
+        load_png(Path::new(&default_image())).expect("Test image not found");
 
     let pixels = (width * height) as u64;
     group.throughput(Throughput::Elements(pixels));
@@ -105,7 +115,7 @@ fn bench_methods_default(c: &mut Criterion) {
     let mut group = c.benchmark_group("method_default");
 
     let (rgb_data, width, height) =
-        load_png(Path::new(DEFAULT_IMAGE)).expect("Test image not found");
+        load_png(Path::new(&default_image())).expect("Test image not found");
 
     let pixels = (width * height) as u64;
     group.throughput(Throughput::Elements(pixels));
@@ -153,7 +163,7 @@ fn bench_quality_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("quality_comparison");
 
     let (rgb_data, width, height) =
-        load_png(Path::new(DEFAULT_IMAGE)).expect("Test image not found");
+        load_png(Path::new(&default_image())).expect("Test image not found");
 
     let pixels = (width * height) as u64;
     group.throughput(Throughput::Elements(pixels));

@@ -43,36 +43,48 @@ fn load_png(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgb_data, info.width, info.height))
 }
 
-struct TestImage {
-    name: &'static str,
-    path: &'static str,
-    category: &'static str,
+fn codec_corpus_dir() -> std::path::PathBuf {
+    let dir = std::path::PathBuf::from(
+        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+    );
+    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    dir
 }
 
-const TEST_IMAGES: &[TestImage] = &[
-    TestImage {
-        name: "photo_512",
-        path: "/home/lilith/work/codec-corpus/CID22/CID22-512/validation/792079.png",
-        category: "photo",
-    },
-    TestImage {
-        name: "screenshot",
-        path: "/home/lilith/work/codec-corpus/gb82-sc/gui.png",
-        category: "screenshot",
-    },
-    TestImage {
-        name: "flowers",
-        path: "/home/lilith/work/codec-corpus/gb82/flowers-lossless.png",
-        category: "photo",
-    },
-];
+struct TestImage {
+    name: String,
+    path: String,
+    category: String,
+}
+
+fn test_images() -> Vec<TestImage> {
+    let base = codec_corpus_dir();
+    vec![
+        TestImage {
+            name: "photo_512".into(),
+            path: base.join("CID22/CID22-512/validation/792079.png").to_string_lossy().into_owned(),
+            category: "photo".into(),
+        },
+        TestImage {
+            name: "screenshot".into(),
+            path: base.join("gb82-sc/gui.png").to_string_lossy().into_owned(),
+            category: "screenshot".into(),
+        },
+        TestImage {
+            name: "flowers".into(),
+            path: base.join("gb82/flowers-lossless.png").to_string_lossy().into_owned(),
+            category: "photo".into(),
+        },
+    ]
+}
 
 fn bench_encode_methods(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode_method");
 
-    let (rgb_data, width, height) = TEST_IMAGES
+    let images = test_images();
+    let (rgb_data, width, height) = images
         .iter()
-        .find_map(|img| load_png(Path::new(img.path)))
+        .find_map(|img| load_png(Path::new(&img.path)))
         .expect("No test images found");
 
     let pixels = (width * height) as u64;
@@ -107,9 +119,10 @@ fn bench_encode_methods(c: &mut Criterion) {
 fn bench_encode_quality(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode_quality");
 
-    let (rgb_data, width, height) = TEST_IMAGES
+    let images = test_images();
+    let (rgb_data, width, height) = images
         .iter()
-        .find_map(|img| load_png(Path::new(img.path)))
+        .find_map(|img| load_png(Path::new(&img.path)))
         .expect("No test images found");
 
     let pixels = (width * height) as u64;
@@ -144,9 +157,10 @@ fn bench_encode_quality(c: &mut Criterion) {
 fn bench_encode_presets(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode_preset");
 
-    let (rgb_data, width, height) = TEST_IMAGES
+    let images = test_images();
+    let (rgb_data, width, height) = images
         .iter()
-        .find_map(|img| load_png(Path::new(img.path)))
+        .find_map(|img| load_png(Path::new(&img.path)))
         .expect("No test images found");
 
     let pixels = (width * height) as u64;
@@ -182,13 +196,14 @@ fn bench_encode_presets(c: &mut Criterion) {
 fn bench_encode_by_image_type(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode_image_type");
 
-    for test_img in TEST_IMAGES {
-        if let Some((rgb_data, width, height)) = load_png(Path::new(test_img.path)) {
+    let images = test_images();
+    for test_img in &images {
+        if let Some((rgb_data, width, height)) = load_png(Path::new(&test_img.path)) {
             let pixels = (width * height) as u64;
             group.throughput(Throughput::Elements(pixels));
 
             group.bench_with_input(
-                BenchmarkId::new(test_img.category, test_img.name),
+                BenchmarkId::new(&test_img.category, &test_img.name),
                 &(&rgb_data, width, height),
                 |b, (data, w, h)| {
                     b.iter(|| {

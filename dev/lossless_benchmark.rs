@@ -5,6 +5,11 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+fn libwebp_bin(name: &str) -> String {
+    let dir = std::env::var("LIBWEBP_DIR").unwrap_or_else(|_| "/home/lilith/work/libwebp".into());
+    format!("{dir}/examples/{name}")
+}
+
 fn wrap_vp8l_in_riff(vp8l_data: &[u8]) -> Vec<u8> {
     let mut webp = Vec::new();
     webp.extend_from_slice(b"RIFF");
@@ -23,7 +28,7 @@ fn wrap_vp8l_in_riff(vp8l_data: &[u8]) -> Vec<u8> {
 fn encode_libwebp_lossless(png_path: &str, quality: u8) -> Option<u64> {
     // Use a unique temp file based on PID to avoid stale file issues
     let output = format!("/tmp/libwebp_lossless_bench_{}.webp", std::process::id());
-    let result = Command::new("/home/lilith/work/libwebp/examples/cwebp")
+    let result = Command::new(libwebp_bin("cwebp"))
         .args([
             "-lossless",
             "-q",

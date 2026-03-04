@@ -5,6 +5,11 @@ use std::path::Path;
 use std::process::Command;
 use zenwebp::{EncodeRequest, PixelLayout};
 
+fn libwebp_bin(name: &str) -> String {
+    let dir = std::env::var("LIBWEBP_DIR").unwrap_or_else(|_| "/home/lilith/work/libwebp".into());
+    format!("{dir}/examples/{name}")
+}
+
 fn main() {
     let test_path = "/tmp/CID22/original/1001682.png";
 
@@ -43,7 +48,7 @@ fn main() {
     std::fs::write("/tmp/zenwebp_existing.webp", &existing).unwrap();
 
     print!("Verifying... ");
-    let verify = Command::new("/home/lilith/work/libwebp/examples/dwebp")
+    let verify = Command::new(libwebp_bin("dwebp"))
         .args([
             "/tmp/zenwebp_existing.webp",
             "-o",
@@ -57,7 +62,7 @@ fn main() {
     }
 
     // Compare with libwebp
-    let _ = Command::new("/home/lilith/work/libwebp/examples/cwebp")
+    let _ = Command::new(libwebp_bin("cwebp"))
         .args([
             "-lossless",
             "-q",
@@ -110,7 +115,7 @@ fn main() {
     std::fs::write("/tmp/zenwebp_new_vp8l.webp", &webp).unwrap();
 
     print!("Verifying new encoder... ");
-    let verify = Command::new("/home/lilith/work/libwebp/examples/dwebp")
+    let verify = Command::new(libwebp_bin("dwebp"))
         .args([
             "/tmp/zenwebp_new_vp8l.webp",
             "-o",
