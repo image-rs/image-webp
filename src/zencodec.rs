@@ -24,9 +24,9 @@ use alloc::vec::Vec;
 use rgb::{Gray, Rgb, Rgba};
 use zencodec_types::{
     DecodeFrame, DecodeOutput, EncodeOutput, ImageFormat, ImageInfo, MetadataView, OutputInfo,
-    PixelBuffer, PixelBufferConvertExt as _, PixelDescriptor, PixelSlice, PixelSliceMut,
-    ResourceLimits, Stop,
+    PixelBufferConvertExt as _, ResourceLimits, Stop,
 };
+use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice, PixelSliceMut};
 // Import trait names as _ to avoid conflict with crate-internal names.
 use zencodec_types::DecodeJob as _;
 use zencodec_types::DecoderConfig as _;
@@ -969,7 +969,7 @@ impl WebpDecoderConfig {
     /// Convenience: decode image with this config.
     pub fn decode(&self, data: &[u8]) -> Result<DecodeOutput, DecodeError> {
         use zencodec_types::Decode;
-        self.job().decoder()?.decode(data, &[])
+        self.job().decoder(data, &[])?.decode()
     }
 
     /// Convenience: decode into a pre-allocated RGB8 buffer.
@@ -979,7 +979,7 @@ impl WebpDecoderConfig {
         dst: zencodec_types::ImgRefMut<'_, Rgb<u8>>,
     ) -> Result<ImageInfo, DecodeError> {
         self.job()
-            .decoder()?
+            .decoder(data, &[])?
             .decode_into(data, PixelSliceMut::from(dst))
     }
 
@@ -990,7 +990,7 @@ impl WebpDecoderConfig {
         dst: zencodec_types::ImgRefMut<'_, Rgba<u8>>,
     ) -> Result<ImageInfo, DecodeError> {
         self.job()
-            .decoder()?
+            .decoder(data, &[])?
             .decode_into(data, PixelSliceMut::from(dst))
     }
 
@@ -1001,7 +1001,7 @@ impl WebpDecoderConfig {
         dst: zencodec_types::ImgRefMut<'_, Rgb<f32>>,
     ) -> Result<ImageInfo, DecodeError> {
         self.job()
-            .decoder()?
+            .decoder(data, &[])?
             .decode_into(data, PixelSliceMut::from(dst))
     }
 
@@ -1012,7 +1012,7 @@ impl WebpDecoderConfig {
         dst: zencodec_types::ImgRefMut<'_, Rgba<f32>>,
     ) -> Result<ImageInfo, DecodeError> {
         self.job()
-            .decoder()?
+            .decoder(data, &[])?
             .decode_into(data, PixelSliceMut::from(dst))
     }
 
@@ -1023,7 +1023,7 @@ impl WebpDecoderConfig {
         dst: zencodec_types::ImgRefMut<'_, Gray<f32>>,
     ) -> Result<ImageInfo, DecodeError> {
         self.job()
-            .decoder()?
+            .decoder(data, &[])?
             .decode_into(data, PixelSliceMut::from(dst))
     }
 }
@@ -1095,9 +1095,25 @@ impl<'a> WebpDecodeJob<'a> {
     }
 }
 
+/// Stub streaming decoder — WebP does not support streaming decode.
+pub struct WebpNoStreaming;
+
+impl zencodec_types::StreamingDecode for WebpNoStreaming {
+    type Error = DecodeError;
+
+    fn next_batch(&mut self) -> Result<Option<(u32, PixelSlice<'_>)>, Self::Error> {
+        unreachable!("streaming decode not supported for WebP")
+    }
+
+    fn info(&self) -> &ImageInfo {
+        unreachable!("streaming decode not supported for WebP")
+    }
+}
+
 impl<'a> zencodec_types::DecodeJob<'a> for WebpDecodeJob<'a> {
     type Error = DecodeError;
     type Dec = WebpDecoder<'a>;
+    type StreamDec = WebpNoStreaming;
     type FrameDec = WebpFrameDecoder;
 
     fn with_stop(mut self, stop: &'a dyn Stop) -> Self {
@@ -1125,17 +1141,37 @@ impl<'a> zencodec_types::DecodeJob<'a> for WebpDecodeJob<'a> {
         Ok(OutputInfo::full_decode(native.width, native.height, desc))
     }
 
-    fn decoder(self) -> Result<WebpDecoder<'a>, DecodeError> {
+    fn decoder(
+        self,
+        data: &'a [u8],
+        preferred: &[PixelDescriptor],
+    ) -> Result<WebpDecoder<'a>, DecodeError> {
         let cfg = self.build_config();
         Ok(WebpDecoder {
             config: cfg,
             stop: self.stop,
             file_size_limit: self.effective_file_size_limit(),
             limits: self.limits,
+            data,
+            preferred: preferred.to_vec(),
         })
     }
 
-    fn frame_decoder(self, data: &[u8]) -> Result<WebpFrameDecoder, DecodeError> {
+    fn streaming_decoder(
+        self,
+        _data: &'a [u8],
+        _preferred: &[PixelDescriptor],
+    ) -> Result<WebpNoStreaming, DecodeError> {
+        Err(DecodeError::InvalidParameter(
+            "WebP does not support streaming decode".into(),
+        ))
+    }
+
+    fn frame_decoder(
+        self,
+        data: &'a [u8],
+        preferred: &[PixelDescriptor],
+    ) -> Result<WebpFrameDecoder, DecodeError> {
         if let Some(max) = self.effective_file_size_limit() {
             if data.len() as u64 > max {
                 return Err(DecodeError::InvalidParameter(alloc::format!(
@@ -1184,6 +1220,7 @@ impl<'a> zencodec_types::DecodeJob<'a> for WebpDecodeJob<'a> {
             index: 0,
             info: shared_info,
             total_frames,
+            preferred: preferred.to_vec(),
         })
     }
 }
@@ -1196,6 +1233,8 @@ pub struct WebpDecoder<'a> {
     stop: Option<&'a dyn Stop>,
     file_size_limit: Option<u64>,
     limits: ResourceLimits,
+    data: &'a [u8],
+    preferred: Vec<PixelDescriptor>,
 }
 
 impl WebpDecoder<'_> {
@@ -1453,17 +1492,13 @@ fn negotiate_format(pixels: PixelBuffer, preferred: &[PixelDescriptor]) -> Pixel
 impl zencodec_types::Decode for WebpDecoder<'_> {
     type Error = DecodeError;
 
-    fn decode(
-        self,
-        data: &[u8],
-        preferred: &[PixelDescriptor],
-    ) -> Result<DecodeOutput, DecodeError> {
-        let output = self.do_decode(data)?;
-        if preferred.is_empty() {
+    fn decode(self) -> Result<DecodeOutput, DecodeError> {
+        let output = self.do_decode(self.data)?;
+        if self.preferred.is_empty() {
             return Ok(output);
         }
         let info = output.info().clone();
-        let pixels = negotiate_format(output.into_pixels(), preferred);
+        let pixels = negotiate_format(output.into_pixels(), &self.preferred);
         Ok(DecodeOutput::new(pixels, info))
     }
 }
@@ -1479,6 +1514,7 @@ pub struct WebpFrameDecoder {
     index: usize,
     info: Arc<ImageInfo>,
     total_frames: u32,
+    preferred: Vec<PixelDescriptor>,
 }
 
 impl WebpFrameDecoder {
@@ -1501,15 +1537,12 @@ impl zencodec_types::FrameDecode for WebpFrameDecoder {
         Some(self.total_frames)
     }
 
-    fn next_frame(
-        &mut self,
-        preferred: &[PixelDescriptor],
-    ) -> Result<Option<DecodeFrame>, DecodeError> {
+    fn next_frame(&mut self) -> Result<Option<DecodeFrame>, DecodeError> {
         if self.index >= self.frames.len() {
             return Ok(None);
         }
         let (pixels, duration_ms) = self.frames.remove(0);
-        let pixels = negotiate_format(pixels, preferred);
+        let pixels = negotiate_format(pixels, &self.preferred);
         let idx = self.index as u32;
         self.index += 1;
         Ok(Some(DecodeFrame::new(
@@ -1856,9 +1889,9 @@ mod tests {
 
         let decoded = config
             .job()
-            .decoder()
+            .decoder(encoded.bytes(), &[])
             .unwrap()
-            .decode(encoded.bytes(), &[])
+            .decode()
             .unwrap();
         assert_eq!(decoded.width(), 8);
         assert_eq!(decoded.height(), 8);
