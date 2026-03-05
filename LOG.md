@@ -163,3 +163,34 @@ but D1 read miss 0.33% vs libwebp 0.70% (better).
 
 Root causes of gap: loop filter overhead (2.5x), coefficient reading (+17%),
 function call overhead (Rust abstractions vs C inline macros).
+
+## Completed Design Decisions
+
+### API Convergence (2026-02-06, COMPLETE)
+
+All tasks complete. Three-layer pattern: `LossyConfig`/`LosslessConfig` → `EncodeRequest<'a>` → output.
+
+Key decisions made:
+- Split `EncoderConfig` into `LossyConfig` / `LosslessConfig`
+- `EncodeRequest::encode()` (one-shot), `encode_into()`, `encode_to()`
+- `with_` prefix for builder setters, bare-name for getters
+- `PixelLayout` enum (was `ColorType`), supports Rgba8/Bgra8
+- `ImageInfo::from_bytes()` probe with `PROBE_BYTES` constant
+- Two-phase decoder: `build()` → `info()` → `decode()`
+- `Limits` on both encode and decode sides
+- `ImageMetadata` struct factored out of request
+- `&dyn Stop` cancellation, `#[non_exhaustive]` errors, `At<>` wrapping
+
+### Why Streaming Encoding is N/A for WebP (2026-02-06)
+
+WebP encoding algorithms require the entire image before encoding can start.
+A streaming/push-based API would use MORE memory, not less.
+
+- **VP8L (Lossless):** LZ77 backward refs, palette detection, predictor transforms, and
+  Huffman coding all need the complete image. Cannot encode incrementally.
+- **VP8 (Lossy):** Segmentation, SNS, filter strength, and RD optimization all analyze
+  the full image. Row-by-row encoding would significantly hurt quality.
+- **Animation:** Each frame must be fully encoded. `AnimationEncoder::add_frame()` already
+  provides the right frame-by-frame API.
+
+The one-shot `EncodeRequest::encode()` borrows the user's buffer (no copy) and is optimal.
