@@ -46,14 +46,22 @@ fn load_png(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
 
 fn codec_corpus_dir() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(
-        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+        std::env::var("CODEC_CORPUS_DIR")
+            .unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
     );
-    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    assert!(
+        dir.is_dir(),
+        "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.",
+        dir.display()
+    );
     dir
 }
 
 fn default_image() -> String {
-    codec_corpus_dir().join("CID22/CID22-512/validation/792079.png").to_string_lossy().into_owned()
+    codec_corpus_dir()
+        .join("CID22/CID22-512/validation/792079.png")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn bench_methods_diagnostic(c: &mut Criterion) {

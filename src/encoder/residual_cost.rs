@@ -8,11 +8,11 @@
 
 // SIMD imports for GetResidualCost optimization
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
+use archmage::intrinsics::x86_64 as simd_mem;
+#[cfg(all(target_arch = "x86_64", feature = "simd"))]
 use archmage::{arcane, rite, SimdToken, X64V3Token};
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 use core::arch::x86_64::*;
-#[cfg(all(target_arch = "x86_64", feature = "simd"))]
-use archmage::intrinsics::x86_64 as simd_mem;
 
 #[cfg(all(target_arch = "wasm32", feature = "simd"))]
 use archmage::{arcane, rite, Wasm128Token};

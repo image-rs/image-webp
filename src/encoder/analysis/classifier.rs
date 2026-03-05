@@ -10,11 +10,11 @@
 #![allow(dead_code)]
 
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+use archmage::intrinsics::x86_64 as simd_mem;
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
 use archmage::{arcane, SimdToken, X64V3Token};
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 use core::arch::x86_64::*;
-#[cfg(all(feature = "simd", target_arch = "x86_64"))]
-use archmage::intrinsics::x86_64 as simd_mem;
 
 /// Detected content type for auto-preset selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

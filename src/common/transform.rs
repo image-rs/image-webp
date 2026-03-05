@@ -1,12 +1,10 @@
 // Allow dead code when std is disabled - some functions are encoder-only
 #![cfg_attr(not(feature = "std"), allow(dead_code))]
 
-
 /// 16 bit fixed point version of cos(PI/8) * sqrt(2) - 1
 const CONST1: i64 = 20091;
 /// 16 bit fixed point version of sin(PI/8) * sqrt(2)
 const CONST2: i64 = 35468;
-
 
 /// DC-only inverse transform: fills all 16 positions with (DC+4)>>3
 /// Used when a block has only DC coefficient (no AC), avoiding full IDCT.

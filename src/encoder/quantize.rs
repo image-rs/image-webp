@@ -8,11 +8,11 @@
 #![allow(dead_code)]
 
 #[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
+use archmage::intrinsics::x86_64 as simd_mem;
+#[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
 use archmage::{arcane, rite, SimdToken, X64V3Token};
 #[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
 use core::arch::x86_64::*;
-#[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
-use archmage::intrinsics::x86_64 as simd_mem;
 
 use super::tables::{MAX_LEVEL, VP8_FREQ_SHARPENING};
 

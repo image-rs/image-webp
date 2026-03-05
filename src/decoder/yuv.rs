@@ -32,8 +32,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-
-
 use crate::common::prediction::SimdTokenType;
 
 /// `_mm_mulhi_epu16` emulation
@@ -1544,7 +1542,7 @@ mod tests {
 
         #[rustfmt::skip]
         let u_buffer = [
-            34, 101, 
+            34, 101,
             123, 163
         ];
 

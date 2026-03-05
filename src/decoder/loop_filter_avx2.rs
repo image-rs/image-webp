@@ -13,12 +13,12 @@
 #![allow(clippy::identity_op)]
 
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+use archmage::intrinsics::x86_64 as simd_mem;
+#[cfg(all(feature = "simd", target_arch = "x86_64"))]
 use archmage::{arcane, X64V3Token};
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
 use core::convert::TryFrom;
-#[cfg(all(feature = "simd", target_arch = "x86_64"))]
-use archmage::intrinsics::x86_64 as simd_mem;
 
 /// Maximum stride for bounds-check-free filtering.
 /// WebP max dimension is 16383, rounded up to MB boundary = 16384.

@@ -45,9 +45,14 @@ fn load_png(path: &Path) -> Option<(Vec<u8>, u32, u32)> {
 
 fn codec_corpus_dir() -> std::path::PathBuf {
     let dir = std::path::PathBuf::from(
-        std::env::var("CODEC_CORPUS_DIR").unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
+        std::env::var("CODEC_CORPUS_DIR")
+            .unwrap_or_else(|_| "/home/lilith/work/codec-corpus".into()),
     );
-    assert!(dir.is_dir(), "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.", dir.display());
+    assert!(
+        dir.is_dir(),
+        "Codec corpus not found: {}. Set CODEC_CORPUS_DIR.",
+        dir.display()
+    );
     dir
 }
 
@@ -62,7 +67,10 @@ fn test_images() -> Vec<TestImage> {
     vec![
         TestImage {
             name: "photo_512".into(),
-            path: base.join("CID22/CID22-512/validation/792079.png").to_string_lossy().into_owned(),
+            path: base
+                .join("CID22/CID22-512/validation/792079.png")
+                .to_string_lossy()
+                .into_owned(),
             category: "photo".into(),
         },
         TestImage {
@@ -72,7 +80,10 @@ fn test_images() -> Vec<TestImage> {
         },
         TestImage {
             name: "flowers".into(),
-            path: base.join("gb82/flowers-lossless.png").to_string_lossy().into_owned(),
+            path: base
+                .join("gb82/flowers-lossless.png")
+                .to_string_lossy()
+                .into_owned(),
             category: "photo".into(),
         },
     ]

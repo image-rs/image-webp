@@ -461,8 +461,8 @@ pub(crate) fn is_flat_source_16_sse2(
     src: &[u8],
     stride: usize,
 ) -> bool {
-    use core::arch::x86_64::*;
     use archmage::intrinsics::x86_64 as simd_mem;
+    use core::arch::x86_64::*;
 
     // Broadcast first pixel value to all 16 bytes
     let v = _mm_set1_epi8(src[0] as i8);
@@ -538,8 +538,8 @@ pub(crate) fn is_flat_coeffs_sse2(
     num_blocks: usize,
     thresh: i32,
 ) -> bool {
-    use core::arch::x86_64::*;
     use archmage::intrinsics::x86_64 as simd_mem;
+    use core::arch::x86_64::*;
 
     let zero = _mm_setzero_si128();
     let mut total_nz = 0i32;

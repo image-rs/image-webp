@@ -289,11 +289,11 @@ fn add_residue_sse2(
     x0: usize,
     stride: usize,
 ) {
+    use archmage::intrinsics::x86_64 as simd_mem;
     #[cfg(target_arch = "x86")]
     use core::arch::x86::*;
     #[cfg(target_arch = "x86_64")]
     use core::arch::x86_64::*;
-    use archmage::intrinsics::x86_64 as simd_mem;
 
     let zero = _mm_setzero_si128();
     let mut pos = y0 * stride + x0;
@@ -440,11 +440,11 @@ fn add_residue_and_clear_sse2(
     x0: usize,
     stride: usize,
 ) {
+    use archmage::intrinsics::x86_64 as simd_mem;
     #[cfg(target_arch = "x86")]
     use core::arch::x86::*;
     #[cfg(target_arch = "x86_64")]
     use core::arch::x86_64::*;
-    use archmage::intrinsics::x86_64 as simd_mem;
 
     // Assert bounds upfront to elide checks in the loop
     let start = y0 * stride + x0;
