@@ -26,7 +26,7 @@ whereat = { version = "0.1.3", default-features = false }
 libm = "0.2.16"
 zencodec-types = { path = "../zencodec-types" }
 zenpixels = { path = "../zenpixels/zenpixels", default-features = false, features = ["buffer"], optional = true }
-linear-srgb = "0.5.5"
+linear-srgb = "0.6"
 yuv = { version = "0.8", optional = true }
 png = { version = "0.18", optional = true }
 webp = { version = "0.3.0", optional = true }
