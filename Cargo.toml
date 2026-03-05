@@ -30,16 +30,13 @@ linear-srgb = "0.5.5"
 yuv = { version = "0.8", optional = true }
 png = { version = "0.18", optional = true }
 webp = { version = "0.3.0", optional = true }
-archmage = { version = "0.9", optional = true }
+archmage = { version = "0.9.2", optional = true, features = ["macros"] }
 magetypes = { version = "0.9", optional = true }
-safe_unaligned_simd = { version = "0.2.5", optional = true }
-multiversed = { version = "0.3", optional = true }
-multiversion = { version = "0.8.0", optional = true }
 rgb = { version = "0.8", optional = true, default-features = false, features = ["as-bytes"] }
 imgref = { version = "1.12", optional = true, default-features = false }
 
 [dev-dependencies]
-archmage = { version = "0.9", features = ["std"] }
+archmage = { version = "0.9.2", features = ["std", "macros"] }
 paste = "1.0.14"
 png = "0.18"
 rand = "0.8.5"
@@ -66,7 +63,7 @@ fast-yuv = ["dep:yuv"]
 # Enable SIMD intrinsics via archmage (safe API with token-based feature verification).
 # Provides best performance on x86-64 with runtime CPU detection.
 # On wasm32, uses core::arch::wasm32 SIMD128 intrinsics.
-simd = ["dep:archmage", "dep:magetypes", "dep:safe_unaligned_simd"]
+simd = ["dep:archmage", "dep:magetypes"]
 # UNSAFE: Eliminate bounds checks in hot decoder paths for ~5-10% speedup.
 # Only enable if you trust your WebP input (e.g., self-generated files).
 # Malformed input may cause undefined behavior instead of clean errors.
@@ -75,8 +72,8 @@ unchecked = []
 pixel-types = ["dep:rgb"]
 # imgref integration for Img<Vec<P>> / Img<&[P]> decode/encode.
 imgref = ["dep:imgref", "pixel-types"]
-# Runtime CPU feature detection for optimal SIMD paths (AVX-512, etc.)
-multiverse = ["dep:multiversed", "dep:multiversion"]
+# Enable AVX-512 autoversion variants (passthrough to archmage).
+avx512 = ["archmage/avx512"]
 # Color quantization for near-lossless palette encoding.
 # Reduces >256 color images to palette for VP8L color indexing transform.
 # Choose backend based on licensing needs:

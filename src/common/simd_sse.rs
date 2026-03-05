@@ -12,7 +12,7 @@ use archmage::{arcane, rite, SimdToken, X64V3Token};
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 use core::arch::x86_64::*;
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
-use safe_unaligned_simd::x86_64 as simd_mem;
+use archmage::intrinsics::x86_64 as simd_mem;
 
 /// Compute Sum of Squared Errors between two 4x4 blocks
 ///

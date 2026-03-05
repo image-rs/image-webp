@@ -32,8 +32,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-#[cfg(feature = "multiverse")]
-use multiversed::multiversed;
+
 
 use crate::common::prediction::SimdTokenType;
 
@@ -526,125 +525,127 @@ fn fill_row_fancy_with_2_uv_rows_wasm<const BPP: usize>(
     }
 }
 
-#[cfg_attr(feature = "multiverse", multiversed)]
-fn fill_row_fancy_with_2_uv_rows_scalar<const BPP: usize>(
-    row_buffer: &mut [u8],
-    y_row: &[u8],
-    u_row_1: &[u8],
-    u_row_2: &[u8],
-    v_row_1: &[u8],
-    v_row_2: &[u8],
-) {
-    // need to do left pixel separately since it will only have one u/v value
-    {
-        let rgb1 = &mut row_buffer[0..3];
-        let y_value = y_row[0];
-        // first pixel uses the first u/v as the main one
-        let u_value = get_fancy_chroma_value(u_row_1[0], u_row_1[0], u_row_2[0], u_row_2[0]);
-        let v_value = get_fancy_chroma_value(v_row_1[0], v_row_1[0], v_row_2[0], v_row_2[0]);
-        set_pixel(rgb1, y_value, u_value, v_value);
-    }
-
-    let rest_row_buffer = &mut row_buffer[BPP..];
-    let rest_y_row = &y_row[1..];
-
-    // we do two pixels at a time since they share the same u/v values
-    let mut main_row_chunks = rest_row_buffer.chunks_exact_mut(BPP * 2);
-    let mut main_y_chunks = rest_y_row.chunks_exact(2);
-
-    for (((((rgb, y_val), u_val_1), u_val_2), v_val_1), v_val_2) in (&mut main_row_chunks)
-        .zip(&mut main_y_chunks)
-        .zip(u_row_1.windows(2))
-        .zip(u_row_2.windows(2))
-        .zip(v_row_1.windows(2))
-        .zip(v_row_2.windows(2))
-    {
+maybe_autoversion! {
+    fn fill_row_fancy_with_2_uv_rows_scalar<const BPP: usize>(
+        row_buffer: &mut [u8],
+        y_row: &[u8],
+        u_row_1: &[u8],
+        u_row_2: &[u8],
+        v_row_1: &[u8],
+        v_row_2: &[u8],
+    ) {
+        // need to do left pixel separately since it will only have one u/v value
         {
-            let rgb1 = &mut rgb[0..3];
-            let y_value = y_val[0];
+            let rgb1 = &mut row_buffer[0..3];
+            let y_value = y_row[0];
             // first pixel uses the first u/v as the main one
-            let u_value = get_fancy_chroma_value(u_val_1[0], u_val_1[1], u_val_2[0], u_val_2[1]);
-            let v_value = get_fancy_chroma_value(v_val_1[0], v_val_1[1], v_val_2[0], v_val_2[1]);
+            let u_value = get_fancy_chroma_value(u_row_1[0], u_row_1[0], u_row_2[0], u_row_2[0]);
+            let v_value = get_fancy_chroma_value(v_row_1[0], v_row_1[0], v_row_2[0], v_row_2[0]);
             set_pixel(rgb1, y_value, u_value, v_value);
         }
+
+        let rest_row_buffer = &mut row_buffer[BPP..];
+        let rest_y_row = &y_row[1..];
+
+        // we do two pixels at a time since they share the same u/v values
+        let mut main_row_chunks = rest_row_buffer.chunks_exact_mut(BPP * 2);
+        let mut main_y_chunks = rest_y_row.chunks_exact(2);
+
+        for (((((rgb, y_val), u_val_1), u_val_2), v_val_1), v_val_2) in (&mut main_row_chunks)
+            .zip(&mut main_y_chunks)
+            .zip(u_row_1.windows(2))
+            .zip(u_row_2.windows(2))
+            .zip(v_row_1.windows(2))
+            .zip(v_row_2.windows(2))
         {
-            let rgb2 = &mut rgb[BPP..];
-            let y_value = y_val[1];
-            let u_value = get_fancy_chroma_value(u_val_1[1], u_val_1[0], u_val_2[1], u_val_2[0]);
-            let v_value = get_fancy_chroma_value(v_val_1[1], v_val_1[0], v_val_2[1], v_val_2[0]);
-            set_pixel(rgb2, y_value, u_value, v_value);
+            {
+                let rgb1 = &mut rgb[0..3];
+                let y_value = y_val[0];
+                // first pixel uses the first u/v as the main one
+                let u_value = get_fancy_chroma_value(u_val_1[0], u_val_1[1], u_val_2[0], u_val_2[1]);
+                let v_value = get_fancy_chroma_value(v_val_1[0], v_val_1[1], v_val_2[0], v_val_2[1]);
+                set_pixel(rgb1, y_value, u_value, v_value);
+            }
+            {
+                let rgb2 = &mut rgb[BPP..];
+                let y_value = y_val[1];
+                let u_value = get_fancy_chroma_value(u_val_1[1], u_val_1[0], u_val_2[1], u_val_2[0]);
+                let v_value = get_fancy_chroma_value(v_val_1[1], v_val_1[0], v_val_2[1], v_val_2[0]);
+                set_pixel(rgb2, y_value, u_value, v_value);
+            }
         }
-    }
 
-    let final_pixel = main_row_chunks.into_remainder();
-    let final_y = main_y_chunks.remainder();
+        let final_pixel = main_row_chunks.into_remainder();
+        let final_y = main_y_chunks.remainder();
 
-    if let (rgb, [y_value]) = (final_pixel, final_y) {
-        let final_u_1 = *u_row_1.last().unwrap();
-        let final_u_2 = *u_row_2.last().unwrap();
+        if let (rgb, [y_value]) = (final_pixel, final_y) {
+            let final_u_1 = *u_row_1.last().unwrap();
+            let final_u_2 = *u_row_2.last().unwrap();
 
-        let final_v_1 = *v_row_1.last().unwrap();
-        let final_v_2 = *v_row_2.last().unwrap();
+            let final_v_1 = *v_row_1.last().unwrap();
+            let final_v_2 = *v_row_2.last().unwrap();
 
-        let rgb1 = &mut rgb[0..3];
-        // first pixel uses the first u/v as the main one
-        let u_value = get_fancy_chroma_value(final_u_1, final_u_1, final_u_2, final_u_2);
-        let v_value = get_fancy_chroma_value(final_v_1, final_v_1, final_v_2, final_v_2);
-        set_pixel(rgb1, *y_value, u_value, v_value);
+            let rgb1 = &mut rgb[0..3];
+            // first pixel uses the first u/v as the main one
+            let u_value = get_fancy_chroma_value(final_u_1, final_u_1, final_u_2, final_u_2);
+            let v_value = get_fancy_chroma_value(final_v_1, final_v_1, final_v_2, final_v_2);
+            set_pixel(rgb1, *y_value, u_value, v_value);
+        }
     }
 }
 
-#[cfg_attr(feature = "multiverse", multiversed)]
-fn fill_row_fancy_with_1_uv_row<const BPP: usize>(
-    row_buffer: &mut [u8],
-    y_row: &[u8],
-    u_row: &[u8],
-    v_row: &[u8],
-) {
-    // doing left pixel first
-    {
-        let rgb1 = &mut row_buffer[0..3];
-        let y_value = y_row[0];
-
-        let u_value = u_row[0];
-        let v_value = v_row[0];
-        set_pixel(rgb1, y_value, u_value, v_value);
-    }
-
-    // two pixels at a time since they share the same u/v value
-    let mut main_row_chunks = row_buffer[BPP..].chunks_exact_mut(BPP * 2);
-    let mut main_y_row_chunks = y_row[1..].chunks_exact(2);
-
-    for (((rgb, y_val), u_val), v_val) in (&mut main_row_chunks)
-        .zip(&mut main_y_row_chunks)
-        .zip(u_row.windows(2))
-        .zip(v_row.windows(2))
-    {
+maybe_autoversion! {
+    fn fill_row_fancy_with_1_uv_row<const BPP: usize>(
+        row_buffer: &mut [u8],
+        y_row: &[u8],
+        u_row: &[u8],
+        v_row: &[u8],
+    ) {
+        // doing left pixel first
         {
-            let rgb1 = &mut rgb[0..3];
-            let y_value = y_val[0];
-            // first pixel uses the first u/v as the main one
-            let u_value = get_fancy_chroma_value(u_val[0], u_val[1], u_val[0], u_val[1]);
-            let v_value = get_fancy_chroma_value(v_val[0], v_val[1], v_val[0], v_val[1]);
+            let rgb1 = &mut row_buffer[0..3];
+            let y_value = y_row[0];
+
+            let u_value = u_row[0];
+            let v_value = v_row[0];
             set_pixel(rgb1, y_value, u_value, v_value);
         }
+
+        // two pixels at a time since they share the same u/v value
+        let mut main_row_chunks = row_buffer[BPP..].chunks_exact_mut(BPP * 2);
+        let mut main_y_row_chunks = y_row[1..].chunks_exact(2);
+
+        for (((rgb, y_val), u_val), v_val) in (&mut main_row_chunks)
+            .zip(&mut main_y_row_chunks)
+            .zip(u_row.windows(2))
+            .zip(v_row.windows(2))
         {
-            let rgb2 = &mut rgb[BPP..];
-            let y_value = y_val[1];
-            let u_value = get_fancy_chroma_value(u_val[1], u_val[0], u_val[1], u_val[0]);
-            let v_value = get_fancy_chroma_value(v_val[1], v_val[0], v_val[1], v_val[0]);
-            set_pixel(rgb2, y_value, u_value, v_value);
+            {
+                let rgb1 = &mut rgb[0..3];
+                let y_value = y_val[0];
+                // first pixel uses the first u/v as the main one
+                let u_value = get_fancy_chroma_value(u_val[0], u_val[1], u_val[0], u_val[1]);
+                let v_value = get_fancy_chroma_value(v_val[0], v_val[1], v_val[0], v_val[1]);
+                set_pixel(rgb1, y_value, u_value, v_value);
+            }
+            {
+                let rgb2 = &mut rgb[BPP..];
+                let y_value = y_val[1];
+                let u_value = get_fancy_chroma_value(u_val[1], u_val[0], u_val[1], u_val[0]);
+                let v_value = get_fancy_chroma_value(v_val[1], v_val[0], v_val[1], v_val[0]);
+                set_pixel(rgb2, y_value, u_value, v_value);
+            }
         }
-    }
 
-    let final_pixel = main_row_chunks.into_remainder();
-    let final_y = main_y_row_chunks.remainder();
+        let final_pixel = main_row_chunks.into_remainder();
+        let final_y = main_y_row_chunks.remainder();
 
-    if let (rgb, [final_y]) = (final_pixel, final_y) {
-        let final_u = *u_row.last().unwrap();
-        let final_v = *v_row.last().unwrap();
+        if let (rgb, [final_y]) = (final_pixel, final_y) {
+            let final_u = *u_row.last().unwrap();
+            let final_v = *v_row.last().unwrap();
 
-        set_pixel(rgb, *final_y, final_u, final_v);
+            set_pixel(rgb, *final_y, final_u, final_v);
+        }
     }
 }
 

@@ -91,6 +91,37 @@ extern crate alloc;
 #[cfg(all(test, feature = "_benchmarks"))]
 extern crate test;
 
+/// Conditionally applies `#[autoversion]` and adds a `SimdToken` parameter
+/// when the `simd` feature is enabled, otherwise defines the function as-is.
+macro_rules! maybe_autoversion {
+    (
+        $(#[$attr:meta])*
+        $vis:vis fn $name:ident($($arg:ident : $ty:ty),* $(,)?) $(-> $ret:ty)? $body:block
+    ) => {
+        #[cfg(feature = "simd")]
+        #[archmage::autoversion]
+        $(#[$attr])*
+        $vis fn $name(_token: archmage::SimdToken, $($arg : $ty),*) $(-> $ret)? $body
+
+        #[cfg(not(feature = "simd"))]
+        $(#[$attr])*
+        $vis fn $name($($arg : $ty),*) $(-> $ret)? $body
+    };
+    (
+        $(#[$attr:meta])*
+        $vis:vis fn $name:ident<const $C:ident : $CT:ty>($($arg:ident : $ty:ty),* $(,)?) $(-> $ret:ty)? $body:block
+    ) => {
+        #[cfg(feature = "simd")]
+        #[archmage::autoversion]
+        $(#[$attr])*
+        $vis fn $name<const $C: $CT>(_token: archmage::SimdToken, $($arg : $ty),*) $(-> $ret)? $body
+
+        #[cfg(not(feature = "simd"))]
+        $(#[$attr])*
+        $vis fn $name<const $C: $CT>($($arg : $ty),*) $(-> $ret)? $body
+    };
+}
+
 // Core modules
 pub mod common;
 pub mod decoder;

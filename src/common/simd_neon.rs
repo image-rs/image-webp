@@ -4,7 +4,7 @@
 
 use archmage::{arcane, rite, NeonToken};
 
-use safe_unaligned_simd::aarch64 as simd_mem;
+use archmage::intrinsics::aarch64 as simd_mem;
 
 use core::arch::aarch64::*;
 

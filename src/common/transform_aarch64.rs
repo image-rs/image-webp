@@ -10,7 +10,7 @@ use archmage::{arcane, rite, NeonToken};
 
 use core::arch::aarch64::*;
 
-use safe_unaligned_simd::aarch64 as simd_mem;
+use archmage::intrinsics::aarch64 as simd_mem;
 
 // =============================================================================
 // Forward DCT — ported from libwebp's FTransform_NEON (intrinsics version)

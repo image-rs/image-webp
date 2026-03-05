@@ -14,7 +14,7 @@ use archmage::{arcane, rite, NeonToken};
 
 use core::arch::aarch64::*;
 
-use safe_unaligned_simd::aarch64 as simd_mem;
+use archmage::intrinsics::aarch64 as simd_mem;
 
 // =============================================================================
 // Core filter helpers (ported from libwebp dec_neon.c)
