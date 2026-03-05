@@ -1312,7 +1312,7 @@ impl WebpDecoder<'_> {
         } else if desc == PixelDescriptor::BGRA8_SRGB {
             // Decode as RGBA, swizzle to BGRA
             let output = self.do_decode(data)?;
-            let pixels = output.into_pixels();
+            let pixels = output.into_buffer();
             let src = pixels.to_rgba8();
             let src = src.as_imgref();
             let row_bytes = w as usize * 4;
@@ -1330,7 +1330,7 @@ impl WebpDecoder<'_> {
         } else if desc == PixelDescriptor::GRAY8_SRGB {
             // Decode as RGB, convert to luma
             let output = self.do_decode(data)?;
-            let pixels = output.into_pixels();
+            let pixels = output.into_buffer();
             let src = pixels.to_rgb8();
             let src = src.as_imgref();
             for y in 0..h {
@@ -1346,7 +1346,7 @@ impl WebpDecoder<'_> {
         } else if desc == PixelDescriptor::RGBF32_LINEAR {
             use linear_srgb::default::srgb_u8_to_linear;
             let output = self.do_decode(data)?;
-            let pixels = output.into_pixels();
+            let pixels = output.into_buffer();
             let src = pixels.to_rgb8();
             let src = src.as_imgref();
             let row_bytes = w as usize * 12;
@@ -1365,7 +1365,7 @@ impl WebpDecoder<'_> {
         } else if desc == PixelDescriptor::RGBAF32_LINEAR {
             use linear_srgb::default::srgb_u8_to_linear;
             let output = self.do_decode(data)?;
-            let pixels = output.into_pixels();
+            let pixels = output.into_buffer();
             let src = pixels.to_rgba8();
             let src = src.as_imgref();
             let row_bytes = w as usize * 16;
@@ -1386,7 +1386,7 @@ impl WebpDecoder<'_> {
         } else if desc == PixelDescriptor::GRAYF32_LINEAR {
             use linear_srgb::default::srgb_u8_to_linear;
             let output = self.do_decode(data)?;
-            let pixels = output.into_pixels();
+            let pixels = output.into_buffer();
             let src = pixels.to_rgb8();
             let src = src.as_imgref();
             let row_bytes = w as usize * 4;
@@ -1498,7 +1498,7 @@ impl zencodec_types::Decode for WebpDecoder<'_> {
             return Ok(output);
         }
         let info = output.info().clone();
-        let pixels = negotiate_format(output.into_pixels(), &self.preferred);
+        let pixels = negotiate_format(output.into_buffer(), &self.preferred);
         Ok(DecodeOutput::new(pixels, info))
     }
 }
@@ -1619,7 +1619,7 @@ mod tests {
         assert_eq!(output.format(), ImageFormat::WebP);
 
         let dec = WebpDecoderConfig::new();
-        let decoded = dec.decode(output.bytes()).unwrap();
+        let decoded = dec.decode(output.data()).unwrap();
         assert_eq!(decoded.width(), 64);
         assert_eq!(decoded.height(), 64);
     }
@@ -1641,7 +1641,7 @@ mod tests {
         assert!(!output.is_empty());
 
         let dec = WebpDecoderConfig::new();
-        let decoded = dec.decode(output.bytes()).unwrap();
+        let decoded = dec.decode(output.data()).unwrap();
         assert_eq!(decoded.width(), 32);
         assert_eq!(decoded.height(), 32);
     }
@@ -1662,7 +1662,7 @@ mod tests {
             .unwrap();
 
         let dec = WebpDecoderConfig::new();
-        let info = dec.probe_header(output.bytes()).unwrap();
+        let info = dec.probe_header(output.data()).unwrap();
         assert_eq!(info.width, 16);
         assert_eq!(info.height, 16);
         assert_eq!(info.format, ImageFormat::WebP);
@@ -1727,7 +1727,7 @@ mod tests {
             ];
             let mut dst_img = ImgVec::new(dst, 16, 16);
             let _info = dec
-                .decode_into_rgb_f32(output.bytes(), dst_img.as_mut())
+                .decode_into_rgb_f32(output.data(), dst_img.as_mut())
                 .unwrap();
 
             // Verify values are in valid range
@@ -1781,7 +1781,7 @@ mod tests {
             16,
             16,
         );
-        dec.decode_into_rgba_f32(output.bytes(), dst_img.as_mut())
+        dec.decode_into_rgba_f32(output.data(), dst_img.as_mut())
             .unwrap();
 
         for p in dst_img.buf().iter() {
@@ -1821,7 +1821,7 @@ mod tests {
 
         let dec = WebpDecoderConfig::new();
         let mut dst = ImgVec::new(vec![Gray(0.0f32); 4], 2, 2);
-        dec.decode_into_gray_f32(output.bytes(), dst.as_mut())
+        dec.decode_into_gray_f32(output.data(), dst.as_mut())
             .unwrap();
 
         let buf = dst.buf();
@@ -1883,13 +1883,13 @@ mod tests {
 
         let config = WebpDecoderConfig::new();
         let job = config.job();
-        let info = job.output_info(encoded.bytes()).unwrap();
+        let info = job.output_info(encoded.data()).unwrap();
         assert_eq!(info.width, 8);
         assert_eq!(info.height, 8);
 
         let decoded = config
             .job()
-            .decoder(encoded.bytes(), &[])
+            .decoder(encoded.data(), &[])
             .unwrap()
             .decode()
             .unwrap();
@@ -1926,7 +1926,7 @@ mod tests {
             .unwrap();
 
         let dec = WebpDecoderConfig::new();
-        let info = dec.job().output_info(encoded.bytes()).unwrap();
+        let info = dec.job().output_info(encoded.data()).unwrap();
         assert_eq!(info.width, 4);
         assert_eq!(info.height, 4);
     }
