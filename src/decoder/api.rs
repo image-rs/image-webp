@@ -1173,12 +1173,6 @@ impl<'a> WebPDecoder<'a> {
         let use_alpha_blending = frame_info & 0b00000010 == 0;
         let dispose = frame_info & 0b00000001 != 0;
 
-        let clear_color = if self.animation.dispose_next_frame {
-            info.background_color
-        } else {
-            None
-        };
-
         // Read normal bitstream now
         let (chunk, chunk_size, chunk_size_rounded) = read_chunk_header(&mut self.r)?;
         if chunk_size_rounded + 24 > anmf_size {
@@ -1255,6 +1249,16 @@ impl<'a> WebPDecoder<'a> {
                 (rgba_frame, true)
             }
             _ => return Err(DecodeError::ChunkHeaderInvalid(chunk.to_fourcc())),
+        };
+
+        let clear_color = if self.animation.dispose_next_frame {
+            match (info.background_color, frame_has_alpha) {
+                (color @ Some(_), _) => color,
+                (_, true) => Some([0, 0, 0, 0]),
+                _ => None,
+            }
+        } else {
+            None
         };
 
         // fill starting canvas with clear color
