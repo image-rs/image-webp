@@ -422,14 +422,22 @@ fn create_noise_image(w: u32, h: u32) -> Vec<u8> {
 
 /// Roundtrip encode→decode and measure per-channel average absolute error.
 /// Returns (file_bytes, avg_delta_across_all_channels).
-fn roundtrip_avg_delta(img: &[u8], layout: PixelLayout, w: u32, h: u32, quality: f32) -> (usize, f64) {
+fn roundtrip_avg_delta(
+    img: &[u8],
+    layout: PixelLayout,
+    w: u32,
+    h: u32,
+    quality: f32,
+) -> (usize, f64) {
     let n = (w * h) as usize;
     let bpp: usize = match layout {
         PixelLayout::Rgba8 | PixelLayout::Bgra8 => 4,
         _ => 3,
     };
 
-    let cfg = EncoderConfig::new_lossy().with_quality(quality).with_method(4);
+    let cfg = EncoderConfig::new_lossy()
+        .with_quality(quality)
+        .with_method(4);
     let webp = EncodeRequest::new(&cfg, img, layout, w, h)
         .encode()
         .expect("encode failed");
@@ -443,14 +451,30 @@ fn roundtrip_avg_delta(img: &[u8], layout: PixelLayout, w: u32, h: u32, quality:
     for i in 0..n {
         let (ob, og, or_) = if bpp == 4 {
             match layout {
-                PixelLayout::Bgra8 => (img[i * 4] as i32, img[i * 4 + 1] as i32, img[i * 4 + 2] as i32),
-                PixelLayout::Rgba8 => (img[i * 4 + 2] as i32, img[i * 4 + 1] as i32, img[i * 4] as i32),
+                PixelLayout::Bgra8 => (
+                    img[i * 4] as i32,
+                    img[i * 4 + 1] as i32,
+                    img[i * 4 + 2] as i32,
+                ),
+                PixelLayout::Rgba8 => (
+                    img[i * 4 + 2] as i32,
+                    img[i * 4 + 1] as i32,
+                    img[i * 4] as i32,
+                ),
                 _ => unreachable!(),
             }
         } else {
             match layout {
-                PixelLayout::Rgb8 => (img[i * 3 + 2] as i32, img[i * 3 + 1] as i32, img[i * 3] as i32),
-                PixelLayout::Bgr8 => (img[i * 3] as i32, img[i * 3 + 1] as i32, img[i * 3 + 2] as i32),
+                PixelLayout::Rgb8 => (
+                    img[i * 3 + 2] as i32,
+                    img[i * 3 + 1] as i32,
+                    img[i * 3] as i32,
+                ),
+                PixelLayout::Bgr8 => (
+                    img[i * 3] as i32,
+                    img[i * 3 + 1] as i32,
+                    img[i * 3 + 2] as i32,
+                ),
                 _ => unreachable!(),
             }
         };
@@ -469,9 +493,6 @@ fn roundtrip_avg_delta(img: &[u8], layout: PixelLayout, w: u32, h: u32, quality:
 /// This test checks that the quality-error curve is monotonically decreasing
 /// (with a tolerance for quantization noise). A violation means higher quality
 /// settings produce worse output than lower ones.
-///
-/// Known bug: at q=80-95 the encoder produces significantly worse output than
-/// at q=50-70 on smooth gradients (avg delta 17-24x worse at q=90 vs q=70).
 #[test]
 fn quality_error_monotonicity_gradient() {
     let (w, h) = (256u32, 256u32);

@@ -106,8 +106,8 @@ impl ArithmeticEncoder {
         if let Some(value) = value {
             let abs_value = value.unsigned_abs();
             self.write_literal(num_bits, abs_value);
-            let sign = value >= 0;
-            self.write_flag(sign);
+            // VP8 spec: sign bit 1 = negative, 0 = positive
+            self.write_flag(value < 0);
         }
     }
 

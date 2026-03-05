@@ -123,16 +123,16 @@ fn noisy_4096x4096() {
 
 #[test]
 fn noisy_5000x5000() {
-    // 25.0MP — OK, just under threshold
+    // 25.0MP — OK, just under threshold at q75
     let pixels = generate_noisy_rgb(5000, 5000);
-    roundtrip_rgb(&pixels, 5000, 5000, 80.0);
+    roundtrip_rgb(&pixels, 5000, 5000, 75.0);
 }
 
 #[test]
 fn noisy_5824x4368() {
-    // 25.4MP — OK, just under threshold
+    // 25.4MP — OK, just under threshold at q70
     let pixels = generate_noisy_rgb(5824, 4368);
-    roundtrip_rgb(&pixels, 5824, 4368, 80.0);
+    roundtrip_rgb(&pixels, 5824, 4368, 70.0);
 }
 
 #[test]

@@ -1138,6 +1138,14 @@ impl<'a> Vp8Encoder<'a> {
             max_center - min_center
         };
 
+        // Minimum effective range for alpha normalization.
+        // The formula `255 * (center - mid) / range` normalizes centers to ±127,
+        // but when all MBs have similar alpha (gradients, flat images), the range
+        // is tiny (2-10) and this amplifies noise into extreme quantizer deltas.
+        // Using a floor prevents degenerate over-quantization of uniform regions.
+        const MIN_ALPHA_RANGE: i32 = 64;
+        let effective_range = range.max(MIN_ALPHA_RANGE);
+
         // Assign segment IDs to macroblocks
         self.segment_map = analysis
             .mb_alphas
@@ -1176,6 +1184,16 @@ impl<'a> Vp8Encoder<'a> {
         // Boost dc-uv-quant based on sns-strength (UV is more reactive to high quants)
         let dq_uv_dc = (-4 * i32::from(sns_strength) / 100).clamp(-15, 15);
 
+        // Write UV quant deltas to the bitstream header so the decoder knows about them.
+        // Without this, the encoder quantizes UV with offset step sizes but the decoder
+        // dequantizes with base step sizes, causing systematic UV reconstruction errors.
+        if dq_uv_dc != 0 {
+            self.quantization_indices.uvdc_delta = Some(dq_uv_dc as i8);
+        }
+        if dq_uv_ac != 0 {
+            self.quantization_indices.uvac_delta = Some(dq_uv_ac as i8);
+        }
+
         // Compute base filter level for delta computation (using beta=0 for base)
         let base_filter = super::cost::compute_filter_level(
             base_quant_index,
@@ -1188,12 +1206,14 @@ impl<'a> Vp8Encoder<'a> {
 
             // Transform center to libwebp's alpha scale [-127, 127]
             // Formula from SetSegmentAlphas: alpha = 255 * (center - mid) / (max - min)
-            let transformed_alpha = (255 * (center - mid_alpha) / range).clamp(-127, 127);
+            // Uses effective_range to prevent extreme deltas on uniform images.
+            let transformed_alpha = (255 * (center - mid_alpha) / effective_range).clamp(-127, 127);
 
             // Compute beta for per-segment filter modulation
             // Formula from libwebp: beta = 255 * (center - min) / (max - min)
             // Beta indicates segment complexity: 0 = simplest (closer to min), 255 = most complex
-            let beta = (255 * (center - min_center) / range).clamp(0, 255) as u8;
+            // Uses effective_range to prevent extreme filter deltas on uniform images.
+            let beta = (255 * (center - min_center) / effective_range).clamp(0, 255) as u8;
 
             // Compute adjusted quantizer for this segment
             // Note: we pass quality (not base_quant_index) to match libwebp's QualityToCompression approach

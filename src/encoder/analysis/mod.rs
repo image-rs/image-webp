@@ -176,19 +176,19 @@ impl DctHistogram {
         }
     }
 
-    /// Get alpha value from histogram
-    /// Ported from libwebp's VP8GetAlpha
+    /// Get alpha value from histogram.
+    /// Ported from libwebp's GetAlpha (analysis_enc.c).
     ///
     /// Alpha measures the "compressibility" of the block:
-    /// - High alpha (255) = difficult to compress (textured)
-    /// - Low alpha (0) = easy to compress (flat)
+    /// - High alpha = many non-zero coefficients relative to max (harder)
+    /// - Low alpha (0) = few non-zero coefficients (easier to compress)
+    ///
+    /// Formula: `ALPHA_SCALE * last_non_zero / max_value`
     pub fn get_alpha(&self) -> i32 {
-        if self.max_value == 0 {
+        if self.max_value <= 1 {
             return 0;
         }
-        // Use first bin count as scaling factor
-        // This matches libwebp's formula: alpha = ALPHA_SCALE * max_value / (max_value + last_non_zero + ...)
-        let value = ALPHA_SCALE * self.max_value / (self.max_value + self.last_non_zero as u32);
+        let value = ALPHA_SCALE * self.last_non_zero as u32 / self.max_value;
         value as i32
     }
 }
