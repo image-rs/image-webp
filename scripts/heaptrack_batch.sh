@@ -2,10 +2,11 @@
 # Run heaptrack on various encode/decode configurations
 set -euo pipefail
 
-OUTPUT_DIR="/mnt/v/output/zenwebp/heaptrack_data"
+OUTPUT_DIR="${ZENWEBP_OUTPUT_DIR:-/mnt/v/output/zenwebp}/heaptrack_data"
 mkdir -p "$OUTPUT_DIR"
 
-BINARY="/home/lilith/work/zenwebp/target/release/examples/heaptrack_test"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BINARY="${ZENWEBP_HEAPTRACK_BIN:-$SCRIPT_DIR/target/release/examples/heaptrack_test}"
 
 echo "width,height,pixels,mode,method,quality,peak_heap_mb" > "$OUTPUT_DIR/heaptrack_results.csv"
 

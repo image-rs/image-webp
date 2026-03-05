@@ -26,7 +26,7 @@ fi
 echo -e "${YELLOW}Building profiler...${NC}"
 cargo build --release --example profile_memory
 
-OUTPUT_DIR="/mnt/v/output/zenwebp/memory_profile"
+OUTPUT_DIR="${ZENWEBP_OUTPUT_DIR:-/mnt/v/output/zenwebp}/memory_profile"
 mkdir -p "$OUTPUT_DIR"
 
 echo -e "${GREEN}Output directory: $OUTPUT_DIR${NC}\n"
