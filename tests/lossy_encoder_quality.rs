@@ -417,6 +417,157 @@ fn create_noise_image(w: u32, h: u32) -> Vec<u8> {
 }
 
 // ============================================================================
+// Quality monotonicity regression tests
+// ============================================================================
+
+/// Roundtrip encode→decode and measure per-channel average absolute error.
+/// Returns (file_bytes, avg_delta_across_all_channels).
+fn roundtrip_avg_delta(img: &[u8], layout: PixelLayout, w: u32, h: u32, quality: f32) -> (usize, f64) {
+    let n = (w * h) as usize;
+    let bpp: usize = match layout {
+        PixelLayout::Rgba8 | PixelLayout::Bgra8 => 4,
+        _ => 3,
+    };
+
+    let cfg = EncoderConfig::new_lossy().with_quality(quality).with_method(4);
+    let webp = EncodeRequest::new(&cfg, img, layout, w, h)
+        .encode()
+        .expect("encode failed");
+
+    let (dec, dec_w, dec_h) = zenwebp::decode_bgra(&webp).expect("decode failed");
+    assert_eq!(dec_w, w);
+    assert_eq!(dec_h, h);
+
+    // Decoded is always BGRA. Convert original to BGRA order for comparison.
+    let mut total_delta: u64 = 0;
+    for i in 0..n {
+        let (ob, og, or_) = if bpp == 4 {
+            match layout {
+                PixelLayout::Bgra8 => (img[i * 4] as i32, img[i * 4 + 1] as i32, img[i * 4 + 2] as i32),
+                PixelLayout::Rgba8 => (img[i * 4 + 2] as i32, img[i * 4 + 1] as i32, img[i * 4] as i32),
+                _ => unreachable!(),
+            }
+        } else {
+            match layout {
+                PixelLayout::Rgb8 => (img[i * 3 + 2] as i32, img[i * 3 + 1] as i32, img[i * 3] as i32),
+                PixelLayout::Bgr8 => (img[i * 3] as i32, img[i * 3 + 1] as i32, img[i * 3 + 2] as i32),
+                _ => unreachable!(),
+            }
+        };
+        let db = (ob - dec[i * 4] as i32).unsigned_abs();
+        let dg = (og - dec[i * 4 + 1] as i32).unsigned_abs();
+        let dr = (or_ - dec[i * 4 + 2] as i32).unsigned_abs();
+        total_delta += (db + dg + dr) as u64;
+    }
+
+    let avg = total_delta as f64 / (n * 3) as f64;
+    (webp.len(), avg)
+}
+
+/// Quality monotonicity: increasing quality should not increase error.
+///
+/// This test checks that the quality-error curve is monotonically decreasing
+/// (with a tolerance for quantization noise). A violation means higher quality
+/// settings produce worse output than lower ones.
+///
+/// Known bug: at q=80-95 the encoder produces significantly worse output than
+/// at q=50-70 on smooth gradients (avg delta 17-24x worse at q=90 vs q=70).
+#[test]
+fn quality_error_monotonicity_gradient() {
+    let (w, h) = (256u32, 256u32);
+    let n = (w * h) as usize;
+
+    // Smooth gradient — sensitive to quantization quality
+    let mut img = Vec::with_capacity(n * 3);
+    for y in 0..h {
+        for x in 0..w {
+            img.push((x * 255 / w) as u8);
+            img.push((y * 255 / h) as u8);
+            img.push(((x + y) * 255 / (w + h)) as u8);
+        }
+    }
+
+    let qualities = [50.0f32, 60.0, 70.0, 80.0, 85.0, 90.0, 95.0, 100.0];
+    let mut results: Vec<(f32, usize, f64)> = Vec::new();
+
+    println!("\n{:>6}  {:>8}  {:>10}", "q", "bytes", "avg_delta");
+    for &q in &qualities {
+        let (bytes, avg) = roundtrip_avg_delta(&img, PixelLayout::Rgb8, w, h, q);
+        println!("{:>6.1}  {:>8}  {:>10.4}", q, bytes, avg);
+        results.push((q, bytes, avg));
+    }
+
+    // Check monotonicity: for each quality step up, avg_delta should not
+    // increase by more than 50% over the previous level.
+    // (Small increases due to quantization rounding are acceptable.)
+    let mut violations = Vec::new();
+    for pair in results.windows(2) {
+        let (q_low, _, delta_low) = pair[0];
+        let (q_high, _, delta_high) = pair[1];
+        // Higher quality should mean same or lower delta.
+        // Allow 50% tolerance for quantization noise.
+        if delta_high > delta_low * 1.5 && delta_high - delta_low > 0.5 {
+            violations.push((q_low, q_high, delta_low, delta_high));
+        }
+    }
+
+    if !violations.is_empty() {
+        let mut msg = String::from("Quality-error monotonicity violated:\n");
+        for (q_low, q_high, d_low, d_high) in &violations {
+            msg.push_str(&format!(
+                "  q={q_low:.0}→{q_high:.0}: avg_delta {d_low:.4}→{d_high:.4} ({:.1}x worse)\n",
+                d_high / d_low
+            ));
+        }
+        panic!("{msg}");
+    }
+}
+
+/// Same monotonicity test with BGRA input layout.
+#[test]
+fn quality_error_monotonicity_gradient_bgra() {
+    let (w, h) = (256u32, 256u32);
+    let n = (w * h) as usize;
+
+    let mut img = Vec::with_capacity(n * 4);
+    for y in 0..h {
+        for x in 0..w {
+            img.extend_from_slice(&[x as u8, y as u8, ((x + y) / 2) as u8, 255]);
+        }
+    }
+
+    let qualities = [50.0f32, 70.0, 80.0, 90.0, 95.0, 100.0];
+    let mut results: Vec<(f32, f64)> = Vec::new();
+
+    println!("\n{:>6}  {:>10}", "q", "avg_delta");
+    for &q in &qualities {
+        let (_, avg) = roundtrip_avg_delta(&img, PixelLayout::Bgra8, w, h, q);
+        println!("{:>6.1}  {:>10.4}", q, avg);
+        results.push((q, avg));
+    }
+
+    let mut violations = Vec::new();
+    for pair in results.windows(2) {
+        let (q_low, delta_low) = pair[0];
+        let (q_high, delta_high) = pair[1];
+        if delta_high > delta_low * 1.5 && delta_high - delta_low > 0.5 {
+            violations.push((q_low, q_high, delta_low, delta_high));
+        }
+    }
+
+    if !violations.is_empty() {
+        let mut msg = String::from("Quality-error monotonicity violated (BGRA):\n");
+        for (q_low, q_high, d_low, d_high) in &violations {
+            msg.push_str(&format!(
+                "  q={q_low:.0}→{q_high:.0}: avg_delta {d_low:.4}→{d_high:.4} ({:.1}x worse)\n",
+                d_high / d_low
+            ));
+        }
+        panic!("{msg}");
+    }
+}
+
+// ============================================================================
 // Preset tests
 // ============================================================================
 
