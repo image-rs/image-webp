@@ -1479,7 +1479,7 @@ impl<'a> super::Vp8Encoder<'a> {
             let sse = sse_u + sse_v;
 
             // 4b. Compute UV spectral distortion + psy-rd if enabled
-            let uv_spectral_disto = if let (Some(ref src_u), Some(ref src_v)) =
+            let uv_spectral_disto = if let (Some(src_u), Some(src_v)) =
                 (&src_u_block, &src_v_block)
             {
                 // Extract reconstructed blocks only (source already cached)

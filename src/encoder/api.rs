@@ -270,7 +270,7 @@ fn build_huffman_tree(
         frequencies
             .iter()
             .enumerate()
-            .filter(|(_, &frequency)| frequency > 0)
+            .filter(|&(_, &frequency)| frequency > 0)
             .map(|(i, &frequency)| Item(frequency, i as u16)),
     );
     while nodes.len() > 1 {

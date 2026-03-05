@@ -141,7 +141,7 @@ pub fn build_huffman_lengths(freq: &[u32], max_len: u8) -> Vec<u8> {
     let non_zero: Vec<(usize, u32)> = optimized_freq
         .iter()
         .enumerate()
-        .filter(|(_, &f)| f > 0)
+        .filter(|&(_, &f)| f > 0)
         .map(|(i, &f)| (i, f))
         .collect();
 
@@ -330,7 +330,7 @@ pub fn write_huffman_tree(w: &mut BitWriter, lengths: &[u8]) {
     let non_zero: Vec<(usize, u8)> = lengths
         .iter()
         .enumerate()
-        .filter(|(_, &len)| len > 0)
+        .filter(|&(_, &len)| len > 0)
         .map(|(i, &len)| (i, len))
         .collect();
 

@@ -97,7 +97,7 @@ pub fn apply_2d_locality(refs: &mut BackwardRefs, xsize: usize) {
 /// Add a single literal, checking the color cache first.
 #[inline]
 fn add_single_literal(argb_val: u32, cache: &mut Option<&mut ColorCache>, refs: &mut BackwardRefs) {
-    if let Some(ref mut c) = cache {
+    if let Some(c) = cache {
         if let Some(idx) = c.lookup(argb_val) {
             refs.push(PixOrCopy::cache_idx(idx));
         } else {

@@ -710,7 +710,7 @@ fn add_single_literal_cost(
     let color = argb[idx];
     let cost_val;
 
-    if let Some(ref mut c) = cache {
+    if let Some(c) = cache {
         if let Some(cache_idx) = c.lookup(color) {
             // Cache hit: use cache cost, scaled by 68%
             cost_val = prev_cost + div_round(cost_model.cache_cost(cache_idx) * 68, 100);
