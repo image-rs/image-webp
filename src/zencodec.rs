@@ -1910,4 +1910,97 @@ mod tests {
         assert_eq!(info.width, 4);
         assert_eq!(info.height, 4);
     }
+
+    // ── Encoder trait roundtrip tests ────────────────────────────────
+
+    /// Helper: encode via the type-erased Encoder trait, verify output is valid WebP.
+    fn encoder_trait_roundtrip(pixels: PixelSlice<'_>, lossy: bool) {
+        use zencodec_types::Encoder;
+        let config = if lossy {
+            WebpEncoderConfig::lossy().with_quality(80.0)
+        } else {
+            WebpEncoderConfig::lossless()
+        };
+        let encoder = config.job().encoder().unwrap();
+        let output = encoder.encode(pixels).unwrap();
+        assert!(!output.is_empty());
+        assert_eq!(output.format(), ImageFormat::WebP);
+        // Verify it decodes
+        let dec = WebpDecoderConfig::new();
+        let decoded = dec.decode(output.data()).unwrap();
+        assert!(decoded.width() > 0);
+        assert!(decoded.height() > 0);
+    }
+
+    #[test]
+    fn encoder_trait_rgb8() {
+        let pixels: Vec<Rgb<u8>> = (0..16 * 16)
+            .map(|i| Rgb { r: (i % 256) as u8, g: ((i * 3) % 256) as u8, b: ((i * 7) % 256) as u8 })
+            .collect();
+        let img = ImgVec::new(pixels, 16, 16);
+        encoder_trait_roundtrip(PixelSlice::from(img.as_ref()).into(), true);
+    }
+
+    #[test]
+    fn encoder_trait_rgba8() {
+        let pixels: Vec<Rgba<u8>> = (0..16 * 16)
+            .map(|i| Rgba { r: (i % 256) as u8, g: 128, b: 64, a: 255 })
+            .collect();
+        let img = ImgVec::new(pixels, 16, 16);
+        encoder_trait_roundtrip(PixelSlice::from(img.as_ref()).into(), false);
+    }
+
+    #[test]
+    fn encoder_trait_gray8() {
+        let pixels: Vec<Gray<u8>> = (0..16 * 16)
+            .map(|i| Gray((i % 256) as u8))
+            .collect();
+        let img = ImgVec::new(pixels, 16, 16);
+        encoder_trait_roundtrip(PixelSlice::from(img.as_ref()).into(), true);
+    }
+
+    #[test]
+    fn encoder_trait_rgb_f32() {
+        let pixels: Vec<Rgb<f32>> = (0..16 * 16)
+            .map(|i| {
+                let t = i as f32 / 255.0;
+                Rgb { r: t, g: t * 0.5, b: t * 0.25 }
+            })
+            .collect();
+        let img = ImgVec::new(pixels, 16, 16);
+        encoder_trait_roundtrip(PixelSlice::from(img.as_ref()).into(), true);
+    }
+
+    #[test]
+    fn encoder_trait_rgba_f32() {
+        let pixels: Vec<Rgba<f32>> = (0..16 * 16)
+            .map(|i| {
+                let t = i as f32 / 255.0;
+                Rgba { r: t, g: t * 0.5, b: t * 0.25, a: 1.0 }
+            })
+            .collect();
+        let img = ImgVec::new(pixels, 16, 16);
+        encoder_trait_roundtrip(PixelSlice::from(img.as_ref()).into(), true);
+    }
+
+    #[test]
+    fn encoder_trait_gray_f32() {
+        let pixels: Vec<Gray<f32>> = (0..16 * 16)
+            .map(|i| Gray(i as f32 / 255.0))
+            .collect();
+        let img = ImgVec::new(pixels, 16, 16);
+        encoder_trait_roundtrip(PixelSlice::from(img.as_ref()).into(), true);
+    }
+
+    #[test]
+    fn encoder_trait_dyn_encoder() {
+        // Test the dyn_encoder() path — the whole point of implementing Encoder
+        let pixels: Vec<Rgb<u8>> = vec![Rgb { r: 100, g: 150, b: 200 }; 32 * 32];
+        let img = ImgVec::new(pixels, 32, 32);
+        let config = WebpEncoderConfig::lossy().with_quality(75.0);
+        let dyn_enc = config.job().dyn_encoder().unwrap();
+        let output = dyn_enc(PixelSlice::from(img.as_ref()).into()).unwrap();
+        assert!(!output.is_empty());
+        assert_eq!(output.format(), ImageFormat::WebP);
+    }
 }
