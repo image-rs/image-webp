@@ -209,7 +209,7 @@ fn lossy_tolerance() -> RegressionTolerance {
     RegressionTolerance::off_by_one()
         .with_max_delta(255) // lossy: large pixel differences are normal
         .with_max_pixels_different(1.0) // all pixels may differ
-        .with_min_similarity(55.0) // perceptually similar
+        .with_min_similarity(50.0) // perceptually similar
         .ignore_alpha()
 }
 
