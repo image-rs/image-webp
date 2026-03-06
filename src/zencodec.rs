@@ -31,6 +31,7 @@ use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice, PixelSliceMut};
 use zencodec_types::DecodeJob as _;
 use zencodec_types::DecoderConfig as _;
 use zencodec_types::EncodeJob as _;
+use zencodec_types::Encoder as _;
 use zencodec_types::EncoderConfig as _;
 
 use crate::encoder::config::EncoderConfig;
@@ -481,35 +482,14 @@ impl<'a> WebpEncoder<'a> {
         Ok(EncodeOutput::new(data, ImageFormat::WebP))
     }
 
-    /// Type-erased single-shot encode (inherent method for backwards compat).
-    pub fn encode<P>(self, pixels: PixelSlice<'_, P>) -> Result<EncodeOutput, EncodeError> {
-        let pixels = pixels.erase();
+}
+
+impl zencodec_types::Encoder for WebpEncoder<'_> {
+    type Error = EncodeError;
+
+    fn encode(self, pixels: PixelSlice<'_>) -> Result<EncodeOutput, EncodeError> {
         let (buf, layout, w, h) = pixels_to_webp_input(&pixels)?;
         self.do_encode(&buf, layout, w, h)
-    }
-
-    /// Push rows — not supported by WebP (returns error).
-    pub fn push_rows<P>(&mut self, _rows: PixelSlice<'_, P>) -> Result<(), EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP does not support row-level push encoding".into(),
-        ))
-    }
-
-    /// Finish streaming encode — not supported by WebP (returns error).
-    pub fn finish(self) -> Result<EncodeOutput, EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP does not support row-level push encoding".into(),
-        ))
-    }
-
-    /// Encode from a pull source — not supported by WebP (returns error).
-    pub fn encode_from(
-        self,
-        _source: &mut dyn FnMut(u32, PixelSliceMut<'_>) -> usize,
-    ) -> Result<EncodeOutput, EncodeError> {
-        Err(EncodeError::InvalidBufferSize(
-            "WebP does not support pull-from-source encoding".into(),
-        ))
     }
 }
 
@@ -1689,14 +1669,14 @@ mod tests {
             .with_stop(&Unstoppable)
             .encoder()
             .unwrap()
-            .encode(PixelSlice::from(img.as_ref()))
+            .encode(PixelSlice::from(img.as_ref()).into())
             .unwrap();
         assert!(!output.is_empty());
     }
 
     #[test]
     fn f32_roundtrip_all_simd_tiers() {
-        use archmage::testing::{for_each_token_permutation, CompileTimePolicy};
+        use archmage::testing::{CompileTimePolicy, for_each_token_permutation};
 
         let report = for_each_token_permutation(CompileTimePolicy::Warn, |_perm| {
             // Encode linear f32 → WebP → decode back to f32
@@ -1860,7 +1840,7 @@ mod tests {
             .job()
             .encoder()
             .unwrap()
-            .encode(PixelSlice::from(img.as_ref()))
+            .encode(PixelSlice::from(img.as_ref()).into())
             .unwrap();
         assert!(!output.is_empty());
         assert_eq!(output.format(), ImageFormat::WebP);
