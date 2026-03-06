@@ -44,7 +44,7 @@ rgb = "0.8"
 
 # Native-only dev-deps (C bindings, threading, or native-only features)
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-butteraugli = "0.4.0"
+butteraugli = "0.8"
 codec-corpus = "1"
 criterion = { version = "0.8.1", features = ["html_reports"] }
 dssim-core = "3.4"
