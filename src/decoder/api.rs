@@ -121,6 +121,10 @@ pub enum DecodeError {
     /// Decoding was cancelled via a [`enough::Stop`] token.
     #[error("Decoding cancelled: {0}")]
     Cancelled(enough::StopReason),
+
+    /// Unsupported codec operation.
+    #[error(transparent)]
+    UnsupportedOperation(#[from] zc::UnsupportedOperation),
 }
 
 /// Result type alias using `At<DecodeError>` for automatic location tracking.
@@ -144,7 +148,7 @@ use core::ops::Range;
 
 use hashbrown::HashMap;
 
-use super::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo};
+use super::extended::{self, WebPExtendedInfo, get_alpha_predictor, read_alpha_chunk};
 use super::lossless::LosslessDecoder;
 use super::vp8::Vp8Decoder;
 use crate::slice_reader::SliceReader;
@@ -882,7 +886,7 @@ impl<'a> WebPDecoder<'a> {
                         }
                         Ok(None) => return Err(DecodeError::ChunkMissing),
                         Err(DecodeError::MemoryLimitExceeded) => {
-                            return Err(DecodeError::InvalidChunkSize)
+                            return Err(DecodeError::InvalidChunkSize);
                         }
                         Err(e) => return Err(e),
                     }
