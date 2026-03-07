@@ -773,8 +773,8 @@ impl zc::decode::DecoderConfig for WebpDecoderConfig {
     type Error = At<DecodeError>;
     type Job<'a> = WebpDecodeJob<'a>;
 
-    fn format() -> ImageFormat {
-        ImageFormat::WebP
+    fn formats() -> &'static [ImageFormat] {
+        &[ImageFormat::WebP]
     }
 
     fn supported_descriptors() -> &'static [PixelDescriptor] {
