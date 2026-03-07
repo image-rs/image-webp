@@ -735,6 +735,7 @@ impl zc::decode::DecoderConfig for WebpDecoderConfig {
             config: self,
             stop: None,
             limits: ResourceLimits::none(),
+            start_frame_index: 0,
         }
     }
 }
@@ -746,6 +747,7 @@ pub struct WebpDecodeJob<'a> {
     config: &'a WebpDecoderConfig,
     stop: Option<&'a dyn enough::Stop>,
     limits: ResourceLimits,
+    start_frame_index: u32,
 }
 
 impl<'a> WebpDecodeJob<'a> {
@@ -786,6 +788,11 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
 
     fn with_limits(mut self, limits: ResourceLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    fn with_start_frame_index(mut self, index: u32) -> Self {
+        self.start_frame_index = index;
         self
     }
 
@@ -889,9 +896,10 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
             frames.push((buf, frame.duration_ms));
         }
 
+        let start = (self.start_frame_index as usize).min(frames.len());
         Ok(WebpFullFrameDecoder {
             frames,
-            index: 0,
+            index: start,
             info: shared_info,
             total_frames,
             anim_loop_count,
