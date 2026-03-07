@@ -80,8 +80,7 @@
 //! [`archmage`]: https://docs.rs/archmage
 
 #![cfg_attr(not(feature = "std"), no_std)]
-// Forbid unsafe unless the "unchecked" feature enables it for performance
-#![cfg_attr(not(feature = "unchecked"), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 #![deny(missing_docs)]
 // Enable nightly benchmark functionality if "_benchmarks" feature is enabled.
 #![cfg_attr(all(test, feature = "_benchmarks"), feature(test))]
@@ -141,10 +140,10 @@ pub mod heuristics;
 
 // Re-export decoder public API
 pub use decoder::{
+    BitstreamFormat, DecodeConfig, DecodeError, DecodeRequest, DecodeResult, ImageInfo, Limits,
+    LoopCount, StreamStatus, StreamingDecoder, UpsamplingMethod, WebPDecoder, YuvPlanes,
     decode_bgr, decode_bgr_into, decode_bgra, decode_bgra_into, decode_rgb, decode_rgb_into,
-    decode_rgba, decode_rgba_into, decode_yuv420, BitstreamFormat, DecodeConfig, DecodeError,
-    DecodeRequest, DecodeResult, ImageInfo, Limits, LoopCount, StreamStatus, StreamingDecoder,
-    UpsamplingMethod, WebPDecoder, YuvPlanes,
+    decode_rgba, decode_rgba_into, decode_yuv420,
 };
 
 // Re-export encoder public API

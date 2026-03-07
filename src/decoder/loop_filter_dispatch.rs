@@ -24,23 +24,7 @@ pub(crate) fn simple_filter_horizontal_16_rows(
     edge_limit: u8,
     simd_token: SimdTokenType,
 ) {
-    #[cfg(all(feature = "simd", feature = "unchecked", target_arch = "x86_64"))]
-    if let Some(token) = simd_token {
-        // SAFETY: Decoder ensures buffer has FILTER_PADDING and valid coordinates
-        unsafe {
-            super::loop_filter_avx2::simple_h_filter16_unchecked(
-                token,
-                buf,
-                x0,
-                y_start,
-                stride,
-                i32::from(edge_limit),
-            );
-        }
-        return;
-    }
-
-    #[cfg(all(feature = "simd", not(feature = "unchecked"), target_arch = "x86_64"))]
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     if let Some(token) = simd_token {
         super::loop_filter_avx2::simple_h_filter16(
             token,
@@ -97,23 +81,7 @@ pub(crate) fn simple_filter_vertical_16_cols(
     edge_limit: u8,
     simd_token: SimdTokenType,
 ) {
-    #[cfg(all(feature = "simd", feature = "unchecked", target_arch = "x86_64"))]
-    if let Some(token) = simd_token {
-        let point = y0 * stride + x_start;
-        // SAFETY: Decoder ensures buffer has FILTER_PADDING and valid coordinates
-        unsafe {
-            super::loop_filter_avx2::simple_v_filter16_unchecked(
-                token,
-                buf,
-                point,
-                stride,
-                i32::from(edge_limit),
-            );
-        }
-        return;
-    }
-
-    #[cfg(all(feature = "simd", not(feature = "unchecked"), target_arch = "x86_64"))]
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     if let Some(token) = simd_token {
         let point = y0 * stride + x_start;
         super::loop_filter_avx2::simple_v_filter16(
@@ -203,25 +171,7 @@ pub(crate) fn normal_filter_vertical_mb_16_cols(
     edge_limit: u8,
     simd_token: SimdTokenType,
 ) {
-    #[cfg(all(feature = "simd", feature = "unchecked", target_arch = "x86_64"))]
-    if let Some(token) = simd_token {
-        let point = y0 * stride + x_start;
-        // SAFETY: Decoder ensures buffer has FILTER_PADDING and valid coordinates
-        unsafe {
-            super::loop_filter_avx2::normal_v_filter16_edge_unchecked(
-                token,
-                buf,
-                point,
-                stride,
-                i32::from(hev_threshold),
-                i32::from(interior_limit),
-                i32::from(edge_limit),
-            );
-        }
-        return;
-    }
-
-    #[cfg(all(feature = "simd", not(feature = "unchecked"), target_arch = "x86_64"))]
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     if let Some(token) = simd_token {
         let point = y0 * stride + x_start;
         super::loop_filter_avx2::normal_v_filter16_edge(
@@ -292,25 +242,7 @@ pub(crate) fn normal_filter_vertical_sub_16_cols(
     edge_limit: u8,
     simd_token: SimdTokenType,
 ) {
-    #[cfg(all(feature = "simd", feature = "unchecked", target_arch = "x86_64"))]
-    if let Some(token) = simd_token {
-        let point = y0 * stride + x_start;
-        // SAFETY: Decoder ensures buffer has FILTER_PADDING and valid coordinates
-        unsafe {
-            super::loop_filter_avx2::normal_v_filter16_inner_unchecked(
-                token,
-                buf,
-                point,
-                stride,
-                i32::from(hev_threshold),
-                i32::from(interior_limit),
-                i32::from(edge_limit),
-            );
-        }
-        return;
-    }
-
-    #[cfg(all(feature = "simd", not(feature = "unchecked"), target_arch = "x86_64"))]
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     if let Some(token) = simd_token {
         let point = y0 * stride + x_start;
         super::loop_filter_avx2::normal_v_filter16_inner(
@@ -487,25 +419,7 @@ pub(crate) fn normal_filter_horizontal_mb_16_rows(
     edge_limit: u8,
     simd_token: SimdTokenType,
 ) {
-    #[cfg(all(feature = "simd", feature = "unchecked", target_arch = "x86_64"))]
-    if let Some(token) = simd_token {
-        // SAFETY: Decoder ensures buffer has FILTER_PADDING and valid coordinates
-        unsafe {
-            super::loop_filter_avx2::normal_h_filter16_edge_unchecked(
-                token,
-                buf,
-                x0,
-                y_start,
-                stride,
-                i32::from(hev_threshold),
-                i32::from(interior_limit),
-                i32::from(edge_limit),
-            );
-        }
-        return;
-    }
-
-    #[cfg(all(feature = "simd", not(feature = "unchecked"), target_arch = "x86_64"))]
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     if let Some(token) = simd_token {
         super::loop_filter_avx2::normal_h_filter16_edge(
             token,
@@ -574,25 +488,7 @@ pub(crate) fn normal_filter_horizontal_sub_16_rows(
     edge_limit: u8,
     simd_token: SimdTokenType,
 ) {
-    #[cfg(all(feature = "simd", feature = "unchecked", target_arch = "x86_64"))]
-    if let Some(token) = simd_token {
-        // SAFETY: Decoder ensures buffer has FILTER_PADDING and valid coordinates
-        unsafe {
-            super::loop_filter_avx2::normal_h_filter16_inner_unchecked(
-                token,
-                buf,
-                x0,
-                y_start,
-                stride,
-                i32::from(hev_threshold),
-                i32::from(interior_limit),
-                i32::from(edge_limit),
-            );
-        }
-        return;
-    }
-
-    #[cfg(all(feature = "simd", not(feature = "unchecked"), target_arch = "x86_64"))]
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
     if let Some(token) = simd_token {
         super::loop_filter_avx2::normal_h_filter16_inner(
             token,

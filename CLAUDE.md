@@ -123,8 +123,6 @@ let region: &mut [u8; V_FILTER_REGION] =
 - Memory overhead: ~170KB per decode (negligible)
 - Assembly confirmed: interior accesses use direct memory loads, no checks
 
-**`unchecked` feature:** Eliminates ALL bounds checks in loop filter hot paths via raw pointers.
-Only for trusted input. ~1.5% additional wall time improvement.
 
 **Key insight:** Rust asserts at function entry do NOT eliminate bounds checks on individual
 slice accesses. Each `try_from(&slice[a..b]).unwrap()` generates 3 separate checks.
@@ -243,7 +241,6 @@ Dependencies: `thiserror`, `whereat`, `hashbrown`, `libm` (all no_std).
 
 `#![forbid(unsafe_code)]`. SIMD via `archmage` token-based safety (proc-macro generates
 unsafe internally). No manual unsafe, transmute, get_unchecked, or raw pointer derefs.
-Exception: `unchecked` feature for loop filter hot paths.
 
 ## Examples and Dev Tools
 

@@ -14,7 +14,7 @@ keywords = ["webp", "image", "encoder", "decoder", "codec"]
 readme = "README.md"
 autobenches = false
 
-include = ["/src", "LICENSE-AGPL", "README.md"]
+include = ["/src", "LICENSE-AGPL", "README.md", "CHANGES.md"]
 
 [dependencies]
 # Core dependencies - all no_std compatible
@@ -53,8 +53,8 @@ imgref = "1.12"
 webp = "0.3.1"
 webpx = "0.1.3"
 yuv = "0.8"
-zensim = { path = "../zensim/zensim" }
-zensim-regress = { path = "../zensim/zensim-regress" }
+zensim = "0.1"
+zensim-regress = "0.1"
 
 [features]
 default = ["std", "fast-yuv", "simd", "pixel-types"]
@@ -66,19 +66,12 @@ fast-yuv = ["dep:yuv"]
 # Provides best performance on x86-64 with runtime CPU detection.
 # On wasm32, uses core::arch::wasm32 SIMD128 intrinsics.
 simd = ["dep:archmage", "dep:magetypes"]
-# UNSAFE: Eliminate bounds checks in hot decoder paths for ~5-10% speedup.
-# Only enable if you trust your WebP input (e.g., self-generated files).
-# Malformed input may cause undefined behavior instead of clean errors.
-unchecked = []
 # Type-safe pixel format support via the `rgb` crate.
 pixel-types = ["dep:rgb"]
 # imgref integration for Img<Vec<P>> / Img<&[P]> decode/encode.
 imgref = ["dep:imgref", "pixel-types"]
 # Enable AVX-512 autoversion variants (passthrough to archmage).
 avx512 = ["archmage/avx512"]
-# Color quantization for near-lossless palette encoding.
-# Reduces >256 color images to palette for VP8L color indexing transform.
-# Choose backend based on licensing needs:
 # --- Internal features (not for public use, underscore prefix = private) ---
 # Nightly-only: enables #[bench] micro-benchmarks. Requires `cargo +nightly test`.
 _benchmarks = []
@@ -91,7 +84,7 @@ _profiling = ["dep:png", "dep:webp"]
 # WASM profiling - minimal deps for wasm32 benchmarking.
 _wasm_profiling = ["std"]
 # Enable zencodec-types trait integration
-zencodec = ["dep:rgb", "dep:imgref", "dep:zenpixels"]
+zencodec = ["dep:zenpixels"]
 
 [[bin]]
 name = "zenwebp-encode"

@@ -338,9 +338,8 @@ impl Frame {
 
 /// Read DCT coefficients using an active reader (avoids per-block reader creation overhead).
 /// Returns (has_nonzero_ac, eof_error).
-#[cfg_attr(feature = "unchecked", allow(dead_code))]
 #[inline]
-fn read_coefficients_safe(
+fn read_coefficients(
     reader: &mut ActivePartitionReader<'_>,
     output: &mut [i32],
     probs: &[[[TreeNode; NUM_DCT_TOKENS - 1]; 3]; 17],
@@ -419,132 +418,6 @@ fn read_coefficients_safe(
         n += 1;
         if n < 16 {
             prob = &probs[n][next_ctx];
-        }
-    }
-
-    if reader.is_eof() {
-        return Err(DecodeError::BitStreamError);
-    }
-    Ok(n > first)
-}
-
-/// Dispatcher that calls the appropriate version of read_coefficients based on feature flags.
-#[inline(always)]
-fn read_coefficients(
-    reader: &mut ActivePartitionReader<'_>,
-    output: &mut [i32],
-    probs: &[[[TreeNode; NUM_DCT_TOKENS - 1]; 3]; 17],
-    first: usize,
-    complexity: usize,
-    dcq: i16,
-    acq: i16,
-) -> Result<bool, DecodeError> {
-    #[cfg(feature = "unchecked")]
-    {
-        // SAFETY: All callers ensure:
-        // - output.len() >= 16
-        // - first < 16
-        // - complexity <= 2
-        // - probs is a valid [[[TreeNode; 10]; 3]; 17] array
-        unsafe {
-            read_coefficients_inline_unchecked(reader, output, probs, first, complexity, dcq, acq)
-        }
-    }
-    #[cfg(not(feature = "unchecked"))]
-    {
-        read_coefficients_safe(reader, output, probs, first, complexity, dcq, acq)
-    }
-}
-
-/// Unchecked version of read_coefficients_inline that eliminates bounds checks.
-///
-/// # Safety
-/// - `output` must have length >= 16
-/// - `first` must be < 16
-/// - `complexity` must be <= 2
-/// - `probs` must be a valid [[[TreeNode; 10]; 3]; 17] array
-#[cfg(feature = "unchecked")]
-#[inline(always)]
-unsafe fn read_coefficients_inline_unchecked(
-    reader: &mut ActivePartitionReader<'_>,
-    output: &mut [i32],
-    probs: &[[[TreeNode; NUM_DCT_TOKENS - 1]; 3]; 17],
-    first: usize,
-    complexity: usize,
-    dcq: i16,
-    acq: i16,
-) -> Result<bool, DecodeError> {
-    debug_assert!(complexity <= 2);
-    debug_assert!(output.len() >= 16);
-    debug_assert!(first < 16);
-
-    let mut n = first;
-    let mut prob = probs.get_unchecked(n).get_unchecked(complexity);
-
-    while n < 16 {
-        if reader.get_bit(prob.get_unchecked(0).prob) == 0 {
-            break;
-        }
-
-        while reader.get_bit(prob.get_unchecked(1).prob) == 0 {
-            n += 1;
-            if n >= 16 {
-                if reader.is_eof() {
-                    return Err(DecodeError::BitStreamError);
-                }
-                return Ok(true);
-            }
-            prob = probs.get_unchecked(n).get_unchecked(0);
-        }
-
-        let v: i32;
-        let next_ctx: usize;
-
-        if reader.get_bit(prob.get_unchecked(2).prob) == 0 {
-            v = 1;
-            next_ctx = 1;
-        } else {
-            if reader.get_bit(prob.get_unchecked(3).prob) == 0 {
-                if reader.get_bit(prob.get_unchecked(4).prob) == 0 {
-                    v = 2;
-                } else {
-                    v = 3 + reader.get_bit(prob.get_unchecked(5).prob);
-                }
-            } else {
-                if reader.get_bit(prob.get_unchecked(6).prob) == 0 {
-                    if reader.get_bit(prob.get_unchecked(7).prob) == 0 {
-                        v = 5 + reader.get_bit(159);
-                    } else {
-                        v = 7 + 2 * reader.get_bit(165) + reader.get_bit(145);
-                    }
-                } else {
-                    let bit1 = reader.get_bit(prob.get_unchecked(8).prob);
-                    let bit0 = reader.get_bit(prob.get_unchecked(9 + bit1 as usize).prob);
-                    let cat = (2 * bit1 + bit0) as usize;
-
-                    let cat_probs = PROB_DCT_CAT.get_unchecked(2 + cat);
-                    let mut extra = 0i32;
-                    for &p in cat_probs.iter() {
-                        if p == 0 {
-                            break;
-                        }
-                        extra = extra + extra + reader.get_bit(p);
-                    }
-                    v = 3 + (8 << cat) + extra;
-                }
-            }
-            next_ctx = 2;
-        }
-
-        let signed_v = if reader.get_bit(128) != 0 { -v } else { v };
-
-        let zigzag = *ZIGZAG.get_unchecked(n) as usize;
-        let q = if zigzag > 0 { acq } else { dcq };
-        *output.get_unchecked_mut(zigzag) = signed_v * i32::from(q);
-
-        n += 1;
-        if n < 16 {
-            prob = probs.get_unchecked(n).get_unchecked(next_ctx);
         }
     }
 
