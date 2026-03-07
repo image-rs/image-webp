@@ -837,6 +837,17 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         )))
     }
 
+    fn push_decoder(
+        self,
+        data: Cow<'a, [u8]>,
+        sink: &mut dyn zc::decode::DecodeRowSink,
+        preferred: &[PixelDescriptor],
+    ) -> Result<OutputInfo, Self::Error> {
+        zc::decode::push_decoder_via_full_decode(self, data, sink, preferred, |e| {
+            whereat::at(DecodeError::InvalidParameter(alloc::format!("{e}")))
+        })
+    }
+
     fn full_frame_decoder(
         self,
         data: Cow<'a, [u8]>,
@@ -1055,6 +1066,13 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         self.index += 1;
         let (ref pixels, duration_ms) = self.frames[self.index - 1];
         Ok(Some(FullFrame::new(pixels.as_slice(), duration_ms, idx)))
+    }
+
+    fn render_next_frame_to_sink(
+        &mut self,
+        sink: &mut dyn zc::decode::DecodeRowSink,
+    ) -> Result<Option<OutputInfo>, Self::Error> {
+        zc::decode::render_frame_to_sink_via_copy(self, sink)
     }
 }
 
