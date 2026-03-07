@@ -12,18 +12,18 @@
 //! | `EncoderConfig` | [`WebpEncoderConfig`] |
 //! | `EncodeJob<'a>` | [`WebpEncodeJob`] |
 //! | `Encoder` | [`WebpEncoder`] |
-//! | `FrameEncoder` | [`WebpFrameEncoder`] |
+//! | `FullFrameEncoder` | [`WebpFullFrameEncoder`] |
 //! | `DecoderConfig` | [`WebpDecoderConfig`] |
 //! | `DecodeJob<'a>` | [`WebpDecodeJob`] |
 //! | `Decode` | [`WebpDecoder`] |
-//! | `FrameDecode` | [`WebpFrameDecoder`] |
+//! | `FullFrameDecoder` | [`WebpFullFrameDecoder`] |
 
 use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use whereat::{At, ResultAtExt};
-use zc::decode::{DecodeFrame, DecodeOutput, OutputInfo};
+use zc::decode::{DecodeOutput, FullFrame, OutputInfo, SinkError};
 use zc::encode::EncodeOutput;
 use zc::{ImageFormat, ImageInfo, MetadataView, ResourceLimits, UnsupportedOperation};
 use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice};
@@ -345,7 +345,7 @@ impl<'a> WebpEncodeJob<'a> {
 impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
     type Error = At<EncodeError>;
     type Enc = WebpEncoder<'a>;
-    type FrameEnc = WebpFrameEncoder;
+    type FullFrameEnc = WebpFullFrameEncoder;
 
     fn with_stop(mut self, stop: &'a dyn enough::Stop) -> Self {
         self.stop = Some(stop);
@@ -395,7 +395,7 @@ impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
         })
     }
 
-    fn frame_encoder(self) -> Result<WebpFrameEncoder, At<EncodeError>> {
+    fn full_frame_encoder(self) -> Result<WebpFullFrameEncoder, At<EncodeError>> {
         let inner_config = self.build_inner_config();
         let loop_count = match self.loop_count {
             Some(Some(0)) | None => crate::LoopCount::Forever,
@@ -407,7 +407,7 @@ impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
                 )
             }
         };
-        Ok(WebpFrameEncoder {
+        Ok(WebpFullFrameEncoder {
             inner_config,
             anim_enc: None,
             cumulative_ms: 0,
@@ -550,13 +550,13 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
     }
 }
 
-// ── Frame Encoder ───────────────────────────────────────────────────────────
+// ── Full Frame Encoder ──────────────────────────────────────────────────────
 
-/// Animation WebP frame encoder.
+/// Animation WebP full-frame encoder.
 ///
 /// The animation encoder is created lazily on the first frame push
 /// (to determine canvas dimensions).
-pub struct WebpFrameEncoder {
+pub struct WebpFullFrameEncoder {
     inner_config: EncoderConfig,
     anim_enc: Option<AnimationEncoder>,
     cumulative_ms: u32,
@@ -574,7 +574,7 @@ fn mux_to_encode_err(e: MuxError) -> EncodeError {
     }
 }
 
-impl WebpFrameEncoder {
+impl WebpFullFrameEncoder {
     fn ensure_encoder(&mut self, frame_w: u32, frame_h: u32) -> Result<(), At<EncodeError>> {
         if self.anim_enc.is_none() {
             let (cw, ch) = self.canvas_size.unwrap_or((frame_w, frame_h));
@@ -590,23 +590,11 @@ impl WebpFrameEncoder {
     }
 }
 
-impl zc::encode::FrameEncoder for WebpFrameEncoder {
+impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
     type Error = At<EncodeError>;
 
     fn reject(op: UnsupportedOperation) -> At<EncodeError> {
         At::from(EncodeError::from(op))
-    }
-
-    fn with_loop_count(&mut self, count: Option<u32>) {
-        self.loop_count = match count {
-            Some(0) | None => crate::LoopCount::Forever,
-            Some(n) => {
-                let n16 = (n.min(u16::MAX as u32)) as u16;
-                crate::LoopCount::Times(
-                    core::num::NonZeroU16::new(n16).unwrap_or(core::num::NonZeroU16::new(1).unwrap()),
-                )
-            }
-        };
     }
 
     fn push_frame(
@@ -621,49 +609,6 @@ impl zc::encode::FrameEncoder for WebpFrameEncoder {
         enc.add_frame(&buf, layout, timestamp_ms, &self.inner_config)
             .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
         self.cumulative_ms = self.cumulative_ms.saturating_add(duration_ms);
-        Ok(())
-    }
-
-    fn push_encode_frame(
-        &mut self,
-        frame: zc::encode::EncodeFrame<'_>,
-    ) -> Result<(), At<EncodeError>> {
-        use zc::{FrameBlend, FrameDisposal};
-
-        let (buf, layout, w, h) = pixels_to_webp_input(&frame.pixels).map_err(whereat::at)?;
-        self.ensure_encoder(w, h)?;
-
-        let dispose = match frame.disposal {
-            FrameDisposal::RestoreBackground => DisposeMethod::Background,
-            _ => DisposeMethod::None,
-        };
-        let blend = match frame.blend {
-            FrameBlend::Over => BlendMethod::AlphaBlend,
-            _ => BlendMethod::Overwrite,
-        };
-
-        let (frame_w, frame_h, x_off, y_off) = if let Some([x, y, fw, fh]) = frame.frame_rect {
-            (fw, fh, x, y)
-        } else {
-            (w, h, 0, 0)
-        };
-
-        let timestamp_ms = self.cumulative_ms;
-        let enc = self.anim_enc.as_mut().unwrap();
-        enc.add_frame_advanced(
-            &buf,
-            layout,
-            frame_w,
-            frame_h,
-            x_off,
-            y_off,
-            timestamp_ms,
-            &self.inner_config,
-            dispose,
-            blend,
-        )
-        .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
-        self.cumulative_ms = self.cumulative_ms.saturating_add(frame.duration_ms);
         Ok(())
     }
 
@@ -832,7 +777,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
     type Error = At<DecodeError>;
     type Dec = WebpDecoder<'a>;
     type StreamDec = zc::Unsupported<At<DecodeError>>;
-    type FrameDec = WebpFrameDecoder;
+    type FullFrameDec = WebpFullFrameDecoder;
 
     fn with_stop(mut self, stop: &'a dyn enough::Stop) -> Self {
         self.stop = Some(stop);
@@ -885,11 +830,11 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         )))
     }
 
-    fn frame_decoder(
+    fn full_frame_decoder(
         self,
         data: Cow<'a, [u8]>,
         preferred: &[PixelDescriptor],
-    ) -> Result<WebpFrameDecoder, At<DecodeError>> {
+    ) -> Result<WebpFullFrameDecoder, At<DecodeError>> {
         if let Some(max) = self.effective_input_size_limit() {
             if data.len() as u64 > max {
                 return Err(whereat::at(DecodeError::InvalidParameter(alloc::format!(
@@ -927,7 +872,8 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
             crate::LoopCount::Times(n) => Some(n.get() as u32),
         };
 
-        // Eagerly decode all frames (required because AnimationDecoder borrows data)
+        // Eagerly decode all frames (required because AnimationDecoder borrows data).
+        // Apply format negotiation upfront so render_next_frame can borrow in place.
         let mut frames = Vec::new();
         while let Some(frame) = anim.next_frame().map_err(whereat::at)? {
             let buf = PixelBuffer::from_vec(
@@ -937,15 +883,15 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
                 PixelDescriptor::RGBA8_SRGB,
             )
             .map_err(|_| whereat::at(DecodeError::InvalidParameter("frame size mismatch".into())))?;
+            let buf = negotiate_format(buf, preferred);
             frames.push((buf, frame.duration_ms));
         }
 
-        Ok(WebpFrameDecoder {
+        Ok(WebpFullFrameDecoder {
             frames,
             index: 0,
             info: shared_info,
             total_frames,
-            preferred: preferred.to_vec(),
             anim_loop_count,
         })
     }
@@ -1075,23 +1021,30 @@ impl zc::decode::Decode for WebpDecoder<'_> {
     }
 }
 
-// ── Frame Decoder ───────────────────────────────────────────────────────────
+// ── Full Frame Decoder ──────────────────────────────────────────────────────
 
-/// Animation WebP frame decoder.
+/// Animation WebP full-frame decoder.
 ///
 /// Pre-decodes all frames eagerly (required because the underlying
 /// [`AnimationDecoder`] borrows the input data).
-pub struct WebpFrameDecoder {
+pub struct WebpFullFrameDecoder {
     frames: Vec<(PixelBuffer, u32)>,
     index: usize,
     info: Arc<ImageInfo>,
     total_frames: u32,
-    preferred: Vec<PixelDescriptor>,
     anim_loop_count: Option<u32>,
 }
 
-impl zc::decode::FrameDecode for WebpFrameDecoder {
+impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
     type Error = At<DecodeError>;
+
+    fn wrap_sink_error(err: SinkError) -> At<DecodeError> {
+        whereat::at(DecodeError::InvalidParameter(alloc::format!("{err}")))
+    }
+
+    fn info(&self) -> &ImageInfo {
+        &self.info
+    }
 
     fn frame_count(&self) -> Option<u32> {
         Some(self.total_frames)
@@ -1101,17 +1054,15 @@ impl zc::decode::FrameDecode for WebpFrameDecoder {
         self.anim_loop_count
     }
 
-    fn next_frame(&mut self) -> Result<Option<DecodeFrame>, At<DecodeError>> {
+    fn render_next_frame(&mut self) -> Result<Option<FullFrame<'_>>, At<DecodeError>> {
         if self.index >= self.frames.len() {
             return Ok(None);
         }
-        let (pixels, duration_ms) = self.frames.remove(0);
-        let pixels = negotiate_format(pixels, &self.preferred);
         let idx = self.index as u32;
         self.index += 1;
-        Ok(Some(DecodeFrame::new(
-            pixels,
-            Arc::clone(&self.info),
+        let (ref pixels, duration_ms) = self.frames[self.index - 1];
+        Ok(Some(FullFrame::new(
+            pixels.as_slice(),
             duration_ms,
             idx,
         )))

@@ -170,7 +170,7 @@ mod zencodec;
 #[cfg(feature = "zencodec")]
 pub use zencodec::{
     WebpDecodeJob, WebpDecoder, WebpDecoderConfig, WebpEncodeJob, WebpEncoder, WebpEncoderConfig,
-    WebpFrameDecoder, WebpFrameEncoder,
+    WebpFullFrameDecoder, WebpFullFrameEncoder,
 };
 
 /// Standalone metadata convenience functions for already-encoded WebP data.
