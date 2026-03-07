@@ -19,11 +19,12 @@
 //! | `FullFrameDecoder` | [`WebpFullFrameDecoder`] |
 
 use alloc::borrow::Cow;
+use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use whereat::{At, ResultAtExt};
-use zc::decode::{DecodeOutput, FullFrame, OutputInfo, SinkError};
+use zc::decode::{DecodeOutput, FullFrame, OwnedFullFrame, OutputInfo, SinkError};
 use zc::encode::EncodeOutput;
 use zc::{ImageFormat, ImageInfo, MetadataView, ResourceLimits, UnsupportedOperation};
 use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice};
@@ -892,8 +893,18 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
 
         // Eagerly decode all frames (required because AnimationDecoder borrows data).
         // Apply format negotiation upfront so render_next_frame can borrow in place.
-        let mut frames = Vec::new();
+        // Frames before start_frame_index are decoded (needed for compositing) but
+        // not stored, reducing peak memory when skipping early frames.
+        let start = self.start_frame_index as usize;
+        let mut frames = VecDeque::new();
+        let mut decoded_count: usize = 0;
         while let Some(frame) = anim.next_frame().map_err(whereat::at)? {
+            let frame_idx = decoded_count;
+            decoded_count += 1;
+            if frame_idx < start {
+                // Decode for compositing state but don't store.
+                continue;
+            }
             let buf = PixelBuffer::from_vec(
                 frame.data,
                 frame.width,
@@ -904,13 +915,13 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
                 whereat::at(DecodeError::InvalidParameter("frame size mismatch".into()))
             })?;
             let buf = negotiate_format(buf, preferred);
-            frames.push((buf, frame.duration_ms));
+            frames.push_back((buf, frame.duration_ms));
         }
 
-        let start = (self.start_frame_index as usize).min(frames.len());
         Ok(WebpFullFrameDecoder {
             frames,
-            index: start,
+            current_frame: None,
+            next_frame_index: start as u32,
             info: shared_info,
             total_frames,
             anim_loop_count,
@@ -1030,10 +1041,15 @@ impl zc::decode::Decode for WebpDecoder<'_> {
 /// Animation WebP full-frame decoder.
 ///
 /// Pre-decodes all frames eagerly (required because the underlying
-/// [`AnimationDecoder`] borrows the input data).
+/// [`AnimationDecoder`] borrows the input data). Consumed frames are
+/// freed immediately via `VecDeque::pop_front`, so peak memory is
+/// proportional to remaining (not total) frames.
 pub struct WebpFullFrameDecoder {
-    frames: Vec<(PixelBuffer, u32)>,
-    index: usize,
+    frames: VecDeque<(PixelBuffer, u32)>,
+    /// Holds the most recently yielded frame for borrowing via `render_next_frame`.
+    current_frame: Option<(PixelBuffer, u32)>,
+    /// Frame index of the next frame to yield (accounts for `start_frame_index`).
+    next_frame_index: u32,
     info: Arc<ImageInfo>,
     total_frames: u32,
     anim_loop_count: Option<u32>,
@@ -1059,13 +1075,26 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
     }
 
     fn render_next_frame(&mut self) -> Result<Option<FullFrame<'_>>, At<DecodeError>> {
-        if self.index >= self.frames.len() {
+        let frame = self.frames.pop_front();
+        let Some((pixels, duration_ms)) = frame else {
             return Ok(None);
-        }
-        let idx = self.index as u32;
-        self.index += 1;
-        let (ref pixels, duration_ms) = self.frames[self.index - 1];
+        };
+        let idx = self.next_frame_index;
+        self.next_frame_index += 1;
+        self.current_frame = Some((pixels, duration_ms));
+        let (ref pixels, duration_ms) = *self.current_frame.as_ref().unwrap();
         Ok(Some(FullFrame::new(pixels.as_slice(), duration_ms, idx)))
+    }
+
+    fn render_next_frame_owned(&mut self) -> Result<Option<OwnedFullFrame>, At<DecodeError>> {
+        let Some((pixels, duration_ms)) = self.frames.pop_front() else {
+            return Ok(None);
+        };
+        let idx = self.next_frame_index;
+        self.next_frame_index += 1;
+        // Drop any previously held frame to free memory before returning.
+        self.current_frame = None;
+        Ok(Some(OwnedFullFrame::new(pixels, duration_ms, idx)))
     }
 
     fn render_next_frame_to_sink(
