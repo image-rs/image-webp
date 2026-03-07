@@ -29,9 +29,7 @@ use zc::{ImageFormat, ImageInfo, MetadataView, ResourceLimits, UnsupportedOperat
 use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice};
 
 use crate::encoder::config::EncoderConfig;
-use crate::mux::{
-    AnimationConfig, AnimationDecoder, AnimationEncoder, BlendMethod, DisposeMethod, MuxError,
-};
+use crate::mux::{AnimationConfig, AnimationDecoder, AnimationEncoder, MuxError};
 use crate::{DecodeConfig, DecodeError, DecodeRequest, EncodeError, EncodeRequest, PixelLayout};
 
 // ── Encoding ────────────────────────────────────────────────────────────────
@@ -203,17 +201,16 @@ static ENCODE_DESCRIPTORS: &[PixelDescriptor] = &[
     PixelDescriptor::GRAYF32_LINEAR,
 ];
 
-static ENCODE_CAPABILITIES: zc::encode::EncodeCapabilities =
-    zc::encode::EncodeCapabilities::new()
-        .with_icc(true)
-        .with_exif(true)
-        .with_xmp(true)
-        .with_lossy(true)
-        .with_lossless(true)
-        .with_animation(true)
-        .with_native_alpha(true)
-        .with_effort_range(0, 10)
-        .with_quality_range(0.0, 100.0);
+static ENCODE_CAPABILITIES: zc::encode::EncodeCapabilities = zc::encode::EncodeCapabilities::new()
+    .with_icc(true)
+    .with_exif(true)
+    .with_xmp(true)
+    .with_lossy(true)
+    .with_lossless(true)
+    .with_animation(true)
+    .with_native_alpha(true)
+    .with_effort_range(0, 10)
+    .with_quality_range(0.0, 100.0);
 
 impl zc::encode::EncoderConfig for WebpEncoderConfig {
     type Error = At<EncodeError>;
@@ -403,7 +400,8 @@ impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
             Some(Some(n)) => {
                 let n16 = (n.min(u16::MAX as u32)) as u16;
                 crate::LoopCount::Times(
-                    core::num::NonZeroU16::new(n16).unwrap_or(core::num::NonZeroU16::new(1).unwrap()),
+                    core::num::NonZeroU16::new(n16)
+                        .unwrap_or(core::num::NonZeroU16::new(1).unwrap()),
                 )
             }
         };
@@ -582,8 +580,8 @@ impl WebpFullFrameEncoder {
                 loop_count: self.loop_count,
                 ..AnimationConfig::default()
             };
-            let enc =
-                AnimationEncoder::new(cw, ch, config).map_err(|e| whereat::at(mux_to_encode_err(e)))?;
+            let enc = AnimationEncoder::new(cw, ch, config)
+                .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
             self.anim_enc = Some(enc);
         }
         Ok(())
@@ -618,7 +616,9 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
             .ok_or_else(|| EncodeError::InvalidBufferSize("no frames added".into()))
             .map_err(whereat::at)?;
         let last_duration = 100;
-        let data = enc.finalize(last_duration).map_err(|e| whereat::at(mux_to_encode_err(e)))?;
+        let data = enc
+            .finalize(last_duration)
+            .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
         Ok(EncodeOutput::new(data, ImageFormat::WebP))
     }
 }
@@ -688,7 +688,8 @@ impl WebpDecoderConfig {
     pub fn decode(&self, data: &[u8]) -> Result<DecodeOutput, At<DecodeError>> {
         use zc::decode::{Decode, DecodeJob, DecoderConfig};
         <Self as DecoderConfig>::job(self)
-            .decoder(Cow::Borrowed(data), &[]).at()?
+            .decoder(Cow::Borrowed(data), &[])
+            .at()?
             .decode()
     }
 }
@@ -705,14 +706,13 @@ static DECODE_DESCRIPTORS: &[PixelDescriptor] = &[
     PixelDescriptor::BGRA8_SRGB,
 ];
 
-static DECODE_CAPABILITIES: zc::decode::DecodeCapabilities =
-    zc::decode::DecodeCapabilities::new()
-        .with_icc(true)
-        .with_exif(true)
-        .with_xmp(true)
-        .with_animation(true)
-        .with_cheap_probe(true)
-        .with_native_alpha(true);
+static DECODE_CAPABILITIES: zc::decode::DecodeCapabilities = zc::decode::DecodeCapabilities::new()
+    .with_icc(true)
+    .with_exif(true)
+    .with_xmp(true)
+    .with_animation(true)
+    .with_cheap_probe(true)
+    .with_native_alpha(true);
 
 impl zc::decode::DecoderConfig for WebpDecoderConfig {
     type Error = At<DecodeError>;
@@ -882,7 +882,9 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
                 frame.height,
                 PixelDescriptor::RGBA8_SRGB,
             )
-            .map_err(|_| whereat::at(DecodeError::InvalidParameter("frame size mismatch".into())))?;
+            .map_err(|_| {
+                whereat::at(DecodeError::InvalidParameter("frame size mismatch".into()))
+            })?;
             let buf = negotiate_format(buf, preferred);
             frames.push((buf, frame.duration_ms));
         }
@@ -940,20 +942,10 @@ impl WebpDecoder<'_> {
         let (pixels, w, h, layout) = req.decode()?;
 
         let buf: PixelBuffer = match layout {
-            PixelLayout::Rgb8 => PixelBuffer::from_vec(
-                pixels,
-                w,
-                h,
-                PixelDescriptor::RGB8_SRGB,
-            )
-            .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?,
-            PixelLayout::Rgba8 => PixelBuffer::from_vec(
-                pixels,
-                w,
-                h,
-                PixelDescriptor::RGBA8_SRGB,
-            )
-            .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?,
+            PixelLayout::Rgb8 => PixelBuffer::from_vec(pixels, w, h, PixelDescriptor::RGB8_SRGB)
+                .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?,
+            PixelLayout::Rgba8 => PixelBuffer::from_vec(pixels, w, h, PixelDescriptor::RGBA8_SRGB)
+                .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?,
             _ => {
                 // Fallback: decode as RGBA
                 let rgba_req = DecodeRequest::new(&self.config, data);
@@ -962,13 +954,8 @@ impl WebpDecoder<'_> {
                 } else {
                     rgba_req.decode_rgba()?
                 };
-                PixelBuffer::from_vec(
-                    rgba_pixels,
-                    rw,
-                    rh,
-                    PixelDescriptor::RGBA8_SRGB,
-                )
-                .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?
+                PixelBuffer::from_vec(rgba_pixels, rw, rh, PixelDescriptor::RGBA8_SRGB)
+                    .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?
             }
         };
 
@@ -991,9 +978,7 @@ fn negotiate_format(pixels: PixelBuffer, preferred: &[PixelDescriptor]) -> Pixel
     }
     let desc = pixels.descriptor();
     // Check if BGRA is preferred and we have RGBA
-    if preferred.contains(&PixelDescriptor::BGRA8_SRGB)
-        && desc == PixelDescriptor::RGBA8_SRGB
-    {
+    if preferred.contains(&PixelDescriptor::BGRA8_SRGB) && desc == PixelDescriptor::RGBA8_SRGB {
         let w = pixels.width();
         let h = pixels.height();
         // Swizzle RGBA → BGRA in-place (avoids extra allocation)
@@ -1061,11 +1046,7 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         let idx = self.index as u32;
         self.index += 1;
         let (ref pixels, duration_ms) = self.frames[self.index - 1];
-        Ok(Some(FullFrame::new(
-            pixels.as_slice(),
-            duration_ms,
-            idx,
-        )))
+        Ok(Some(FullFrame::new(pixels.as_slice(), duration_ms, idx)))
     }
 }
 
@@ -1280,7 +1261,12 @@ mod tests {
             }
         }
         let config = WebpEncoderConfig::lossy().with_quality(80.0);
-        let output = config.job().encoder().unwrap().encode(buf.as_slice()).unwrap();
+        let output = config
+            .job()
+            .encoder()
+            .unwrap()
+            .encode(buf.as_slice())
+            .unwrap();
         assert!(!output.is_empty());
     }
 
