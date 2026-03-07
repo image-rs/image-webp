@@ -1058,13 +1058,7 @@ pub fn palette_xbits(palette_size: usize) -> u8 {
 /// Matches libwebp's PaletteColorDistance.
 fn palette_color_distance(col1: u32, col2: u32) -> u32 {
     let diff = sub_pixels_color(col1, col2);
-    let component_distance = |v: u8| -> u32 {
-        if v <= 128 {
-            v as u32
-        } else {
-            256 - v as u32
-        }
-    };
+    let component_distance = |v: u8| -> u32 { if v <= 128 { v as u32 } else { 256 - v as u32 } };
     let score = component_distance(diff as u8)
         + component_distance((diff >> 8) as u8)
         + component_distance((diff >> 16) as u8);

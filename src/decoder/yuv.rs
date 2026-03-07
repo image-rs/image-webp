@@ -819,8 +819,8 @@ pub(crate) fn convert_image_yuv_simd<const BPP: usize>(
     height: u16,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     use yuv::{
-        rgb_to_yuv420, rgba_to_yuv420, YuvChromaSubsampling, YuvConversionMode, YuvPlanarImageMut,
-        YuvRange, YuvStandardMatrix,
+        YuvChromaSubsampling, YuvConversionMode, YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
+        rgb_to_yuv420, rgba_to_yuv420,
     };
 
     let width_usize = usize::from(width);

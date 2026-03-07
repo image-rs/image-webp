@@ -72,8 +72,12 @@ fn main() {
         eprintln!("Usage: profile_wasm <path.webp> [iterations]");
         eprintln!();
         eprintln!("Example:");
-        eprintln!("  Native: cargo run --release --bin profile_wasm --features _wasm_profiling -- image.webp 100");
-        eprintln!("  WASM:   wasmtime run --dir=. target/wasm32-wasip1/release/profile_wasm.wasm -- image.webp 100");
+        eprintln!(
+            "  Native: cargo run --release --bin profile_wasm --features _wasm_profiling -- image.webp 100"
+        );
+        eprintln!(
+            "  WASM:   wasmtime run --dir=. target/wasm32-wasip1/release/profile_wasm.wasm -- image.webp 100"
+        );
         std::process::exit(1);
     }
 }

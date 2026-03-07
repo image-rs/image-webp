@@ -10,7 +10,7 @@
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 use archmage::intrinsics::x86_64 as simd_mem;
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
-use archmage::{arcane, rite, SimdToken, X64V3Token};
+use archmage::{SimdToken, X64V3Token, arcane, rite};
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 use core::arch::x86_64::*;
 
@@ -570,7 +570,7 @@ fn t_transform_sse2(_token: X64V3Token, input: &[u8], stride: usize, w: &[u16; 1
     tmp[0][1] = sp01[0] + sp01[1]; // a3 + a2
     tmp[0][2] = sp01[0] - sp01[1]; // a3 - a2
     tmp[0][3] = ap01[0] - ap01[1]; // a0 - a1
-                                   // Row 1
+    // Row 1
     tmp[1][0] = ap01[2] + ap01[3];
     tmp[1][1] = sp01[2] + sp01[3];
     tmp[1][2] = sp01[2] - sp01[3];
@@ -1113,7 +1113,7 @@ mod tests {
     fn test_t_transform_scalar_basic() {
         // Create a simple 4x4 block with stride 16
         let mut input = [0u8; 64]; // 4 rows * 16 stride
-                                   // Fill with a simple gradient
+        // Fill with a simple gradient
         for y in 0..4 {
             for x in 0..4 {
                 input[y * 16 + x] = ((y * 4 + x) * 10) as u8;

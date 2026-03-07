@@ -6,7 +6,7 @@
 //! All functions operate on the same i32[16] layout as the scalar code,
 //! converting internally to i16 NEON vectors for SIMD processing.
 
-use archmage::{arcane, rite, NeonToken};
+use archmage::{NeonToken, arcane, rite};
 
 use core::arch::aarch64::*;
 

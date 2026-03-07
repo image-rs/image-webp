@@ -16,8 +16,8 @@ use super::entropy::estimate_histogram_bits;
 use super::hash_chain::HashChain;
 use super::histogram::Histogram;
 use super::types::{
-    argb_alpha, argb_blue, argb_green, argb_red, BackwardRefs, PixOrCopy, MAX_LENGTH, MIN_LENGTH,
-    NUM_LENGTH_CODES, NUM_LITERAL_CODES,
+    BackwardRefs, MAX_LENGTH, MIN_LENGTH, NUM_LENGTH_CODES, NUM_LITERAL_CODES, PixOrCopy,
+    argb_alpha, argb_blue, argb_green, argb_red,
 };
 
 /// Distance code lookup table for 2D neighborhood.
@@ -75,11 +75,7 @@ pub fn plane_code_to_distance(xsize: usize, code: u32) -> usize {
     } else {
         let (xoff, yoff) = DISTANCE_MAP[(code - 1) as usize];
         let dist = xoff as i32 + yoff as i32 * xsize as i32;
-        if dist < 1 {
-            1
-        } else {
-            dist as usize
-        }
+        if dist < 1 { 1 } else { dist as usize }
     }
 }
 
@@ -225,11 +221,7 @@ pub(super) fn backward_references_rle(
                 len += 1;
             }
             // Quick rejection first
-            if argb[i] != argb[i - 1] {
-                0
-            } else {
-                len
-            }
+            if argb[i] != argb[i - 1] { 0 } else { len }
         };
 
         // Check previous row match (distance=xsize)
@@ -242,11 +234,7 @@ pub(super) fn backward_references_rle(
                 len += 1;
             }
             // Quick rejection
-            if argb[i] != argb[i - xsize] {
-                0
-            } else {
-                len
-            }
+            if argb[i] != argb[i - xsize] { 0 } else { len }
         };
 
         if rle_len >= prev_row_len && rle_len >= MIN_LENGTH {

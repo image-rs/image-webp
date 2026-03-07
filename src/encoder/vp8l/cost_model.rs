@@ -13,10 +13,10 @@ use alloc::vec::Vec;
 
 use super::backward_refs::distance_to_plane_code;
 use super::color_cache::ColorCache;
-use super::histogram::{distance_code_to_prefix, length_to_code, Histogram};
+use super::histogram::{Histogram, distance_code_to_prefix, length_to_code};
 use super::types::{
-    argb_alpha, argb_blue, argb_green, argb_red, BackwardRefs, PixOrCopy, MAX_LENGTH,
-    NUM_LENGTH_CODES, NUM_LITERAL_CODES,
+    BackwardRefs, MAX_LENGTH, NUM_LENGTH_CODES, NUM_LITERAL_CODES, PixOrCopy, argb_alpha,
+    argb_blue, argb_green, argb_red,
 };
 
 /// Fixed-point precision for entropy (matches libwebp LOG_2_PRECISION_BITS).

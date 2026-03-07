@@ -4,3 +4,4 @@ tests/out/
 compare_output/
 *.out
 *.rlib
+rustc-ice-*.txt

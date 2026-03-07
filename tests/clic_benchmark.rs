@@ -5,7 +5,7 @@
 //!
 //! Run with: cargo test --release clic_benchmark -- --nocapture --ignored
 
-use fast_ssim2::{compute_frame_ssimulacra2, ColorPrimaries, Rgb, TransferCharacteristic};
+use fast_ssim2::{ColorPrimaries, Rgb, TransferCharacteristic, compute_frame_ssimulacra2};
 use std::fs;
 use std::path::Path;
 use std::time::Instant;

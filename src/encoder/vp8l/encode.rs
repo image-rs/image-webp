@@ -13,17 +13,17 @@ use super::histogram::{
     distance_code_extra_bits, distance_code_to_prefix, length_code_extra_bits, length_to_code,
 };
 use super::huffman::{
-    build_huffman_codes, build_huffman_lengths, write_huffman_tree, write_single_entry_tree,
-    HuffmanCode,
+    HuffmanCode, build_huffman_codes, build_huffman_lengths, write_huffman_tree,
+    write_single_entry_tree,
 };
-use super::meta_huffman::{build_meta_huffman, build_single_histogram, MetaHuffmanInfo};
+use super::meta_huffman::{MetaHuffmanInfo, build_meta_huffman, build_single_histogram};
 use super::transforms::{
-    apply_cross_color_transform, apply_predictor_transform, apply_subtract_green,
-    ColorIndexTransform,
+    ColorIndexTransform, apply_cross_color_transform, apply_predictor_transform,
+    apply_subtract_green,
 };
 use super::types::{
-    argb_alpha, argb_blue, argb_green, argb_red, make_argb, subsample_size, PixOrCopy, Vp8lConfig,
-    NUM_LENGTH_CODES, NUM_LITERAL_CODES,
+    NUM_LENGTH_CODES, NUM_LITERAL_CODES, PixOrCopy, Vp8lConfig, argb_alpha, argb_blue, argb_green,
+    argb_red, make_argb, subsample_size,
 };
 
 use super::entropy::vp8l_bits_entropy;

@@ -12,7 +12,7 @@ use core::arch::x86::*;
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
 use archmage::intrinsics::x86_64 as simd_mem;
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-use archmage::{arcane, rite, SimdToken, X64V3Token};
+use archmage::{SimdToken, X64V3Token, arcane, rite};
 
 // =============================================================================
 // Public dispatch functions

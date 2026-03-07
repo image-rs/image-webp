@@ -36,8 +36,8 @@ use super::api::EncodeError;
 use super::api::PixelLayout;
 use super::arithmetic::ArithmeticEncoder;
 use super::cost::{
-    analyze_image, assign_segments_kmeans, classify_image_type, compute_segment_quant,
-    content_type_to_tuning, LevelCosts, ProbaStats,
+    LevelCosts, ProbaStats, analyze_image, assign_segments_kmeans, classify_image_type,
+    compute_segment_quant, content_type_to_tuning,
 };
 use super::vec_writer::VecWriter;
 use crate::common::prediction::*;
@@ -608,11 +608,11 @@ impl<'a> Vp8Encoder<'a> {
     ) -> Result<super::api::EncodeStats, EncodeError> {
         // Store method and configure features based on it
         self.method = params.method.min(6); // Clamp to 0-6
-                                            // Method feature mapping (aligned with libwebp):
-                                            //   m0-2: RD_OPT_NONE - fast mode, no RD optimization
-                                            //   m3-4: RD_OPT_BASIC - RD scoring for mode selection, no trellis
-                                            //   m5:   RD_OPT_TRELLIS - trellis quantization during encoding
-                                            //   m6:   RD_OPT_TRELLIS_ALL - trellis during I4 mode selection
+        // Method feature mapping (aligned with libwebp):
+        //   m0-2: RD_OPT_NONE - fast mode, no RD optimization
+        //   m3-4: RD_OPT_BASIC - RD scoring for mode selection, no trellis
+        //   m5:   RD_OPT_TRELLIS - trellis quantization during encoding
+        //   m6:   RD_OPT_TRELLIS_ALL - trellis during I4 mode selection
         self.do_trellis = self.method >= 5;
         self.do_trellis_i4_mode = self.method >= 6;
         // Store tuning parameters

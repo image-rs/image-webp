@@ -16,7 +16,7 @@
 //! quantization and skip detection for zero macroblocks.
 
 use dssim_core::Dssim;
-use fast_ssim2::{compute_frame_ssimulacra2, ColorPrimaries, Rgb, TransferCharacteristic};
+use fast_ssim2::{ColorPrimaries, Rgb, TransferCharacteristic, compute_frame_ssimulacra2};
 use imgref::ImgVec;
 use rgb::RGBA;
 use zenwebp::{EncodeRequest, EncoderConfig, PixelLayout};

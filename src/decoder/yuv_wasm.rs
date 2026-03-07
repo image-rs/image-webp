@@ -3,7 +3,7 @@
 //! Ported from the NEON version in yuv_neon.rs.
 //! Processes 16 pixels at a time using 128-bit SIMD.
 
-use archmage::{arcane, Wasm128Token};
+use archmage::{Wasm128Token, arcane};
 
 use core::arch::wasm32::*;
 

@@ -5,7 +5,7 @@
 //! Measures quality at equal bits-per-pixel for apples-to-apples comparison.
 //! Uses SSIMULACRA2 for perceptual quality measurement (higher = better).
 
-use fast_ssim2::{compute_frame_ssimulacra2, ColorPrimaries, Rgb, TransferCharacteristic};
+use fast_ssim2::{ColorPrimaries, Rgb, TransferCharacteristic, compute_frame_ssimulacra2};
 use std::path::Path;
 use zenwebp::{EncodeRequest, EncoderConfig, PixelLayout};
 

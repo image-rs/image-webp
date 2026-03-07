@@ -15,8 +15,8 @@ use alloc::vec::Vec;
 use super::histogram::collect_histogram_with_offset;
 use super::prediction::{make_chroma8_preds, make_luma16_preds};
 use super::{
-    BPS, MAX_INTRA16_MODE, MAX_UV_MODE, PRED_SIZE_ENC, U_OFF_ENC, VP8_I16_MODE_OFFSETS,
-    VP8_UV_MODE_OFFSETS, V_OFF_ENC, YUV_SIZE_ENC, Y_OFF_ENC,
+    BPS, MAX_INTRA16_MODE, MAX_UV_MODE, PRED_SIZE_ENC, U_OFF_ENC, V_OFF_ENC, VP8_I16_MODE_OFFSETS,
+    VP8_UV_MODE_OFFSETS, Y_OFF_ENC, YUV_SIZE_ENC,
 };
 
 //------------------------------------------------------------------------------

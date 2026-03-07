@@ -5,7 +5,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use archmage::{arcane, Wasm128Token};
+use archmage::{Wasm128Token, arcane};
 
 use core::arch::wasm32::*;
 

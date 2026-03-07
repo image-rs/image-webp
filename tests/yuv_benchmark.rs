@@ -168,8 +168,8 @@ mod scalar {
 // SIMD implementation using yuv crate
 mod simd {
     use yuv::{
-        rgb_to_yuv420, YuvChromaSubsampling, YuvConversionMode, YuvPlanarImageMut, YuvRange,
-        YuvStandardMatrix,
+        YuvChromaSubsampling, YuvConversionMode, YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
+        rgb_to_yuv420,
     };
 
     pub fn convert_image_yuv_simd(

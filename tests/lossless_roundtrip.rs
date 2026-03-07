@@ -3,7 +3,7 @@
 //! Verifies that encode→decode produces pixel-identical output for various
 //! synthetic images and VP8L configuration combinations.
 
-use zenwebp::encoder::vp8l::{encode_vp8l, Vp8lConfig};
+use zenwebp::encoder::vp8l::{Vp8lConfig, encode_vp8l};
 
 fn wrap_vp8l_in_riff(vp8l_data: &[u8]) -> Vec<u8> {
     let mut webp = Vec::new();

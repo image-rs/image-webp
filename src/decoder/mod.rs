@@ -38,9 +38,9 @@ pub mod vp8;
 
 // Re-export public API
 pub use api::{
-    decode_bgr, decode_bgr_into, decode_bgra, decode_bgra_into, decode_rgb, decode_rgb_into,
-    decode_rgba, decode_rgba_into, decode_yuv420, BitstreamFormat, DecodeConfig, DecodeError,
-    DecodeRequest, DecodeResult, ImageInfo, LoopCount, UpsamplingMethod, WebPDecoder, YuvPlanes,
+    BitstreamFormat, DecodeConfig, DecodeError, DecodeRequest, DecodeResult, ImageInfo, LoopCount,
+    UpsamplingMethod, WebPDecoder, YuvPlanes, decode_bgr, decode_bgr_into, decode_bgra,
+    decode_bgra_into, decode_rgb, decode_rgb_into, decode_rgba, decode_rgba_into, decode_yuv420,
 };
 #[allow(deprecated)]
 pub use limits::Limits;

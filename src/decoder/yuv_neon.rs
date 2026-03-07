@@ -3,7 +3,7 @@
 //! Ported from libwebp's upsampling_neon.c for efficient YUV→RGB with native
 //! interleaved stores (vst3q_u8). Processes 16 pixels at a time.
 
-use archmage::{arcane, rite, NeonToken};
+use archmage::{NeonToken, arcane, rite};
 
 use archmage::intrinsics::aarch64 as simd_mem;
 

@@ -4,7 +4,7 @@
 //! reference implementation when given the same inputs (DCT coefficients,
 //! quantization matrix parameters).
 
-use zenwebp::encoder::cost::{quantdiv, MatrixType, VP8Matrix, QFIX};
+use zenwebp::encoder::cost::{MatrixType, QFIX, VP8Matrix, quantdiv};
 
 /// Reference implementation of libwebp's QuantizeBlock_C
 /// From libwebp enc.c:688

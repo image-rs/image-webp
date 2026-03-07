@@ -34,7 +34,7 @@ use alloc::vec::Vec;
 use super::demux::{BlendMethod, DisposeMethod, WebPDemuxer};
 use super::error::MuxError;
 use crate::decoder::LoopCount;
-use crate::encoder::{chunk_size, write_chunk, VecWriter};
+use crate::encoder::{VecWriter, chunk_size, write_chunk};
 
 /// A single frame to be muxed into a WebP container.
 #[derive(Debug, Clone)]

@@ -6,9 +6,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::types::{
-    argb_alpha, argb_blue, argb_green, argb_red, BackwardRefs, PixOrCopy, ALPHABET_SIZE_ALPHA,
-    ALPHABET_SIZE_BLUE, ALPHABET_SIZE_DISTANCE, ALPHABET_SIZE_GREEN, ALPHABET_SIZE_RED,
-    NUM_LENGTH_CODES, NUM_LITERAL_CODES,
+    ALPHABET_SIZE_ALPHA, ALPHABET_SIZE_BLUE, ALPHABET_SIZE_DISTANCE, ALPHABET_SIZE_GREEN,
+    ALPHABET_SIZE_RED, BackwardRefs, NUM_LENGTH_CODES, NUM_LITERAL_CODES, PixOrCopy, argb_alpha,
+    argb_blue, argb_green, argb_red,
 };
 
 /// VP8L histogram for a single Huffman code group.

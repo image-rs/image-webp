@@ -13,8 +13,8 @@
 use std::fs;
 use std::io::BufReader;
 use webpx::Unstoppable;
-use zenwebp::decoder::vp8::{DiagnosticFrame, Vp8Decoder};
 use zenwebp::decoder::LumaMode;
+use zenwebp::decoder::vp8::{DiagnosticFrame, Vp8Decoder};
 use zenwebp::{EncodeRequest, EncoderConfig, PixelLayout, Preset};
 
 // ============================================================================

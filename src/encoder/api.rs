@@ -67,7 +67,7 @@ pub enum EncodeError {
 
     /// Unsupported codec operation.
     #[error(transparent)]
-    UnsupportedOperation(#[from] zencodec_types::UnsupportedOperation),
+    UnsupportedOperation(#[from] zc::UnsupportedOperation),
 }
 
 /// Result type alias using `At<EncodeError>` for automatic location tracking.

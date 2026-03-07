@@ -297,7 +297,7 @@ pub(crate) fn macroblock_filter_horizontal(
 #[cfg(all(test, feature = "_benchmarks"))]
 mod benches {
     use super::*;
-    use test::{black_box, Bencher};
+    use test::{Bencher, black_box};
 
     #[rustfmt::skip]
     const TEST_DATA: [u8; 8 * 8] = [

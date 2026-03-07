@@ -4,7 +4,7 @@
 //! Run with: cargo bench --bench decode_benchmark
 //! Run with native: RUSTFLAGS="-C target-cpu=native" cargo bench --bench decode_benchmark
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
 use zenwebp::{EncodeRequest, EncoderConfig, PixelLayout};

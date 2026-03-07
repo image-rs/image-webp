@@ -7,9 +7,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::entropy::{compute_histogram_cost, get_combined_histogram_cost, HistogramCosts};
+use super::entropy::{HistogramCosts, compute_histogram_cost, get_combined_histogram_cost};
 use super::histogram::Histogram;
-use super::types::{subsample_size, BackwardRefs, PixOrCopy};
+use super::types::{BackwardRefs, PixOrCopy, subsample_size};
 
 /// Maximum Huffman group count for greedy combining.
 const MAX_HISTO_GREEDY: usize = 100;

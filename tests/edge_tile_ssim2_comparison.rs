@@ -11,7 +11,7 @@
 //!
 //! Run with: cargo test --release --test edge_tile_ssim2_comparison -- --nocapture --ignored
 
-use fast_ssim2::{compute_frame_ssimulacra2, ColorPrimaries, Rgb, TransferCharacteristic};
+use fast_ssim2::{ColorPrimaries, Rgb, TransferCharacteristic, compute_frame_ssimulacra2};
 use std::path::{Path, PathBuf};
 use zenwebp::{EncodeRequest, EncoderConfig, PixelLayout};
 

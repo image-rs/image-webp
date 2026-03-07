@@ -638,7 +638,7 @@ fn reverse_bits(num_bits: u32, bits: u32) -> u32 {
 pub fn write_single_entry_tree(w: &mut BitWriter, symbol: usize) {
     w.write_bit(true); // simple tree marker
     w.write_bit(false); // 1 symbol (count - 1)
-                        // If symbol <= 1, use 1 bit; otherwise use 8 bits
+    // If symbol <= 1, use 1 bit; otherwise use 8 bits
     let is_8bit = symbol > 1;
     w.write_bit(is_8bit);
     if is_8bit {

@@ -7,7 +7,7 @@
 use core::arch::wasm32::*;
 
 #[cfg(target_arch = "wasm32")]
-use archmage::{arcane, rite, Wasm128Token};
+use archmage::{Wasm128Token, arcane, rite};
 
 // =============================================================================
 // Public dispatch functions

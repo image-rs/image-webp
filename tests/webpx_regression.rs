@@ -43,12 +43,7 @@ fn color_blocks_rgba() -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// Encode RGBA pixels with zenwebp at the given settings, decode with zenwebp.
-fn zen_encode_decode(
-    rgba: &[u8],
-    w: u32,
-    h: u32,
-    config: &LossyConfig,
-) -> (Vec<u8>, Vec<u8>) {
+fn zen_encode_decode(rgba: &[u8], w: u32, h: u32, config: &LossyConfig) -> (Vec<u8>, Vec<u8>) {
     let webp = EncodeRequest::lossy(config, rgba, PixelLayout::Rgba8, w, h)
         .encode()
         .expect("zenwebp encode failed");
@@ -176,8 +171,8 @@ fn compare_encoders(
     let zen_img = RgbaSlice::new(zen_px, w as usize, h as usize);
     let wpx_img = RgbaSlice::new(wpx_px, w as usize, h as usize);
 
-    let report = check_regression(&z, &wpx_img, &zen_img, tolerance)
-        .expect("zensim comparison failed");
+    let report =
+        check_regression(&z, &wpx_img, &zen_img, tolerance).expect("zensim comparison failed");
 
     let report_text = format!(
         "{name} q{quality} m{method} {preset}: zen={} wpx={} ratio={size_ratio:.3}x score={:.1} {}",
@@ -225,8 +220,17 @@ fn quality_sweep_gradient() {
 
     for &q in &[50.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0] {
         let r = compare_encoders(
-            "gradient", &rgba, W, H, q, 4, Preset::Default,
-            None, None, None, &tol,
+            "gradient",
+            &rgba,
+            W,
+            H,
+            q,
+            4,
+            Preset::Default,
+            None,
+            None,
+            None,
+            &tol,
         );
         results.push(r);
     }
@@ -250,8 +254,17 @@ fn quality_sweep_noise() {
 
     for &q in &[50.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0] {
         let r = compare_encoders(
-            "noise", &rgba, W, H, q, 4, Preset::Default,
-            None, None, None, &tol,
+            "noise",
+            &rgba,
+            W,
+            H,
+            q,
+            4,
+            Preset::Default,
+            None,
+            None,
+            None,
+            &tol,
         );
         results.push(r);
     }
@@ -275,8 +288,17 @@ fn quality_sweep_mandelbrot() {
 
     for &q in &[50.0, 70.0, 75.0, 80.0, 85.0, 90.0, 95.0] {
         let r = compare_encoders(
-            "mandelbrot", &rgba, W, H, q, 4, Preset::Default,
-            None, None, None, &tol,
+            "mandelbrot",
+            &rgba,
+            W,
+            H,
+            q,
+            4,
+            Preset::Default,
+            None,
+            None,
+            None,
+            &tol,
         );
         results.push(r);
     }
@@ -304,8 +326,17 @@ fn method_sweep() {
 
     for method in 0..=6u8 {
         let r = compare_encoders(
-            "noise", &rgba, W, H, 75.0, method, Preset::Default,
-            None, None, None, &tol,
+            "noise",
+            &rgba,
+            W,
+            H,
+            75.0,
+            method,
+            Preset::Default,
+            None,
+            None,
+            None,
+            &tol,
         );
         results.push(r);
     }
@@ -348,10 +379,7 @@ fn preset_sweep() {
 
     for (name, rgba) in &images {
         for &preset in &presets {
-            let r = compare_encoders(
-                name, rgba, W, H, 75.0, 4, preset,
-                None, None, None, &tol,
-            );
+            let r = compare_encoders(name, rgba, W, H, 75.0, 4, preset, None, None, None, &tol);
             results.push(r);
         }
     }
@@ -379,8 +407,17 @@ fn sns_sweep() {
 
     for &sns in &[0u8, 25, 50, 75, 100] {
         let r = compare_encoders(
-            "noise", &rgba, W, H, 75.0, 4, Preset::Default,
-            Some(sns), Some(60), None, &tol,
+            "noise",
+            &rgba,
+            W,
+            H,
+            75.0,
+            4,
+            Preset::Default,
+            Some(sns),
+            Some(60),
+            None,
+            &tol,
         );
         results.push(r);
     }
@@ -408,8 +445,17 @@ fn filter_sweep() {
 
     for &filter in &[0u8, 20, 40, 60, 80, 100] {
         let r = compare_encoders(
-            "noise", &rgba, W, H, 75.0, 4, Preset::Default,
-            Some(50), Some(filter), None, &tol,
+            "noise",
+            &rgba,
+            W,
+            H,
+            75.0,
+            4,
+            Preset::Default,
+            Some(50),
+            Some(filter),
+            None,
+            &tol,
         );
         results.push(r);
     }
@@ -437,8 +483,17 @@ fn segments_sweep() {
 
     for &seg in &[1u8, 2, 3, 4] {
         let r = compare_encoders(
-            "noise", &rgba, W, H, 75.0, 4, Preset::Default,
-            None, None, Some(seg), &tol,
+            "noise",
+            &rgba,
+            W,
+            H,
+            75.0,
+            4,
+            Preset::Default,
+            None,
+            None,
+            Some(seg),
+            &tol,
         );
         results.push(r);
     }
@@ -489,8 +544,8 @@ fn cross_decode_zen_to_wpx() {
         let zen_img = RgbaSlice::new(zen_px, W as usize, H as usize);
         let wpx_img = RgbaSlice::new(wpx_px, W as usize, H as usize);
 
-        let report = check_regression(&z, &wpx_img, &zen_img, &tol)
-            .expect("zensim comparison failed");
+        let report =
+            check_regression(&z, &wpx_img, &zen_img, &tol).expect("zensim comparison failed");
         assert!(
             report.passed(),
             "Cross-decode zen→wpx failed at q{q}: {report}"
@@ -503,8 +558,7 @@ fn cross_decode_wpx_to_zen() {
     let rgba = noise_rgba();
 
     for &q in &[50.0, 75.0, 90.0] {
-        let wpx_config =
-            webpx::EncoderConfig::with_preset(webpx::Preset::Default, q).method(4);
+        let wpx_config = webpx::EncoderConfig::with_preset(webpx::Preset::Default, q).method(4);
         let webp = wpx_config
             .encode_rgba(&rgba, W, H, Unstoppable)
             .expect("webpx encode failed");
@@ -529,8 +583,8 @@ fn cross_decode_wpx_to_zen() {
         let zen_img = RgbaSlice::new(zen_px, W as usize, H as usize);
         let wpx_img = RgbaSlice::new(wpx_px, W as usize, H as usize);
 
-        let report = check_regression(&z, &wpx_img, &zen_img, &tol)
-            .expect("zensim comparison failed");
+        let report =
+            check_regression(&z, &wpx_img, &zen_img, &tol).expect("zensim comparison failed");
         assert!(
             report.passed(),
             "Cross-decode wpx→zen failed at q{q}: {report}"
@@ -563,10 +617,9 @@ fn size_ratio_diagnostic() {
                 .with_filter_strength(0)
                 .with_segments(1);
 
-            let zen_webp =
-                EncodeRequest::lossy(&zen_config, rgba, PixelLayout::Rgba8, W, H)
-                    .encode()
-                    .expect("zenwebp encode failed");
+            let zen_webp = EncodeRequest::lossy(&zen_config, rgba, PixelLayout::Rgba8, W, H)
+                .encode()
+                .expect("zenwebp encode failed");
 
             let wpx_config = webpx::EncoderConfig::with_preset(webpx::Preset::Default, q)
                 .method(4)
@@ -629,7 +682,15 @@ fn quality_vs_source() {
 
         // webpx
         let (_, wpx_decoded) = wpx_encode_decode(
-            &rgba, W, H, 75.0, 4, webpx::Preset::Default, None, None, None,
+            &rgba,
+            W,
+            H,
+            75.0,
+            4,
+            webpx::Preset::Default,
+            None,
+            None,
+            None,
         );
         let wpx_px = as_rgba_pixels(&wpx_decoded);
         let wpx_img = RgbaSlice::new(wpx_px, W as usize, H as usize);
@@ -676,10 +737,7 @@ fn full_matrix() {
     for (name, rgba) in &images {
         for &preset in &presets {
             for &q in &qualities {
-                let r = compare_encoders(
-                    name, rgba, W, H, q, 4, preset,
-                    None, None, None, &tol,
-                );
+                let r = compare_encoders(name, rgba, W, H, q, 4, preset, None, None, None, &tol);
                 if r.passed {
                     pass_count += 1;
                 } else {

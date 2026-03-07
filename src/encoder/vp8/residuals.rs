@@ -11,8 +11,8 @@ use crate::common::types::*;
 
 use super::{MacroblockInfo, QuantizedMbCoeffs};
 use crate::encoder::cost::{
-    record_coeffs, trellis_quantize_block, ProbaStats, TokenType, NUM_BANDS, NUM_CTX, NUM_PROBAS,
-    NUM_TYPES, VP8_ENC_BANDS,
+    NUM_BANDS, NUM_CTX, NUM_PROBAS, NUM_TYPES, ProbaStats, TokenType, VP8_ENC_BANDS, record_coeffs,
+    trellis_quantize_block,
 };
 
 // -----------------------------------------------------------------------

@@ -11,7 +11,7 @@
 #![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
 
-use super::{DctHistogram, BPS, MAX_COEFF_THRESH, VP8_DSP_SCAN};
+use super::{BPS, DctHistogram, MAX_COEFF_THRESH, VP8_DSP_SCAN};
 
 //------------------------------------------------------------------------------
 // Forward DCT 4x4

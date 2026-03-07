@@ -10,7 +10,7 @@
 #[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
 use archmage::intrinsics::x86_64 as simd_mem;
 #[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
-use archmage::{arcane, rite, SimdToken, X64V3Token};
+use archmage::{SimdToken, X64V3Token, arcane, rite};
 #[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "x86")))]
 use core::arch::x86_64::*;
 
@@ -120,11 +120,7 @@ impl VP8Matrix {
             return 0;
         }
         let level = quantdiv(abs_coeff, self.iq[pos], self.bias[pos]).min(MAX_LEVEL as i32);
-        if sign {
-            -level
-        } else {
-            level
-        }
+        if sign { -level } else { level }
     }
 
     /// Quantize a single coefficient with neutral bias (for trellis)
@@ -134,11 +130,7 @@ impl VP8Matrix {
         let abs_coeff = if sign { -coeff } else { coeff } as u32;
         let neutral_bias = quantization_bias(0x00); // neutral
         let level = quantdiv(abs_coeff, self.iq[pos], neutral_bias);
-        if sign {
-            -level
-        } else {
-            level
-        }
+        if sign { -level } else { level }
     }
 
     /// Dequantize a coefficient
@@ -524,7 +516,7 @@ pub fn quantize_ac_only_simd(
     let dc = coeffs[0];
     let has_nz = quantize_block_simd(coeffs, matrix, use_sharpen);
     coeffs[0] = dc; // Restore DC
-                    // Check AC coefficients only
+    // Check AC coefficients only
     coeffs[1..].iter().any(|&c| c != 0) || has_nz
 }
 

@@ -8,15 +8,15 @@ use crate::common::transform;
 use crate::common::types::*;
 
 use crate::encoder::cost::{
-    estimate_dc16_cost, estimate_residual_cost, get_cost_luma16, get_cost_luma4, get_cost_uv,
-    is_flat_coeffs, is_flat_source_16, tdisto_16x16, tdisto_4x4, tdisto_8x8,
-    trellis_quantize_block, FIXED_COSTS_I16, FIXED_COSTS_UV, FLATNESS_LIMIT_I16, FLATNESS_LIMIT_I4,
-    FLATNESS_LIMIT_UV, FLATNESS_PENALTY, RD_DISTO_MULT,
+    FIXED_COSTS_I16, FIXED_COSTS_UV, FLATNESS_LIMIT_I4, FLATNESS_LIMIT_I16, FLATNESS_LIMIT_UV,
+    FLATNESS_PENALTY, RD_DISTO_MULT, estimate_dc16_cost, estimate_residual_cost, get_cost_luma4,
+    get_cost_luma16, get_cost_uv, is_flat_coeffs, is_flat_source_16, tdisto_4x4, tdisto_8x8,
+    tdisto_16x16, trellis_quantize_block,
 };
 
 use crate::encoder::psy;
 
-use super::{sse_16x16_luma, sse_8x8_chroma, MacroblockInfo};
+use super::{MacroblockInfo, sse_8x8_chroma, sse_16x16_luma};
 
 // =============================================================================
 // Arcane (SIMD-hoisted) inner functions for I4 mode selection
@@ -739,8 +739,16 @@ impl<'a> super::Vp8Encoder<'a> {
         if debug_i16 {
             eprintln!(
                 "  I16 FINAL: mode={:?}, H={}, R={}, D={}, SD={}, lambda_mode={}, tlambda={}, rate={}, disto={}, score={}",
-                best_mode, best_mode_cost, best_coeff_cost, best_sse, best_spectral_disto,
-                lambda_mode, tlambda, final_rate, final_distortion, final_score
+                best_mode,
+                best_mode_cost,
+                best_coeff_cost,
+                best_sse,
+                best_spectral_disto,
+                lambda_mode,
+                tlambda,
+                final_rate,
+                final_distortion,
+                final_score
             );
         }
 
@@ -1261,8 +1269,14 @@ impl<'a> super::Vp8Encoder<'a> {
                 if debug_i4 {
                     eprintln!(
                         "  I4 blk[{:2}]: mode={:?}, H={}, R={}, D={}, SD={}, block_score={}, running={}",
-                        i, best_mode, best_mode_cost, best_coeff_cost, best_sse, best_spectral_disto,
-                        block_score_for_comparison, running_score + block_score_for_comparison
+                        i,
+                        best_mode,
+                        best_mode_cost,
+                        best_coeff_cost,
+                        best_sse,
+                        best_spectral_disto,
+                        block_score_for_comparison,
+                        running_score + block_score_for_comparison
                     );
                 }
 
@@ -1479,8 +1493,7 @@ impl<'a> super::Vp8Encoder<'a> {
             let sse = sse_u + sse_v;
 
             // 4b. Compute UV spectral distortion + psy-rd if enabled
-            let uv_spectral_disto = if let (Some(src_u), Some(src_v)) =
-                (&src_u_block, &src_v_block)
+            let uv_spectral_disto = if let (Some(src_u), Some(src_v)) = (&src_u_block, &src_v_block)
             {
                 // Extract reconstructed blocks only (source already cached)
                 // (rec_u_block/rec_v_block hoisted outside mode loop)

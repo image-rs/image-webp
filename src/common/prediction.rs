@@ -1264,7 +1264,7 @@ pub(crate) fn idct_add_residue_and_clear(
 #[cfg(all(test, feature = "_benchmarks"))]
 mod benches {
     use super::*;
-    use test::{black_box, Bencher};
+    use test::{Bencher, black_box};
 
     const W: usize = 256;
     const H: usize = 256;

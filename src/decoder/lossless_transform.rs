@@ -613,7 +613,7 @@ fn color_transform_delta(t: i8, c: i8) -> u32 {
 #[cfg(all(test, feature = "_benchmarks"))]
 mod benches {
     use rand::Rng;
-    use test::{black_box, Bencher};
+    use test::{Bencher, black_box};
 
     fn measure_predictor(b: &mut Bencher, predictor: fn(&mut [u8], std::ops::Range<usize>, usize)) {
         let width = 256;

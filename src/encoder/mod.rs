@@ -54,7 +54,7 @@ pub use api::{
     NoProgress, PixelLayout, Preset,
 };
 pub use config::{EncoderConfig, LosslessConfig, LossyConfig};
-pub use vp8l::{encode_vp8l, Vp8lConfig, Vp8lQuality};
+pub use vp8l::{Vp8lConfig, Vp8lQuality, encode_vp8l};
 
 // Crate-internal re-exports for mux module
 pub(crate) use api::{chunk_size, encode_alpha_lossless, encode_frame_lossless, write_chunk};

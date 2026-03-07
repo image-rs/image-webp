@@ -10,16 +10,16 @@
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 use archmage::intrinsics::x86_64 as simd_mem;
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
-use archmage::{arcane, rite, SimdToken, X64V3Token};
+use archmage::{SimdToken, X64V3Token, arcane, rite};
 #[cfg(all(target_arch = "x86_64", feature = "simd"))]
 use core::arch::x86_64::*;
 
 #[cfg(all(target_arch = "wasm32", feature = "simd"))]
-use archmage::{arcane, rite, Wasm128Token};
+use archmage::{Wasm128Token, arcane, rite};
 #[cfg(all(target_arch = "wasm32", feature = "simd"))]
 use core::arch::wasm32::*;
 
-use super::cost::{vp8_bit_cost, LevelCosts};
+use super::cost::{LevelCosts, vp8_bit_cost};
 use super::tables::VP8_ENC_BANDS;
 #[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "wasm32")))]
 use super::tables::{MAX_LEVEL, MAX_VARIABLE_LEVEL, VP8_LEVEL_FIXED_COSTS};

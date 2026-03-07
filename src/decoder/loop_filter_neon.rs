@@ -10,7 +10,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use archmage::{arcane, rite, NeonToken};
+use archmage::{NeonToken, arcane, rite};
 
 use core::arch::aarch64::*;
 
@@ -660,7 +660,7 @@ fn store_2x16_neon(
     for i in 0..16 {
         let offset = (y_start + i) * stride + x0 - 1;
         buf[offset] = vgetq_lane_u8::<0>(vextq_u8::<0>(p0, p0)); // placeholder
-                                                                 // This needs per-lane extraction. Let's use a different approach.
+        // This needs per-lane extraction. Let's use a different approach.
     }
     // Actually, extract all values at once
     let mut p0_bytes = [0u8; 16];

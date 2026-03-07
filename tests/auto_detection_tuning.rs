@@ -4,10 +4,10 @@
 
 #![cfg(feature = "_corpus_tests")]
 
-use fast_ssim2::{compute_frame_ssimulacra2, ColorPrimaries, Rgb, TransferCharacteristic};
+use fast_ssim2::{ColorPrimaries, Rgb, TransferCharacteristic, compute_frame_ssimulacra2};
 use std::fs;
 use std::io::BufReader;
-use zenwebp::encoder::analysis::{analyze_image, classify_image_type_diag, ContentType};
+use zenwebp::encoder::analysis::{ContentType, analyze_image, classify_image_type_diag};
 
 fn load_png(path: &str) -> Option<(Vec<u8>, u32, u32)> {
     let file = fs::File::open(path).ok()?;
@@ -97,7 +97,7 @@ fn ssim2(original_rgb: &[u8], webp_bytes: &[u8], w: u32, h: u32) -> f64 {
 }
 
 fn butteraugli_score(original_rgb: &[u8], webp_bytes: &[u8], w: u32, h: u32) -> f64 {
-    use butteraugli::{butteraugli, ButteraugliParams, RGB8};
+    use butteraugli::{ButteraugliParams, RGB8, butteraugli};
     use imgref::Img;
 
     let (decoded, dw, dh) = zenwebp::decode_rgb(webp_bytes).unwrap();
@@ -253,10 +253,16 @@ fn auto_detection_cid22() {
                 "{:<14} {:>5} {:>6} {:>6} {:>6} {:>6} {:>6}  {:>5.1} {:>5.1} {:>5.1} {:>5.1} {:>5.1}  {:>4.2}",
                 &name[..name.len().min(14)],
                 ct_label(diag.content_type),
-                zen_auto.len(), zen_default.len(), zen_photo.len(),
-                wpx_default.len(), wpx_photo.len(),
-                ss_zen_auto, ss_zen_default, ss_zen_photo,
-                ss_wpx_default, ss_wpx_photo,
+                zen_auto.len(),
+                zen_default.len(),
+                zen_photo.len(),
+                wpx_default.len(),
+                wpx_photo.len(),
+                ss_zen_auto,
+                ss_zen_default,
+                ss_zen_photo,
+                ss_wpx_default,
+                ss_wpx_photo,
                 diag.uniformity,
             );
 

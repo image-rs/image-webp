@@ -1,7 +1,7 @@
 //! Tests for memory/throughput estimation heuristics.
 
-use zenwebp::heuristics::*;
 use zenwebp::EncoderConfig;
+use zenwebp::heuristics::*;
 
 #[test]
 fn estimate_lossy_1mp() {

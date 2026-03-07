@@ -15,7 +15,7 @@
 
 use super::cost::{LevelCostArray, LevelCosts, RD_DISTO_MULT};
 use super::psy::PsyConfig;
-use super::quantize::{quantdiv, quantization_bias, VP8Matrix};
+use super::quantize::{VP8Matrix, quantdiv, quantization_bias};
 use super::tables::{
     MAX_LEVEL, MAX_VARIABLE_LEVEL, VP8_LEVEL_FIXED_COSTS, VP8_WEIGHT_TRELLIS, VP8_ZIGZAG,
 };

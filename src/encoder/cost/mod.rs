@@ -27,17 +27,17 @@ pub mod stats;
 
 // Re-export from submodules
 pub use distortion::{
-    is_flat_coeffs, is_flat_source_16, t_transform, tdisto_16x16, tdisto_4x4, tdisto_8x8,
-    FLATNESS_LIMIT_I16, FLATNESS_LIMIT_I4, FLATNESS_LIMIT_UV, FLATNESS_PENALTY,
+    FLATNESS_LIMIT_I4, FLATNESS_LIMIT_I16, FLATNESS_LIMIT_UV, FLATNESS_PENALTY, is_flat_coeffs,
+    is_flat_source_16, t_transform, tdisto_4x4, tdisto_8x8, tdisto_16x16,
 };
 pub use lambda::{
-    calc_i4_penalty, calc_lambda_i16, calc_lambda_i4, calc_lambda_mode, calc_lambda_trellis_i16,
-    calc_lambda_trellis_i4, calc_lambda_trellis_uv, calc_lambda_uv, calc_tlambda,
-    compute_filter_level, compute_filter_level_with_beta, filter_strength_from_delta,
-    DEFAULT_SNS_STRENGTH, LAMBDA_I16, LAMBDA_I4, LAMBDA_UV,
+    DEFAULT_SNS_STRENGTH, LAMBDA_I4, LAMBDA_I16, LAMBDA_UV, calc_i4_penalty, calc_lambda_i4,
+    calc_lambda_i16, calc_lambda_mode, calc_lambda_trellis_i4, calc_lambda_trellis_i16,
+    calc_lambda_trellis_uv, calc_lambda_uv, calc_tlambda, compute_filter_level,
+    compute_filter_level_with_beta, filter_strength_from_delta,
 };
 pub use level_costs::{LevelCostArray, LevelCostTables, LevelCosts, RemappedCosts};
-pub use stats::{record_coeffs, ProbaStats, TokenType, NUM_BANDS, NUM_CTX, NUM_PROBAS, NUM_TYPES};
+pub use stats::{NUM_BANDS, NUM_CTX, NUM_PROBAS, NUM_TYPES, ProbaStats, TokenType, record_coeffs};
 
 // Re-export tables from tables for backward compatibility
 pub use super::tables::*;
@@ -45,7 +45,7 @@ pub use super::tables::*;
 pub use super::analysis::*;
 
 // Re-export quantization types and functions from quantize module
-pub use super::quantize::{quantdiv, quantization_bias, MatrixType, VP8Matrix, QFIX};
+pub use super::quantize::{MatrixType, QFIX, VP8Matrix, quantdiv, quantization_bias};
 
 // Re-export trellis quantization
 pub use super::psy::PsyConfig;
@@ -53,7 +53,7 @@ pub use super::trellis::trellis_quantize_block;
 
 // Re-export residual cost functions from residual_cost module
 pub use super::residual_cost::{
-    get_cost_luma16, get_cost_luma4, get_cost_uv, get_residual_cost, Residual,
+    Residual, get_cost_luma4, get_cost_luma16, get_cost_uv, get_residual_cost,
 };
 
 /// Distortion multiplier - scales distortion to match bit cost units

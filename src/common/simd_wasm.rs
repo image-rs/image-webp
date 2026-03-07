@@ -2,7 +2,7 @@
 //!
 //! Ported from the NEON versions in simd_neon.rs using core::arch::wasm32 intrinsics.
 
-use archmage::{arcane, rite, Wasm128Token};
+use archmage::{Wasm128Token, arcane, rite};
 
 use core::arch::wasm32::*;
 
@@ -453,7 +453,7 @@ pub(crate) fn is_flat_coeffs_wasm_entry(
 // Quantization functions
 // =============================================================================
 
-use crate::encoder::quantize::{VP8Matrix, QFIX};
+use crate::encoder::quantize::{QFIX, VP8Matrix};
 use crate::encoder::tables::MAX_LEVEL;
 
 /// WASM quantize block: quantizes i32[16] coefficients in-place.

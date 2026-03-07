@@ -2,7 +2,7 @@
 //!
 //! Ported from the x86 SSE2 versions in simd_sse.rs.
 
-use archmage::{arcane, rite, NeonToken};
+use archmage::{NeonToken, arcane, rite};
 
 use archmage::intrinsics::aarch64 as simd_mem;
 
@@ -396,7 +396,7 @@ fn is_flat_coeffs_inner(_token: NeonToken, levels: &[i16], num_blocks: usize, th
 // Quantization functions
 // =============================================================================
 
-use crate::encoder::quantize::{VP8Matrix, QFIX};
+use crate::encoder::quantize::{QFIX, VP8Matrix};
 use crate::encoder::tables::MAX_LEVEL;
 
 /// NEON quantize block: quantizes i32[16] coefficients in-place.
