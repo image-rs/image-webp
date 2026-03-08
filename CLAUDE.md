@@ -319,4 +319,4 @@ EOF
 
 **Project standards**: `#![forbid(unsafe_code)]` with default features. no_std+alloc (minimum: wasm32). CI with codecov. Fuzz targets required. Safe for malicious input — no amplification, bound memory/CPU.
 
-**Streaming encoding is N/A** — WebP algorithms require the full image. See LOG.md for analysis.
+**Streaming encode** — `push_rows`/`finish` implemented. Lossy RGB8 converts to YUV420 during push (50% memory savings). Other formats accumulate raw bytes. WebP algorithms still need the full image at finish time, but callers can push strips without holding the full source.
