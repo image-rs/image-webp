@@ -562,6 +562,16 @@ impl<'a> MiniBoolReader<'a> {
     }
 }
 
+impl zc::SourceEncodingDetails for WebPProbe {
+    fn source_generic_quality(&self) -> Option<f32> {
+        self.estimated_quality()
+    }
+
+    fn is_lossless(&self) -> bool {
+        matches!(self.bitstream, BitstreamType::Lossless)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
