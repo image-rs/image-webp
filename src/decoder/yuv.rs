@@ -1140,14 +1140,14 @@ pub(crate) fn convert_image_y<const BPP: usize>(
 
 // Encoder-only functions below (used when std feature is enabled)
 #[cfg_attr(not(feature = "std"), allow(dead_code))]
-fn rgb_to_y(rgb: &[u8]) -> u8 {
+pub(crate) fn rgb_to_y(rgb: &[u8]) -> u8 {
     let luma = 16839 * i32::from(rgb[0]) + 33059 * i32::from(rgb[1]) + 6420 * i32::from(rgb[2]);
     ((luma + YUV_HALF + (16 << YUV_FIX)) >> YUV_FIX) as u8
 }
 
 // get the average of the four surrounding pixels
 #[cfg_attr(not(feature = "std"), allow(dead_code))]
-fn rgb_to_u_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
+pub(crate) fn rgb_to_u_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
     let u1 = rgb_to_u_raw(rgb1);
     let u2 = rgb_to_u_raw(rgb2);
     let u3 = rgb_to_u_raw(rgb3);
@@ -1159,7 +1159,7 @@ fn rgb_to_u_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
 
 // get the average of the four surrounding pixels
 #[cfg_attr(not(feature = "std"), allow(dead_code))]
-fn rgb_to_v_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
+pub(crate) fn rgb_to_v_avg(rgb1: &[u8], rgb2: &[u8], rgb3: &[u8], rgb4: &[u8]) -> u8 {
     let v1 = rgb_to_v_raw(rgb1);
     let v2 = rgb_to_v_raw(rgb2);
     let v3 = rgb_to_v_raw(rgb3);

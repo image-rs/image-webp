@@ -392,7 +392,7 @@ fn hash_pix(pix: u32) -> u8 {
 
 /// Encode ARGB pixels (internal). Orchestrates multi-config testing for high
 /// quality/method settings, keeping the smallest output.
-fn encode_argb(
+pub(crate) fn encode_argb(
     argb: &mut [u32],
     width: usize,
     height: usize,
