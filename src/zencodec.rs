@@ -558,10 +558,9 @@ fn pixels_to_webp_input<'a>(
         Ok((pixels.contiguous_bytes(), PixelLayout::Rgba8, w, h))
     } else if desc == PixelDescriptor::BGRA8_SRGB {
         let raw = pixels.contiguous_bytes();
-        let rgba: Vec<u8> = raw
-            .chunks_exact(4)
-            .flat_map(|c| [c[2], c[1], c[0], c[3]])
-            .collect();
+        let mut rgba = alloc::vec![0u8; raw.len()];
+        garb::bytes::bgra_to_rgba(&raw, &mut rgba)
+            .map_err(|e| EncodeError::InvalidBufferSize(alloc::format!("pixel conversion: {e}")))?;
         Ok((Cow::Owned(rgba), PixelLayout::Rgba8, w, h))
     } else if desc == PixelDescriptor::GRAY8_SRGB {
         let raw = pixels.contiguous_bytes();
@@ -1352,11 +1351,9 @@ fn negotiate_format(pixels: PixelBuffer, preferred: &[PixelDescriptor]) -> Pixel
     if preferred.contains(&PixelDescriptor::BGRA8_SRGB) && desc == PixelDescriptor::RGBA8_SRGB {
         let w = pixels.width();
         let h = pixels.height();
-        // Swizzle RGBA → BGRA in-place (avoids extra allocation)
         let mut raw = pixels.into_vec();
-        for chunk in raw.chunks_exact_mut(4) {
-            chunk.swap(0, 2);
-        }
+        garb::bytes::rgba_to_bgra_inplace(&mut raw)
+            .expect("negotiate_format: validated 4bpp buffer");
         return PixelBuffer::from_vec(raw, w, h, PixelDescriptor::BGRA8_SRGB)
             .expect("negotiate_format: dimensions unchanged");
     }
@@ -1519,9 +1516,8 @@ fn negotiate_format_inplace(
         && preferred.contains(&PixelDescriptor::BGRA8_SRGB)
         && source == PixelDescriptor::RGBA8_SRGB
     {
-        for chunk in data.chunks_exact_mut(4) {
-            chunk.swap(0, 2);
-        }
+        garb::bytes::rgba_to_bgra_inplace(data)
+            .expect("negotiate_format_inplace: validated 4bpp buffer");
         return PixelDescriptor::BGRA8_SRGB;
     }
     source

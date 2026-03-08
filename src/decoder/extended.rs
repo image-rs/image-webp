@@ -65,10 +65,8 @@ pub(crate) fn composite_frame(
         if frame_has_alpha {
             canvas.copy_from_slice(frame);
         } else {
-            for (input, output) in frame.chunks_exact(3).zip(canvas.chunks_exact_mut(4)) {
-                output[..3].copy_from_slice(input);
-                output[3] = 255;
-            }
+            garb::bytes::rgb_to_rgba(frame, canvas)
+                .map_err(|e| DecodeError::InvalidParameter(alloc::format!("pixel conversion: {e}")))?;
         }
         return Ok(());
     }
@@ -138,18 +136,15 @@ pub(crate) fn composite_frame(
             canvas[canvas_index..][..width * 4].copy_from_slice(&frame[frame_index..][..width * 4]);
         }
     } else {
-        for y in 0..height {
-            let index = (y * frame_width as usize) * 3;
-            let canvas_index =
-                frame_offset_x as usize * 4 + (y + frame_offset_y as usize) * canvas_stride;
-            let input = &frame[index..][..width * 3];
-            let output = &mut canvas[canvas_index..][..width * 4];
-
-            for (input, output) in input.chunks_exact(3).zip(output.chunks_exact_mut(4)) {
-                output[..3].copy_from_slice(input);
-                output[3] = 255;
-            }
-        }
+        garb::bytes::rgb_to_rgba_strided(
+            &frame[..height * frame_width as usize * 3],
+            &mut canvas[frame_offset_x as usize * 4 + frame_offset_y as usize * canvas_stride..],
+            width,
+            height,
+            frame_width as usize * 3,
+            canvas_stride,
+        )
+        .map_err(|e| DecodeError::InvalidParameter(alloc::format!("pixel conversion: {e}")))?;
     }
 
     Ok(())
