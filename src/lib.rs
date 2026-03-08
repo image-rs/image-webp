@@ -124,6 +124,8 @@ macro_rules! maybe_autoversion {
 // Core modules
 pub mod common;
 pub mod decoder;
+/// Encoder detection and quality estimation from WebP file headers.
+pub mod detect;
 pub mod encoder;
 /// WebP mux/demux and animation encoding.
 pub mod mux;

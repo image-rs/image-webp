@@ -30,7 +30,7 @@ mod arithmetic;
 /// Type-safe encoder configuration
 pub mod config;
 pub mod cost;
-mod fast_math;
+pub(crate) mod fast_math;
 /// Perceptual distortion model (CSF tables, psy-rd, psy-trellis)
 pub(crate) mod psy;
 /// Quantization matrix and coefficient quantization
