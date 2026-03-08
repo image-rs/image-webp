@@ -232,6 +232,9 @@ struct AnimationState {
     previous_frame_x_offset: u32,
     previous_frame_y_offset: u32,
     canvas: Option<Vec<u8>>,
+    /// Reusable scratch buffer for per-frame decode data.
+    /// Avoids allocating a fresh Vec<u8> for every animation frame.
+    frame_scratch: Vec<u8>,
 }
 impl Default for AnimationState {
     fn default() -> Self {
@@ -244,6 +247,7 @@ impl Default for AnimationState {
             previous_frame_x_offset: 0,
             previous_frame_y_offset: 0,
             canvas: None,
+            frame_scratch: Vec::new(),
         }
     }
 }
@@ -514,47 +518,69 @@ impl<'a> DecodeRequest<'a> {
     /// If [`stride`](Self::stride) is set, rows are written with that pixel stride.
     /// Otherwise rows are packed (stride == width).
     pub fn decode_rgb_into(self, output: &mut [u8]) -> Result<(u32, u32), DecodeError> {
-        let (w, h) = {
-            let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())?;
-            decoder.set_limits(self.config.limits.clone());
-            decoder.set_stop(self.stop);
-            let dims = decoder.dimensions();
+        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())?;
+        decoder.set_limits(self.config.limits.clone());
+        decoder.set_stop(self.stop);
+        let (w, h) = decoder.dimensions();
+
+        let stride_px = self.stride_pixels.unwrap_or(w) as usize;
+        if stride_px < w as usize {
+            return Err(DecodeError::InvalidParameter(alloc::format!(
+                "stride_pixels {} < width {}",
+                stride_px, w
+            )));
+        }
+        let stride_bytes = stride_px * 3;
+        let required = stride_bytes * h as usize;
+        if output.len() < required {
+            return Err(DecodeError::InvalidParameter(alloc::format!(
+                "output buffer too small: got {}, need {}",
+                output.len(),
+                required
+            )));
+        }
+
+        let no_stride = self.stride_pixels.is_none() || stride_px == w as usize;
+        if no_stride && !decoder.has_alpha() {
+            // No stride padding and native format is RGB — decode directly into output.
             let buf_size = decoder
                 .output_buffer_size()
                 .ok_or(DecodeError::ImageTooLarge)?;
-            let mut rgba = alloc::vec![0u8; buf_size];
-            decoder.read_image(&mut rgba)?;
-
-            let stride_px = self.stride_pixels.unwrap_or(dims.0) as usize;
-            if stride_px < dims.0 as usize {
-                return Err(DecodeError::InvalidParameter(alloc::format!(
-                    "stride_pixels {} < width {}",
-                    stride_px,
-                    dims.0
-                )));
+            decoder.read_image(&mut output[..buf_size])?;
+        } else if no_stride && decoder.has_alpha() {
+            // No stride padding but native format is RGBA — decode to temp, strip alpha.
+            let buf_size = decoder
+                .output_buffer_size()
+                .ok_or(DecodeError::ImageTooLarge)?;
+            let mut temp = alloc::vec![0u8; buf_size];
+            decoder.read_image(&mut temp)?;
+            for (dst, src) in output
+                .chunks_exact_mut(3)
+                .zip(temp.chunks_exact(4))
+            {
+                dst.copy_from_slice(&src[..3]);
             }
-            let stride_bytes = stride_px * 3;
-            let required = stride_bytes * dims.1 as usize;
-            if output.len() < required {
-                return Err(DecodeError::InvalidParameter(alloc::format!(
-                    "output buffer too small: got {}, need {}",
-                    output.len(),
-                    required
-                )));
-            }
-            for y in 0..(dims.1 as usize) {
-                let dst_row = &mut output[y * stride_bytes..][..dims.0 as usize * 3];
-                for (i, chunk) in rgba[y * dims.0 as usize * 4..(y + 1) * dims.0 as usize * 4]
-                    .chunks_exact(4)
-                    .enumerate()
-                {
-                    dst_row[i * 3] = chunk[0];
-                    dst_row[i * 3 + 1] = chunk[1];
-                    dst_row[i * 3 + 2] = chunk[2];
+        } else {
+            // Stride differs from width — decode to temp, then scatter with stride
+            let buf_size = decoder
+                .output_buffer_size()
+                .ok_or(DecodeError::ImageTooLarge)?;
+            let mut temp = alloc::vec![0u8; buf_size];
+            decoder.read_image(&mut temp)?;
+            let has_alpha = decoder.has_alpha();
+            let src_bpp: usize = if has_alpha { 4 } else { 3 };
+            for y in 0..(h as usize) {
+                let dst_row = &mut output[y * stride_bytes..][..w as usize * 3];
+                let src_row = &temp[y * w as usize * src_bpp..][..w as usize * src_bpp];
+                if has_alpha {
+                    for (dst, src) in dst_row.chunks_exact_mut(3).zip(src_row.chunks_exact(4)) {
+                        dst.copy_from_slice(&src[..3]);
+                    }
+                } else {
+                    dst_row.copy_from_slice(src_row);
                 }
             }
-            dims
-        };
+        }
         Ok((w, h))
     }
 
@@ -1185,7 +1211,7 @@ impl<'a> WebPDecoder<'a> {
             return Err(DecodeError::ChunkHeaderInvalid(chunk.to_fourcc()));
         }
 
-        let (frame, frame_has_alpha): (Vec<u8>, bool) = match chunk {
+        let frame_has_alpha: bool = match chunk {
             WebPRiffChunk::VP8 => {
                 let data_slice = self.r.take_slice(chunk_size as usize)?;
                 let raw_frame = Vp8Decoder::decode_frame_with_stop(data_slice, self.stop)?;
@@ -1196,9 +1222,12 @@ impl<'a> WebPDecoder<'a> {
                 }
                 let frame_alloc = frame_width as usize * frame_height as usize * 3;
                 self.limits.check_memory(frame_alloc)?;
-                let mut rgb_frame = vec![0; frame_alloc];
-                raw_frame.fill_rgb(&mut rgb_frame, self.webp_decode_options.lossy_upsampling);
-                (rgb_frame, false)
+                self.animation.frame_scratch.resize(frame_alloc, 0);
+                raw_frame.fill_rgb(
+                    &mut self.animation.frame_scratch,
+                    self.webp_decode_options.lossy_upsampling,
+                );
+                false
             }
             WebPRiffChunk::VP8L => {
                 let data_slice = self.r.take_slice(chunk_size as usize)?;
@@ -1206,9 +1235,14 @@ impl<'a> WebPDecoder<'a> {
                 lossless_decoder.set_stop(self.stop);
                 let frame_alloc = frame_width as usize * frame_height as usize * 4;
                 self.limits.check_memory(frame_alloc)?;
-                let mut rgba_frame = vec![0; frame_alloc];
-                lossless_decoder.decode_frame(frame_width, frame_height, false, &mut rgba_frame)?;
-                (rgba_frame, true)
+                self.animation.frame_scratch.resize(frame_alloc, 0);
+                lossless_decoder.decode_frame(
+                    frame_width,
+                    frame_height,
+                    false,
+                    &mut self.animation.frame_scratch,
+                )?;
+                true
             }
             WebPRiffChunk::ALPH => {
                 if chunk_size_rounded + 32 > anmf_size {
@@ -1232,33 +1266,36 @@ impl<'a> WebPDecoder<'a> {
                 }
 
                 let vp8_slice = self.r.take_slice(next_chunk_size as usize)?;
-                let frame = Vp8Decoder::decode_frame_with_stop(vp8_slice, self.stop)?;
+                let raw_frame = Vp8Decoder::decode_frame_with_stop(vp8_slice, self.stop)?;
 
                 let frame_alloc = frame_width as usize * frame_height as usize * 4;
                 self.limits.check_memory(frame_alloc)?;
-                let mut rgba_frame = vec![0; frame_alloc];
-                frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
+                self.animation.frame_scratch.resize(frame_alloc, 0);
+                raw_frame.fill_rgba(
+                    &mut self.animation.frame_scratch,
+                    self.webp_decode_options.lossy_upsampling,
+                );
 
-                for y in 0..frame.height {
-                    for x in 0..frame.width {
+                for y in 0..raw_frame.height {
+                    for x in 0..raw_frame.width {
                         let predictor: u8 = get_alpha_predictor(
                             x.into(),
                             y.into(),
-                            frame.width.into(),
+                            raw_frame.width.into(),
                             alpha_chunk.filtering_method,
-                            &rgba_frame,
+                            &self.animation.frame_scratch,
                         );
 
                         let alpha_index =
-                            usize::from(y) * usize::from(frame.width) + usize::from(x);
+                            usize::from(y) * usize::from(raw_frame.width) + usize::from(x);
                         let buffer_index = alpha_index * 4 + 3;
 
-                        rgba_frame[buffer_index] =
+                        self.animation.frame_scratch[buffer_index] =
                             predictor.wrapping_add(alpha_chunk.data[alpha_index]);
                     }
                 }
 
-                (rgba_frame, true)
+                true
             }
             _ => return Err(DecodeError::ChunkHeaderInvalid(chunk.to_fourcc())),
         };
@@ -1292,7 +1329,7 @@ impl<'a> WebPDecoder<'a> {
             self.width,
             self.height,
             clear_color,
-            &frame,
+            &self.animation.frame_scratch,
             frame_x,
             frame_y,
             frame_width,
