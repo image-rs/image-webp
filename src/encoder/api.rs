@@ -1387,25 +1387,39 @@ pub(crate) fn encode_frame_lossless(
     w.write_bits(0x0, 1);
 
     // expand to RGBA
-    let mut pixels = match color {
-        PixelLayout::L8 => data.iter().flat_map(|&p| [p, p, p, 255]).collect(),
-        PixelLayout::La8 => data
-            .chunks_exact(2)
-            .flat_map(|p| [p[0], p[0], p[0], p[1]])
-            .collect(),
-        PixelLayout::Rgb8 => data
-            .chunks_exact(3)
-            .flat_map(|p| [p[0], p[1], p[2], 255])
-            .collect(),
+    let npixels = data.len() / color.bytes_per_pixel();
+    let mut pixels: Vec<u8> = match color {
+        PixelLayout::L8 => {
+            let mut out = alloc::vec![0u8; npixels * 4];
+            garb::bytes::gray_to_rgba(&data[..npixels], &mut out)
+                .expect("validated buffer sizes");
+            out
+        }
+        PixelLayout::La8 => {
+            let mut out = alloc::vec![0u8; npixels * 4];
+            garb::bytes::gray_alpha_to_rgba(&data[..npixels * 2], &mut out)
+                .expect("validated buffer sizes");
+            out
+        }
+        PixelLayout::Rgb8 => {
+            let mut out = alloc::vec![0u8; npixels * 4];
+            garb::bytes::rgb_to_rgba(&data[..npixels * 3], &mut out)
+                .expect("validated buffer sizes");
+            out
+        }
         PixelLayout::Rgba8 => data.to_vec(),
-        PixelLayout::Bgr8 => data
-            .chunks_exact(3)
-            .flat_map(|p| [p[2], p[1], p[0], 255]) // B,G,R → R,G,B,A
-            .collect(),
-        PixelLayout::Bgra8 => data
-            .chunks_exact(4)
-            .flat_map(|p| [p[2], p[1], p[0], p[3]]) // B,G,R,A → R,G,B,A
-            .collect(),
+        PixelLayout::Bgr8 => {
+            let mut out = alloc::vec![0u8; npixels * 4];
+            garb::bytes::bgr_to_rgba(&data[..npixels * 3], &mut out)
+                .expect("validated buffer sizes");
+            out
+        }
+        PixelLayout::Bgra8 => {
+            let mut out = alloc::vec![0u8; npixels * 4];
+            garb::bytes::bgra_to_rgba(&data[..npixels * 4], &mut out)
+                .expect("validated buffer sizes");
+            out
+        }
         PixelLayout::Yuv420 => unreachable!(), // already rejected above
     };
 

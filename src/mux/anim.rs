@@ -333,38 +333,29 @@ impl AnimationEncoder {
 /// can't be compared pixel-by-pixel for delta compression).
 fn to_rgba(pixels: &[u8], color_type: PixelLayout, width: u32, height: u32) -> Option<Vec<u8>> {
     let npixels = (width as usize) * (height as usize);
+    let mut rgba = alloc::vec![0u8; npixels * 4];
     match color_type {
-        PixelLayout::L8 => Some(
-            pixels[..npixels]
-                .iter()
-                .flat_map(|&p| [p, p, p, 255])
-                .collect(),
-        ),
-        PixelLayout::La8 => Some(
-            pixels[..npixels * 2]
-                .chunks_exact(2)
-                .flat_map(|p| [p[0], p[0], p[0], p[1]])
-                .collect(),
-        ),
-        PixelLayout::Rgb8 => Some(
-            pixels[..npixels * 3]
-                .chunks_exact(3)
-                .flat_map(|p| [p[0], p[1], p[2], 255])
-                .collect(),
-        ),
+        PixelLayout::L8 => {
+            garb::bytes::gray_to_rgba(&pixels[..npixels], &mut rgba).ok()?;
+            Some(rgba)
+        }
+        PixelLayout::La8 => {
+            garb::bytes::gray_alpha_to_rgba(&pixels[..npixels * 2], &mut rgba).ok()?;
+            Some(rgba)
+        }
+        PixelLayout::Rgb8 => {
+            garb::bytes::rgb_to_rgba(&pixels[..npixels * 3], &mut rgba).ok()?;
+            Some(rgba)
+        }
         PixelLayout::Rgba8 => Some(pixels[..npixels * 4].to_vec()),
-        PixelLayout::Bgr8 => Some(
-            pixels[..npixels * 3]
-                .chunks_exact(3)
-                .flat_map(|p| [p[2], p[1], p[0], 255])
-                .collect(),
-        ),
-        PixelLayout::Bgra8 => Some(
-            pixels[..npixels * 4]
-                .chunks_exact(4)
-                .flat_map(|p| [p[2], p[1], p[0], p[3]])
-                .collect(),
-        ),
+        PixelLayout::Bgr8 => {
+            garb::bytes::bgr_to_rgba(&pixels[..npixels * 3], &mut rgba).ok()?;
+            Some(rgba)
+        }
+        PixelLayout::Bgra8 => {
+            garb::bytes::bgra_to_rgba(&pixels[..npixels * 4], &mut rgba).ok()?;
+            Some(rgba)
+        }
         PixelLayout::Yuv420 => None,
     }
 }

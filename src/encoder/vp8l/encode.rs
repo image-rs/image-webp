@@ -53,18 +53,33 @@ pub fn encode_vp8l(
         )));
     }
 
-    // Convert to ARGB u32 array
-    let mut argb: Vec<u32> = if has_alpha {
-        pixels
-            .chunks_exact(4)
-            .map(|p| make_argb(p[3], p[0], p[1], p[2]))
-            .collect()
-    } else {
-        pixels
-            .chunks_exact(3)
-            .map(|p| make_argb(255, p[0], p[1], p[2]))
-            .collect()
-    };
+    // Convert RGBA/RGB bytes to packed ARGB u32 array.
+    // On little-endian, ARGB u32 has byte order [B,G,R,A] = BGRA,
+    // so we use garb's SIMD-accelerated rgba_to_bgra / rgb_to_bgra.
+    let mut argb: Vec<u32> = alloc::vec![0u32; w * h];
+    #[cfg(target_endian = "little")]
+    {
+        let dst_bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut argb);
+        if has_alpha {
+            garb::bytes::rgba_to_bgra(pixels, dst_bytes)
+                .expect("encode_vp8l: validated buffer sizes");
+        } else {
+            garb::bytes::rgb_to_bgra(pixels, dst_bytes)
+                .expect("encode_vp8l: validated buffer sizes");
+        }
+    }
+    #[cfg(target_endian = "big")]
+    {
+        if has_alpha {
+            for (dst, p) in argb.iter_mut().zip(pixels.chunks_exact(4)) {
+                *dst = make_argb(p[3], p[0], p[1], p[2]);
+            }
+        } else {
+            for (dst, p) in argb.iter_mut().zip(pixels.chunks_exact(3)) {
+                *dst = make_argb(255, p[0], p[1], p[2]);
+            }
+        }
+    }
 
     // Note: BGR/BGRA callers must swap R↔B before calling encode_vp8l.
     // The encoder API handles this in the pixel expansion step.
