@@ -656,8 +656,11 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
         &mut self,
         pixels: PixelSlice<'_>,
         duration_ms: u32,
-        _stop: Option<&dyn enough::Stop>,
+        stop: Option<&dyn enough::Stop>,
     ) -> Result<(), At<EncodeError>> {
+        if let Some(s) = stop {
+            s.check().map_err(|e| whereat::at(EncodeError::from(e)))?;
+        }
         let (buf, layout, w, h) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
         self.ensure_encoder(w, h)?;
         let timestamp_ms = self.cumulative_ms;
@@ -668,7 +671,10 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
         Ok(())
     }
 
-    fn finish(self, _stop: Option<&dyn enough::Stop>) -> Result<EncodeOutput, At<EncodeError>> {
+    fn finish(self, stop: Option<&dyn enough::Stop>) -> Result<EncodeOutput, At<EncodeError>> {
+        if let Some(s) = stop {
+            s.check().map_err(|e| whereat::at(EncodeError::from(e)))?;
+        }
         let enc = self
             .anim_enc
             .ok_or_else(|| EncodeError::InvalidBufferSize("no frames added".into()))
