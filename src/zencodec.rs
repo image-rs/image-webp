@@ -213,6 +213,61 @@ static ENCODE_CAPABILITIES: zc::encode::EncodeCapabilities = zc::encode::EncodeC
     .with_effort_range(0, 10)
     .with_quality_range(0.0, 100.0);
 
+/// Map generic quality (libjpeg-turbo scale) to WebP native quality.
+///
+/// Calibrated on CID22-512 corpus (209 images) to produce the same median
+/// SSIMULACRA2 as libjpeg-turbo at each quality level.
+fn calibrated_webp_quality(generic_q: f32) -> f32 {
+    const TABLE: &[(f32, f32)] = &[
+        (5.0, 5.0),
+        (10.0, 5.0),
+        (15.0, 5.0),
+        (20.0, 10.4),
+        (25.0, 18.0),
+        (30.0, 25.4),
+        (35.0, 32.3),
+        (40.0, 37.8),
+        (45.0, 43.4),
+        (50.0, 49.2),
+        (55.0, 54.3),
+        (60.0, 59.5),
+        (65.0, 65.8),
+        (70.0, 73.4),
+        (72.0, 76.0),
+        (75.0, 78.1),
+        (78.0, 80.3),
+        (80.0, 81.8),
+        (82.0, 83.4),
+        (85.0, 85.9),
+        (87.0, 87.5),
+        (90.0, 90.5),
+        (92.0, 92.2),
+        (95.0, 97.4),
+        (97.0, 99.0),
+        (99.0, 99.0),
+    ];
+    interp_quality(TABLE, generic_q)
+}
+
+/// Piecewise linear interpolation with clamping at table bounds.
+fn interp_quality(table: &[(f32, f32)], x: f32) -> f32 {
+    if x <= table[0].0 {
+        return table[0].1;
+    }
+    if x >= table[table.len() - 1].0 {
+        return table[table.len() - 1].1;
+    }
+    for i in 1..table.len() {
+        if x <= table[i].0 {
+            let (x0, y0) = table[i - 1];
+            let (x1, y1) = table[i];
+            let t = (x - x0) / (x1 - x0);
+            return y0 + t * (y1 - y0);
+        }
+    }
+    table[table.len() - 1].1
+}
+
 impl zc::encode::EncoderConfig for WebpEncoderConfig {
     type Error = At<EncodeError>;
     type Job<'a> = WebpEncodeJob<'a>;
@@ -244,7 +299,8 @@ impl zc::encode::EncoderConfig for WebpEncoderConfig {
     fn with_generic_quality(mut self, quality: f32) -> Self {
         let clamped = quality.clamp(0.0, 100.0);
         self.trait_quality = Some(clamped);
-        self.inner = self.inner.with_quality(clamped);
+        let native = calibrated_webp_quality(clamped);
+        self.inner = self.inner.with_quality(native);
         self
     }
 
