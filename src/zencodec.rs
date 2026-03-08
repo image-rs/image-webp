@@ -600,6 +600,7 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
         &mut self,
         pixels: PixelSlice<'_>,
         duration_ms: u32,
+        _stop: Option<&dyn enough::Stop>,
     ) -> Result<(), At<EncodeError>> {
         let (buf, layout, w, h) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
         self.ensure_encoder(w, h)?;
@@ -611,7 +612,7 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
         Ok(())
     }
 
-    fn finish(self) -> Result<EncodeOutput, At<EncodeError>> {
+    fn finish(self, _stop: Option<&dyn enough::Stop>) -> Result<EncodeOutput, At<EncodeError>> {
         let enc = self
             .anim_enc
             .ok_or_else(|| EncodeError::InvalidBufferSize("no frames added".into()))
@@ -1074,7 +1075,7 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         self.anim_loop_count
     }
 
-    fn render_next_frame(&mut self) -> Result<Option<FullFrame<'_>>, At<DecodeError>> {
+    fn render_next_frame(&mut self, _stop: Option<&dyn enough::Stop>) -> Result<Option<FullFrame<'_>>, At<DecodeError>> {
         let frame = self.frames.pop_front();
         let Some((pixels, duration_ms)) = frame else {
             return Ok(None);
@@ -1086,7 +1087,7 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         Ok(Some(FullFrame::new(pixels.as_slice(), duration_ms, idx)))
     }
 
-    fn render_next_frame_owned(&mut self) -> Result<Option<OwnedFullFrame>, At<DecodeError>> {
+    fn render_next_frame_owned(&mut self, _stop: Option<&dyn enough::Stop>) -> Result<Option<OwnedFullFrame>, At<DecodeError>> {
         let Some((pixels, duration_ms)) = self.frames.pop_front() else {
             return Ok(None);
         };
@@ -1099,9 +1100,10 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
 
     fn render_next_frame_to_sink(
         &mut self,
+        stop: Option<&dyn enough::Stop>,
         sink: &mut dyn zc::decode::DecodeRowSink,
     ) -> Result<Option<OutputInfo>, Self::Error> {
-        zc::decode::render_frame_to_sink_via_copy(self, sink)
+        zc::decode::render_frame_to_sink_via_copy(self, stop, sink)
     }
 }
 
