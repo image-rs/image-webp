@@ -967,10 +967,26 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         )
         .map_err(whereat::at)?;
 
+        let has_alpha = anim_info.has_alpha;
+        let canvas_width = anim_info.canvas_width;
+        let canvas_height = anim_info.canvas_height;
+        let bpp: usize = if has_alpha { 4 } else { 3 };
+        let buf_size = canvas_width as usize * canvas_height as usize * bpp;
+        let source_desc = if has_alpha {
+            PixelDescriptor::RGBA8_SRGB
+        } else {
+            PixelDescriptor::RGB8_SRGB
+        };
+
         Ok(WebpFullFrameDecoder {
             decoder,
             preferred: preferred.to_vec(),
-            current_frame: None,
+            frame_buf: alloc::vec![0u8; buf_size],
+            has_alpha,
+            canvas_width,
+            canvas_height,
+            current_duration_ms: 0,
+            current_descriptor: source_desc,
             next_frame_index: 0,
             start_frame_index: self.start_frame_index,
             frames_skipped: false,
@@ -1113,8 +1129,11 @@ self_cell::self_cell! {
 /// Animation WebP full-frame decoder.
 ///
 /// Decodes frames lazily — each `render_next_frame` call decodes exactly one
-/// frame via the underlying [`AnimationDecoder`]. Memory usage is O(canvas_size)
-/// instead of O(N_frames × canvas_size).
+/// frame via the underlying [`AnimationDecoder`]. Zero per-frame allocations
+/// on the borrowing path (`render_next_frame`); one allocation on the owned
+/// path (`render_next_frame_owned`).
+///
+/// Memory usage is O(canvas_size) instead of O(N_frames × canvas_size).
 ///
 /// The [`AnimationDecoder`] borrows `&[u8]` from the input data. A self-referential
 /// struct ([`OwnedAnimDecoder`] via `self_cell`) stores the owned data alongside
@@ -1122,8 +1141,18 @@ self_cell::self_cell! {
 pub struct WebpFullFrameDecoder {
     decoder: OwnedAnimDecoder,
     preferred: Vec<PixelDescriptor>,
-    /// Holds the most recently yielded frame for borrowing via `render_next_frame`.
-    current_frame: Option<(PixelBuffer, u32)>,
+    /// Reusable buffer for composited frame data. Pre-allocated to canvas size;
+    /// reused across frames without reallocating.
+    frame_buf: Vec<u8>,
+    /// Whether the animation has alpha (RGBA vs RGB output).
+    has_alpha: bool,
+    /// Canvas dimensions.
+    canvas_width: u32,
+    canvas_height: u32,
+    /// Duration of the most recently decoded frame.
+    current_duration_ms: u32,
+    /// Descriptor after format negotiation for the current frame.
+    current_descriptor: PixelDescriptor,
     /// Frame index of the next frame to yield.
     next_frame_index: u32,
     /// Frames before this index are decoded (for compositing) but not returned.
@@ -1146,7 +1175,7 @@ impl WebpFullFrameDecoder {
         let skip_count = self.start_frame_index as usize;
         for _ in 0..skip_count {
             let done = self.decoder.with_dependent_mut(|_, anim| {
-                match anim.next_frame() {
+                match anim.decode_next() {
                     Ok(Some(_)) => Ok(false),
                     Ok(None) => Ok(true),
                     Err(e) => Err(e),
@@ -1160,28 +1189,73 @@ impl WebpFullFrameDecoder {
         Ok(())
     }
 
-    /// Decode exactly one frame from the inner AnimationDecoder.
-    fn decode_one_frame(&mut self) -> Result<Option<(PixelBuffer, u32)>, At<DecodeError>> {
-        let frame_opt = self.decoder.with_dependent_mut(|_, anim| {
-            anim.next_frame()
+    /// Decode next frame into `self.frame_buf` (zero-alloc: reuses buffer).
+    /// Returns `true` if a frame was decoded, `false` if no more frames.
+    fn decode_next_into_buf(&mut self) -> Result<bool, At<DecodeError>> {
+        // Re-allocate if frame_buf was taken by render_next_frame_owned.
+        let expected_size = self.stride() * self.canvas_height as usize;
+        if self.frame_buf.len() < expected_size {
+            self.frame_buf.resize(expected_size, 0);
+        }
+
+        let frame_buf = &mut self.frame_buf;
+        let result = self.decoder.with_dependent_mut(|_, anim| {
+            match anim.decode_next() {
+                Ok(Some(info)) => {
+                    let data = anim.current_frame_data();
+                    // frame_buf is pre-allocated to canvas size; this is a memcpy, no alloc.
+                    frame_buf[..data.len()].copy_from_slice(data);
+                    Ok(Some(info.duration_ms))
+                }
+                Ok(None) => Ok(None),
+                Err(e) => Err(e),
+            }
         }).map_err(whereat::at)?;
 
-        let Some(frame) = frame_opt else {
-            return Ok(None);
-        };
-
-        let buf = PixelBuffer::from_vec(
-            frame.data,
-            frame.width,
-            frame.height,
-            PixelDescriptor::RGBA8_SRGB,
-        )
-        .map_err(|_| {
-            whereat::at(DecodeError::InvalidParameter("frame size mismatch".into()))
-        })?;
-        let buf = negotiate_format(buf, &self.preferred);
-        Ok(Some((buf, frame.duration_ms)))
+        match result {
+            Some(duration_ms) => {
+                self.current_duration_ms = duration_ms;
+                // Apply RGBA→BGRA swizzle in-place if preferred.
+                let source = if self.has_alpha {
+                    PixelDescriptor::RGBA8_SRGB
+                } else {
+                    PixelDescriptor::RGB8_SRGB
+                };
+                self.current_descriptor = negotiate_format_inplace(
+                    &mut self.frame_buf,
+                    source,
+                    &self.preferred,
+                );
+                Ok(true)
+            }
+            None => Ok(false),
+        }
     }
+
+    /// Byte stride for the current frame format.
+    fn stride(&self) -> usize {
+        let bpp: usize = if self.has_alpha { 4 } else { 3 };
+        self.canvas_width as usize * bpp
+    }
+}
+
+/// Apply RGBA→BGRA swizzle in-place if the preferred list requests BGRA.
+/// Returns the descriptor that matches the buffer contents after the call.
+fn negotiate_format_inplace(
+    data: &mut [u8],
+    source: PixelDescriptor,
+    preferred: &[PixelDescriptor],
+) -> PixelDescriptor {
+    if !preferred.is_empty()
+        && preferred.contains(&PixelDescriptor::BGRA8_SRGB)
+        && source == PixelDescriptor::RGBA8_SRGB
+    {
+        for chunk in data.chunks_exact_mut(4) {
+            chunk.swap(0, 2);
+        }
+        return PixelDescriptor::BGRA8_SRGB;
+    }
+    source
 }
 
 impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
@@ -1212,14 +1286,25 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         }
         self.skip_to_start()?;
 
-        let Some((pixels, duration_ms)) = self.decode_one_frame()? else {
+        if !self.decode_next_into_buf()? {
             return Ok(None);
-        };
+        }
         let idx = self.next_frame_index;
         self.next_frame_index += 1;
-        self.current_frame = Some((pixels, duration_ms));
-        let (ref pixels, duration_ms) = *self.current_frame.as_ref().unwrap();
-        Ok(Some(FullFrame::new(pixels.as_slice(), duration_ms, idx)))
+
+        // Zero-alloc: create PixelSlice directly from the reusable frame_buf.
+        let stride = self.stride();
+        let slice = PixelSlice::new(
+            &self.frame_buf,
+            self.canvas_width,
+            self.canvas_height,
+            stride,
+            self.current_descriptor,
+        )
+        .map_err(|_| {
+            whereat::at(DecodeError::InvalidParameter("frame buffer mismatch".into()))
+        })?;
+        Ok(Some(FullFrame::new(slice, self.current_duration_ms, idx)))
     }
 
     fn render_next_frame_owned(
@@ -1231,14 +1316,25 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         }
         self.skip_to_start()?;
 
-        let Some((pixels, duration_ms)) = self.decode_one_frame()? else {
+        if !self.decode_next_into_buf()? {
             return Ok(None);
-        };
+        }
         let idx = self.next_frame_index;
         self.next_frame_index += 1;
-        // Drop any previously held frame to free memory before returning.
-        self.current_frame = None;
-        Ok(Some(OwnedFullFrame::new(pixels, duration_ms, idx)))
+
+        // Take the frame_buf for the owned PixelBuffer. A fresh buffer will
+        // be allocated on the next call (unavoidable for owned output).
+        let data = core::mem::take(&mut self.frame_buf);
+        let buf = PixelBuffer::from_vec(
+            data,
+            self.canvas_width,
+            self.canvas_height,
+            self.current_descriptor,
+        )
+        .map_err(|_| {
+            whereat::at(DecodeError::InvalidParameter("frame size mismatch".into()))
+        })?;
+        Ok(Some(OwnedFullFrame::new(buf, self.current_duration_ms, idx)))
     }
 
     fn render_next_frame_to_sink(

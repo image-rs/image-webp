@@ -18,7 +18,7 @@ mod demux;
 mod error;
 
 pub use anim::{AnimationConfig, AnimationEncoder};
-pub use anim_decode::{AnimFrame, AnimationDecoder, AnimationInfo};
+pub use anim_decode::{AnimFrame, AnimationDecoder, AnimationInfo, FrameInfo};
 pub use assemble::{MuxFrame, WebPMux};
 pub use demux::{BlendMethod, DemuxFrame, DemuxFrameIter, DisposeMethod, WebPDemuxer};
 pub use error::MuxError;

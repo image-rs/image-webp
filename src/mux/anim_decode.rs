@@ -23,6 +23,19 @@ use alloc::vec::Vec;
 
 use crate::decoder::{DecodeConfig, DecodeError, LoopCount, UpsamplingMethod, WebPDecoder};
 
+/// Frame metadata without pixel data (returned by [`AnimationDecoder::decode_next`]).
+#[derive(Debug, Clone, Copy)]
+pub struct FrameInfo {
+    /// Canvas width in pixels.
+    pub width: u32,
+    /// Canvas height in pixels.
+    pub height: u32,
+    /// Cumulative presentation timestamp in milliseconds.
+    pub timestamp_ms: u32,
+    /// Display duration of this frame in milliseconds.
+    pub duration_ms: u32,
+}
+
 /// A decoded animation frame with owned RGBA pixel data.
 #[derive(Debug, Clone)]
 pub struct AnimFrame {
@@ -171,6 +184,25 @@ impl<'a> AnimationDecoder<'a> {
 
     /// Decode the next frame, returning `None` when all frames have been read.
     pub fn next_frame(&mut self) -> Result<Option<AnimFrame>, DecodeError> {
+        let info = match self.decode_next()? {
+            Some(info) => info,
+            None => return Ok(None),
+        };
+        Ok(Some(AnimFrame {
+            data: self.buf.clone(),
+            width: info.width,
+            height: info.height,
+            timestamp_ms: info.timestamp_ms,
+            duration_ms: info.duration_ms,
+        }))
+    }
+
+    /// Decode the next frame without allocating.
+    ///
+    /// Returns frame metadata on success. The composited pixel data is
+    /// available via [`current_frame_data()`](Self::current_frame_data)
+    /// until the next call to `decode_next` or `next_frame`.
+    pub fn decode_next(&mut self) -> Result<Option<FrameInfo>, DecodeError> {
         if let Some(stop) = self.stop {
             stop.check()?;
         }
@@ -180,8 +212,7 @@ impl<'a> AnimationDecoder<'a> {
                 self.cumulative_ms = self.cumulative_ms.saturating_add(duration_ms);
                 self.frames_read += 1;
                 let (w, h) = self.decoder.dimensions();
-                Ok(Some(AnimFrame {
-                    data: self.buf.clone(),
+                Ok(Some(FrameInfo {
                     width: w,
                     height: h,
                     timestamp_ms,
@@ -191,6 +222,16 @@ impl<'a> AnimationDecoder<'a> {
             Err(DecodeError::NoMoreFrames) => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    /// Borrow the current composited frame data.
+    ///
+    /// Valid after a successful [`decode_next()`](Self::decode_next) call.
+    /// The format is RGBA (4 bytes/pixel) if `has_alpha`, otherwise RGB
+    /// (3 bytes/pixel), matching [`output_buffer_size`](WebPDecoder::output_buffer_size).
+    #[inline]
+    pub fn current_frame_data(&self) -> &[u8] {
+        &self.buf
     }
 
     /// Reset the decoder to the first frame.
