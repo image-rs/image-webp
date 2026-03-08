@@ -44,7 +44,18 @@ pub(crate) fn composite_frame(
     previous_frame_height: u32,
     previous_frame_offset_x: u32,
     previous_frame_offset_y: u32,
-) {
+) -> Result<(), DecodeError> {
+    // Validate canvas size with checked arithmetic
+    let canvas_stride = (canvas_width as usize)
+        .checked_mul(4)
+        .ok_or(DecodeError::ImageTooLarge)?;
+    let expected_canvas_size = canvas_stride
+        .checked_mul(canvas_height as usize)
+        .ok_or(DecodeError::ImageTooLarge)?;
+    if canvas.len() < expected_canvas_size {
+        return Err(DecodeError::ImageTooLarge);
+    }
+
     let frame_is_full_size = frame_offset_x == 0
         && frame_offset_y == 0
         && frame_width == canvas_width
@@ -59,7 +70,7 @@ pub(crate) fn composite_frame(
                 output[3] = 255;
             }
         }
-        return;
+        return Ok(());
     }
 
     // clear rectangle occupied by previous frame
@@ -78,9 +89,8 @@ pub(crate) fn composite_frame(
             (false, true) => {
                 for y in 0..previous_frame_height as usize {
                     for x in 0..previous_frame_width as usize {
-                        let canvas_index = ((x + previous_frame_offset_x as usize)
-                            + (y + previous_frame_offset_y as usize) * canvas_width as usize)
-                            * 4;
+                        let canvas_index = (x + previous_frame_offset_x as usize) * 4
+                            + (y + previous_frame_offset_y as usize) * canvas_stride;
 
                         let output = &mut canvas[canvas_index..][..4];
                         output.copy_from_slice(&clear_color);
@@ -90,10 +100,8 @@ pub(crate) fn composite_frame(
             (false, false) => {
                 for y in 0..previous_frame_height as usize {
                     for x in 0..previous_frame_width as usize {
-                        // let frame_index = (x + y * frame_width as usize) * 4;
-                        let canvas_index = ((x + previous_frame_offset_x as usize)
-                            + (y + previous_frame_offset_y as usize) * canvas_width as usize)
-                            * 3;
+                        let canvas_index = (x + previous_frame_offset_x as usize) * 3
+                            + (y + previous_frame_offset_y as usize) * (canvas_width as usize * 3);
 
                         let output = &mut canvas[canvas_index..][..3];
                         output.copy_from_slice(&clear_color[..3]);
@@ -110,9 +118,8 @@ pub(crate) fn composite_frame(
         for y in 0..height {
             for x in 0..width {
                 let frame_index = (x + y * frame_width as usize) * 4;
-                let canvas_index = ((x + frame_offset_x as usize)
-                    + (y + frame_offset_y as usize) * canvas_width as usize)
-                    * 4;
+                let canvas_index = (x + frame_offset_x as usize) * 4
+                    + (y + frame_offset_y as usize) * canvas_stride;
 
                 let input = &frame[frame_index..][..4];
                 let output = &mut canvas[canvas_index..][..4];
@@ -125,18 +132,16 @@ pub(crate) fn composite_frame(
     } else if frame_has_alpha {
         for y in 0..height {
             let frame_index = (y * frame_width as usize) * 4;
-            let canvas_index = (frame_offset_x as usize
-                + (y + frame_offset_y as usize) * canvas_width as usize)
-                * 4;
+            let canvas_index =
+                frame_offset_x as usize * 4 + (y + frame_offset_y as usize) * canvas_stride;
 
             canvas[canvas_index..][..width * 4].copy_from_slice(&frame[frame_index..][..width * 4]);
         }
     } else {
         for y in 0..height {
             let index = (y * frame_width as usize) * 3;
-            let canvas_index = (frame_offset_x as usize
-                + (y + frame_offset_y as usize) * canvas_width as usize)
-                * 4;
+            let canvas_index =
+                frame_offset_x as usize * 4 + (y + frame_offset_y as usize) * canvas_stride;
             let input = &frame[index..][..width * 3];
             let output = &mut canvas[canvas_index..][..width * 4];
 
@@ -146,6 +151,8 @@ pub(crate) fn composite_frame(
             }
         }
     }
+
+    Ok(())
 }
 
 pub(crate) fn get_alpha_predictor(

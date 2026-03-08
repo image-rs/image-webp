@@ -1076,7 +1076,9 @@ impl<'a> WebPDecoder<'a> {
             if self.has_alpha {
                 decoder.decode_frame(self.width, self.height, false, buf)?;
             } else {
-                let mut data = vec![0; self.width as usize * self.height as usize * 4];
+                let alloc_size = self.width as usize * self.height as usize * 4;
+                self.limits.check_memory(alloc_size)?;
+                let mut data = vec![0; alloc_size];
                 decoder.decode_frame(self.width, self.height, false, &mut data)?;
                 for (rgba_val, chunk) in data.chunks_exact(4).zip(buf.chunks_exact_mut(3)) {
                     chunk.copy_from_slice(&rgba_val[..3]);
@@ -1192,7 +1194,9 @@ impl<'a> WebPDecoder<'a> {
                 {
                     return Err(DecodeError::InconsistentImageSizes);
                 }
-                let mut rgb_frame = vec![0; frame_width as usize * frame_height as usize * 3];
+                let frame_alloc = frame_width as usize * frame_height as usize * 3;
+                self.limits.check_memory(frame_alloc)?;
+                let mut rgb_frame = vec![0; frame_alloc];
                 raw_frame.fill_rgb(&mut rgb_frame, self.webp_decode_options.lossy_upsampling);
                 (rgb_frame, false)
             }
@@ -1200,7 +1204,9 @@ impl<'a> WebPDecoder<'a> {
                 let data_slice = self.r.take_slice(chunk_size as usize)?;
                 let mut lossless_decoder = LosslessDecoder::new(data_slice);
                 lossless_decoder.set_stop(self.stop);
-                let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                let frame_alloc = frame_width as usize * frame_height as usize * 4;
+                self.limits.check_memory(frame_alloc)?;
+                let mut rgba_frame = vec![0; frame_alloc];
                 lossless_decoder.decode_frame(frame_width, frame_height, false, &mut rgba_frame)?;
                 (rgba_frame, true)
             }
@@ -1228,7 +1234,9 @@ impl<'a> WebPDecoder<'a> {
                 let vp8_slice = self.r.take_slice(next_chunk_size as usize)?;
                 let frame = Vp8Decoder::decode_frame_with_stop(vp8_slice, self.stop)?;
 
-                let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                let frame_alloc = frame_width as usize * frame_height as usize * 4;
+                self.limits.check_memory(frame_alloc)?;
+                let mut rgba_frame = vec![0; frame_alloc];
                 frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
 
                 for y in 0..frame.height {
@@ -1268,7 +1276,9 @@ impl<'a> WebPDecoder<'a> {
         // fill starting canvas with clear color
         if self.animation.canvas.is_none() {
             self.animation.canvas = {
-                let mut canvas = vec![0; (self.width * self.height * 4) as usize];
+                let canvas_alloc = self.width as usize * self.height as usize * 4;
+                self.limits.check_memory(canvas_alloc)?;
+                let mut canvas = vec![0; canvas_alloc];
                 if let Some(color) = info.background_color.as_ref() {
                     canvas
                         .chunks_exact_mut(4)
@@ -1293,7 +1303,7 @@ impl<'a> WebPDecoder<'a> {
             self.animation.previous_frame_height,
             self.animation.previous_frame_x_offset,
             self.animation.previous_frame_y_offset,
-        );
+        )?;
 
         self.animation.previous_frame_width = frame_width;
         self.animation.previous_frame_height = frame_height;
