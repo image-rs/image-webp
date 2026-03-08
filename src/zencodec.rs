@@ -1129,7 +1129,11 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
 
     fn probe(&self, data: &[u8]) -> Result<ImageInfo, At<DecodeError>> {
         let native = crate::ImageInfo::from_webp(data).map_err(whereat::at)?;
-        Ok(to_image_info(&native))
+        let mut info = to_image_info(&native);
+        if let Ok(probe) = crate::detect::probe(data) {
+            info = info.with_source_encoding_details(probe);
+        }
+        Ok(info)
     }
 
     fn output_info(&self, data: &[u8]) -> Result<OutputInfo, At<DecodeError>> {
