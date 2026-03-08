@@ -19,7 +19,6 @@
 //! | `FullFrameDecoder` | [`WebpFullFrameDecoder`] |
 
 use alloc::borrow::Cow;
-use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -928,13 +927,13 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         }
 
         let cfg = self.build_config();
-        let mut anim = AnimationDecoder::new_with_config(&data, &cfg).map_err(whereat::at)?;
-        if let Some(stop) = self.stop {
-            anim.set_stop(stop);
-        }
 
-        let anim_info = anim.info();
+        // Parse container info before moving data into the self-referential struct.
         let native_info = crate::ImageInfo::from_webp(&data).ok();
+
+        // Probe animation metadata with a temporary decoder.
+        let probe_anim = AnimationDecoder::new_with_config(&data, &cfg).map_err(whereat::at)?;
+        let anim_info = probe_anim.info();
         let base_info = if let Some(ref ni) = native_info {
             to_image_info(ni)
         } else {
@@ -953,38 +952,28 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
             crate::LoopCount::Forever => Some(0),
             crate::LoopCount::Times(n) => Some(n.get() as u32),
         };
+        drop(probe_anim);
 
-        // Eagerly decode all frames (required because AnimationDecoder borrows data).
-        // Apply format negotiation upfront so render_next_frame can borrow in place.
-        // Frames before start_frame_index are decoded (needed for compositing) but
-        // not stored, reducing peak memory when skipping early frames.
-        let start = self.start_frame_index as usize;
-        let mut frames = VecDeque::new();
-        let mut decoded_count: usize = 0;
-        while let Some(frame) = anim.next_frame().map_err(whereat::at)? {
-            let frame_idx = decoded_count;
-            decoded_count += 1;
-            if frame_idx < start {
-                // Decode for compositing state but don't store.
-                continue;
-            }
-            let buf = PixelBuffer::from_vec(
-                frame.data,
-                frame.width,
-                frame.height,
-                PixelDescriptor::RGBA8_SRGB,
-            )
-            .map_err(|_| {
-                whereat::at(DecodeError::InvalidParameter("frame size mismatch".into()))
-            })?;
-            let buf = negotiate_format(buf, preferred);
-            frames.push_back((buf, frame.duration_ms));
-        }
+        // Build the self-referential struct: owned data + borrowing AnimationDecoder.
+        // The AnimationDecoder borrows &[u8] from the owned Vec, so we use self_cell
+        // to safely express this relationship without unsafe code.
+        let owned_data = data.into_owned();
+        let decoder = OwnedAnimDecoder::try_new(
+            AnimDecoderOwner {
+                data: owned_data,
+                config: cfg,
+            },
+            |owner| AnimationDecoder::new_with_config(&owner.data, &owner.config),
+        )
+        .map_err(whereat::at)?;
 
         Ok(WebpFullFrameDecoder {
-            frames,
+            decoder,
+            preferred: preferred.to_vec(),
             current_frame: None,
-            next_frame_index: start as u32,
+            next_frame_index: 0,
+            start_frame_index: self.start_frame_index,
+            frames_skipped: false,
             info: shared_info,
             total_frames,
             anim_loop_count,
@@ -1060,7 +1049,11 @@ impl WebpDecoder<'_> {
             ImageInfo::new(w, h, ImageFormat::WebP).with_alpha(has_alpha)
         };
 
-        Ok(DecodeOutput::new(buf, info))
+        let mut output = DecodeOutput::new(buf, info);
+        if let Ok(probe) = crate::detect::probe(data) {
+            output = output.with_source_encoding_details(probe);
+        }
+        Ok(output)
     }
 }
 
@@ -1101,21 +1094,94 @@ impl zc::decode::Decode for WebpDecoder<'_> {
 
 // ── Full Frame Decoder ──────────────────────────────────────────────────────
 
+/// Owned data for the self-referential animation decoder.
+struct AnimDecoderOwner {
+    data: Vec<u8>,
+    config: DecodeConfig,
+}
+
+// Safety: self_cell uses only safe Rust internally. AnimationDecoder<'a> is
+// covariant in 'a, so the #[covariant] annotation is correct.
+self_cell::self_cell! {
+    struct OwnedAnimDecoder {
+        owner: AnimDecoderOwner,
+        #[covariant]
+        dependent: AnimationDecoder,
+    }
+}
+
 /// Animation WebP full-frame decoder.
 ///
-/// Pre-decodes all frames eagerly (required because the underlying
-/// [`AnimationDecoder`] borrows the input data). Consumed frames are
-/// freed immediately via `VecDeque::pop_front`, so peak memory is
-/// proportional to remaining (not total) frames.
+/// Decodes frames lazily — each `render_next_frame` call decodes exactly one
+/// frame via the underlying [`AnimationDecoder`]. Memory usage is O(canvas_size)
+/// instead of O(N_frames × canvas_size).
+///
+/// The [`AnimationDecoder`] borrows `&[u8]` from the input data. A self-referential
+/// struct ([`OwnedAnimDecoder`] via `self_cell`) stores the owned data alongside
+/// the borrowing decoder, satisfying the `'static` requirement on `FullFrameDec`.
 pub struct WebpFullFrameDecoder {
-    frames: VecDeque<(PixelBuffer, u32)>,
+    decoder: OwnedAnimDecoder,
+    preferred: Vec<PixelDescriptor>,
     /// Holds the most recently yielded frame for borrowing via `render_next_frame`.
     current_frame: Option<(PixelBuffer, u32)>,
-    /// Frame index of the next frame to yield (accounts for `start_frame_index`).
+    /// Frame index of the next frame to yield.
     next_frame_index: u32,
+    /// Frames before this index are decoded (for compositing) but not returned.
+    start_frame_index: u32,
+    /// Whether we've already skipped past start_frame_index.
+    frames_skipped: bool,
     info: Arc<ImageInfo>,
     total_frames: u32,
     anim_loop_count: Option<u32>,
+}
+
+impl WebpFullFrameDecoder {
+    /// Decode and discard frames before `start_frame_index` (needed for
+    /// correct compositing state). Called lazily on first `render_next_frame`.
+    fn skip_to_start(&mut self) -> Result<(), At<DecodeError>> {
+        if self.frames_skipped {
+            return Ok(());
+        }
+        self.frames_skipped = true;
+        let skip_count = self.start_frame_index as usize;
+        for _ in 0..skip_count {
+            let done = self.decoder.with_dependent_mut(|_, anim| {
+                match anim.next_frame() {
+                    Ok(Some(_)) => Ok(false),
+                    Ok(None) => Ok(true),
+                    Err(e) => Err(e),
+                }
+            }).map_err(whereat::at)?;
+            if done {
+                break;
+            }
+        }
+        self.next_frame_index = self.start_frame_index;
+        Ok(())
+    }
+
+    /// Decode exactly one frame from the inner AnimationDecoder.
+    fn decode_one_frame(&mut self) -> Result<Option<(PixelBuffer, u32)>, At<DecodeError>> {
+        let frame_opt = self.decoder.with_dependent_mut(|_, anim| {
+            anim.next_frame()
+        }).map_err(whereat::at)?;
+
+        let Some(frame) = frame_opt else {
+            return Ok(None);
+        };
+
+        let buf = PixelBuffer::from_vec(
+            frame.data,
+            frame.width,
+            frame.height,
+            PixelDescriptor::RGBA8_SRGB,
+        )
+        .map_err(|_| {
+            whereat::at(DecodeError::InvalidParameter("frame size mismatch".into()))
+        })?;
+        let buf = negotiate_format(buf, &self.preferred);
+        Ok(Some((buf, frame.duration_ms)))
+    }
 }
 
 impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
@@ -1139,10 +1205,14 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
 
     fn render_next_frame(
         &mut self,
-        _stop: Option<&dyn enough::Stop>,
+        stop: Option<&dyn enough::Stop>,
     ) -> Result<Option<FullFrame<'_>>, At<DecodeError>> {
-        let frame = self.frames.pop_front();
-        let Some((pixels, duration_ms)) = frame else {
+        if let Some(s) = stop {
+            s.check().map_err(|e| whereat::at(DecodeError::from(e)))?;
+        }
+        self.skip_to_start()?;
+
+        let Some((pixels, duration_ms)) = self.decode_one_frame()? else {
             return Ok(None);
         };
         let idx = self.next_frame_index;
@@ -1154,9 +1224,14 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
 
     fn render_next_frame_owned(
         &mut self,
-        _stop: Option<&dyn enough::Stop>,
+        stop: Option<&dyn enough::Stop>,
     ) -> Result<Option<OwnedFullFrame>, At<DecodeError>> {
-        let Some((pixels, duration_ms)) = self.frames.pop_front() else {
+        if let Some(s) = stop {
+            s.check().map_err(|e| whereat::at(DecodeError::from(e)))?;
+        }
+        self.skip_to_start()?;
+
+        let Some((pixels, duration_ms)) = self.decode_one_frame()? else {
             return Ok(None);
         };
         let idx = self.next_frame_index;
@@ -1445,5 +1520,78 @@ mod tests {
         assert!(caps.animation());
         assert!(caps.cheap_probe());
         assert!(caps.native_alpha());
+    }
+
+    #[test]
+    fn animation_roundtrip_lazy_decode() {
+        use zc::decode::FullFrameDecoder;
+        use zc::encode::FullFrameEncoder;
+
+        // Encode a 3-frame animation.
+        let frame1 = make_rgba8_pixels(16, 16);
+        let frame2 = make_rgba8_pixels(16, 16);
+        let frame3 = make_rgba8_pixels(16, 16);
+        let enc_config = WebpEncoderConfig::lossy().with_quality(90.0);
+        let mut enc = enc_config.job().full_frame_encoder().unwrap();
+        enc.push_frame(frame1.as_slice(), 100, None).unwrap();
+        enc.push_frame(frame2.as_slice(), 100, None).unwrap();
+        enc.push_frame(frame3.as_slice(), 100, None).unwrap();
+        let output = enc.finish(None).unwrap();
+        assert!(!output.is_empty());
+
+        // Decode lazily through FullFrameDecoder.
+        let dec_config = WebpDecoderConfig::new();
+        let mut dec = dec_config
+            .job()
+            .full_frame_decoder(Cow::Owned(output.data().to_vec()), &[])
+            .unwrap();
+
+        assert_eq!(dec.frame_count(), Some(3));
+
+        // Each render_next_frame decodes one frame lazily.
+        let f1 = dec.render_next_frame(None).unwrap().expect("frame 1");
+        assert_eq!(f1.frame_index(), 0);
+        assert_eq!(f1.duration_ms(), 100);
+
+        let f2 = dec.render_next_frame_owned(None).unwrap().expect("frame 2");
+        assert_eq!(f2.frame_index(), 1);
+
+        let f3 = dec.render_next_frame(None).unwrap().expect("frame 3");
+        assert_eq!(f3.frame_index(), 2);
+
+        // No more frames.
+        assert!(dec.render_next_frame(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn animation_lazy_decode_with_start_frame() {
+        use zc::decode::FullFrameDecoder;
+        use zc::encode::FullFrameEncoder;
+
+        // Encode 4 frames.
+        let enc_config = WebpEncoderConfig::lossy().with_quality(90.0);
+        let mut enc = enc_config.job().full_frame_encoder().unwrap();
+        for _ in 0..4 {
+            let frame = make_rgba8_pixels(8, 8);
+            enc.push_frame(frame.as_slice(), 50, None).unwrap();
+        }
+        let output = enc.finish(None).unwrap();
+
+        // Decode starting from frame 2.
+        let dec_config = WebpDecoderConfig::new();
+        let mut dec = dec_config
+            .job()
+            .with_start_frame_index(2)
+            .full_frame_decoder(Cow::Owned(output.data().to_vec()), &[])
+            .unwrap();
+
+        // First yielded frame should be index 2.
+        let f = dec.render_next_frame(None).unwrap().expect("frame 2");
+        assert_eq!(f.frame_index(), 2);
+
+        let f = dec.render_next_frame(None).unwrap().expect("frame 3");
+        assert_eq!(f.frame_index(), 3);
+
+        assert!(dec.render_next_frame(None).unwrap().is_none());
     }
 }
