@@ -24,7 +24,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use whereat::{At, ResultAtExt};
-use zc::decode::{DecodeOutput, FullFrame, OwnedFullFrame, OutputInfo, SinkError};
+use zc::decode::{DecodeOutput, FullFrame, OutputInfo, OwnedFullFrame, SinkError};
 use zc::encode::EncodeOutput;
 use zc::{ImageFormat, ImageInfo, MetadataView, ResourceLimits, UnsupportedOperation};
 use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice};
@@ -1075,7 +1075,10 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         self.anim_loop_count
     }
 
-    fn render_next_frame(&mut self, _stop: Option<&dyn enough::Stop>) -> Result<Option<FullFrame<'_>>, At<DecodeError>> {
+    fn render_next_frame(
+        &mut self,
+        _stop: Option<&dyn enough::Stop>,
+    ) -> Result<Option<FullFrame<'_>>, At<DecodeError>> {
         let frame = self.frames.pop_front();
         let Some((pixels, duration_ms)) = frame else {
             return Ok(None);
@@ -1087,7 +1090,10 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         Ok(Some(FullFrame::new(pixels.as_slice(), duration_ms, idx)))
     }
 
-    fn render_next_frame_owned(&mut self, _stop: Option<&dyn enough::Stop>) -> Result<Option<OwnedFullFrame>, At<DecodeError>> {
+    fn render_next_frame_owned(
+        &mut self,
+        _stop: Option<&dyn enough::Stop>,
+    ) -> Result<Option<OwnedFullFrame>, At<DecodeError>> {
         let Some((pixels, duration_ms)) = self.frames.pop_front() else {
             return Ok(None);
         };
