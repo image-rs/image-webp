@@ -205,13 +205,16 @@ static ENCODE_CAPABILITIES: zc::encode::EncodeCapabilities = zc::encode::EncodeC
     .with_icc(true)
     .with_exif(true)
     .with_xmp(true)
+    .with_cancel(true)
     .with_lossy(true)
     .with_lossless(true)
     .with_animation(true)
+    .with_row_level(true)
     .with_native_alpha(true)
     .with_effort_range(0, 10)
     .with_quality_range(0.0, 100.0)
-    .with_row_level(true);
+    .with_enforces_max_pixels(true)
+    .with_enforces_max_memory(true);
 
 /// Map generic quality (libjpeg-turbo scale) to WebP native quality.
 ///
@@ -1036,9 +1039,12 @@ static DECODE_CAPABILITIES: zc::decode::DecodeCapabilities = zc::decode::DecodeC
     .with_icc(true)
     .with_exif(true)
     .with_xmp(true)
+    .with_cancel(true)
     .with_animation(true)
     .with_cheap_probe(true)
-    .with_native_alpha(true);
+    .with_native_alpha(true)
+    .with_enforces_max_pixels(true)
+    .with_enforces_max_memory(true);
 
 impl zc::decode::DecoderConfig for WebpDecoderConfig {
     type Error = At<DecodeError>;
@@ -1864,10 +1870,21 @@ mod tests {
         assert!(caps.icc());
         assert!(caps.exif());
         assert!(caps.xmp());
+        assert!(caps.cancel());
         assert!(caps.lossy());
         assert!(caps.lossless());
         assert!(caps.animation());
+        assert!(caps.row_level());
         assert!(caps.native_alpha());
+        assert!(caps.enforces_max_pixels());
+        assert!(caps.enforces_max_memory());
+        assert_eq!(caps.effort_range(), Some([0, 10]));
+        assert_eq!(caps.quality_range(), Some([0.0, 100.0]));
+        // WebP doesn't natively support these
+        assert!(!caps.cicp());
+        assert!(!caps.hdr());
+        assert!(!caps.native_16bit());
+        assert!(!caps.pull());
     }
 
     #[test]
@@ -1876,9 +1893,18 @@ mod tests {
         assert!(caps.icc());
         assert!(caps.exif());
         assert!(caps.xmp());
+        assert!(caps.cancel());
         assert!(caps.animation());
         assert!(caps.cheap_probe());
         assert!(caps.native_alpha());
+        assert!(caps.enforces_max_pixels());
+        assert!(caps.enforces_max_memory());
+        // WebP doesn't natively support these
+        assert!(!caps.cicp());
+        assert!(!caps.hdr());
+        assert!(!caps.native_16bit());
+        assert!(!caps.decode_into());
+        assert!(!caps.row_level());
     }
 
     #[test]
