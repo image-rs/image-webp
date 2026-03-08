@@ -210,7 +210,8 @@ static ENCODE_CAPABILITIES: zc::encode::EncodeCapabilities = zc::encode::EncodeC
     .with_animation(true)
     .with_native_alpha(true)
     .with_effort_range(0, 10)
-    .with_quality_range(0.0, 100.0);
+    .with_quality_range(0.0, 100.0)
+    .with_row_level(true);
 
 /// Map generic quality (libjpeg-turbo scale) to WebP native quality.
 ///
@@ -445,6 +446,8 @@ impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
             stop: self.stop,
             metadata,
             limits: self.limits,
+            canvas_size: self.canvas_size,
+            stream: None,
         })
     }
 
@@ -473,12 +476,38 @@ impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
 
 // ── Encoder ─────────────────────────────────────────────────────────────────
 
+/// Streaming accumulation state for row-level encoding.
+///
+/// Initialized on the first `push_rows` call based on encoder config and input format.
+enum StreamAccum {
+    /// Lossy opaque RGB8: convert to YUV420 during push for lower peak memory
+    /// (1.5 bytes/pixel vs 3 bytes/pixel for RGB8 input).
+    Yuv {
+        y_plane: Vec<u8>,
+        u_plane: Vec<u8>,
+        v_plane: Vec<u8>,
+        /// Held-back RGB row for chroma pairing when odd rows received.
+        pending_row: Vec<u8>,
+        width: u32,
+        total_rows: u32,
+    },
+    /// Generic path: accumulate converted pixel bytes.
+    Raw {
+        pixels: Vec<u8>,
+        layout: PixelLayout,
+        width: u32,
+        total_rows: u32,
+    },
+}
+
 /// Single-image WebP encoder.
 pub struct WebpEncoder<'a> {
     inner_config: EncoderConfig,
     stop: Option<&'a dyn enough::Stop>,
     metadata: Option<crate::ImageMetadata<'a>>,
     limits: ResourceLimits,
+    canvas_size: Option<(u32, u32)>,
+    stream: Option<StreamAccum>,
 }
 
 impl<'a> WebpEncoder<'a> {
@@ -591,6 +620,68 @@ fn pixels_to_webp_input<'a>(
     }
 }
 
+/// Convert a pair of RGB8 rows to Y/U/V planes.
+///
+/// Appends Y samples for both rows and one row of U/V chroma samples
+/// (2:1 subsampling in both directions).
+fn convert_row_pair_to_yuv(
+    row0: &[u8],
+    row1: &[u8],
+    width: usize,
+    y_plane: &mut Vec<u8>,
+    u_plane: &mut Vec<u8>,
+    v_plane: &mut Vec<u8>,
+) {
+    use crate::decoder::yuv::{rgb_to_u_avg, rgb_to_v_avg, rgb_to_y};
+
+    // Y for both rows
+    for x in 0..width {
+        y_plane.push(rgb_to_y(&row0[x * 3..x * 3 + 3]));
+    }
+    for x in 0..width {
+        y_plane.push(rgb_to_y(&row1[x * 3..x * 3 + 3]));
+    }
+
+    // U/V: average of 2×2 blocks
+    let uv_w = width.div_ceil(2);
+    for cx in 0..uv_w {
+        let x0 = cx * 2;
+        let x1 = (cx * 2 + 1).min(width - 1);
+        let p00 = &row0[x0 * 3..x0 * 3 + 3];
+        let p01 = &row0[x1 * 3..x1 * 3 + 3];
+        let p10 = &row1[x0 * 3..x0 * 3 + 3];
+        let p11 = &row1[x1 * 3..x1 * 3 + 3];
+        u_plane.push(rgb_to_u_avg(p00, p01, p10, p11));
+        v_plane.push(rgb_to_v_avg(p00, p01, p10, p11));
+    }
+}
+
+/// Convert a single RGB8 row to Y plane + U/V chroma (edge replication).
+///
+/// Used for the last row when image height is odd.
+fn convert_single_row_to_yuv(
+    row: &[u8],
+    width: usize,
+    y_plane: &mut Vec<u8>,
+    u_plane: &mut Vec<u8>,
+    v_plane: &mut Vec<u8>,
+) {
+    use crate::decoder::yuv::{rgb_to_u_avg, rgb_to_v_avg, rgb_to_y};
+
+    for x in 0..width {
+        y_plane.push(rgb_to_y(&row[x * 3..x * 3 + 3]));
+    }
+    let uv_w = width.div_ceil(2);
+    for cx in 0..uv_w {
+        let x0 = cx * 2;
+        let x1 = (cx * 2 + 1).min(width - 1);
+        let p0 = &row[x0 * 3..x0 * 3 + 3];
+        let p1 = &row[x1 * 3..x1 * 3 + 3];
+        u_plane.push(rgb_to_u_avg(p0, p1, p0, p1));
+        v_plane.push(rgb_to_v_avg(p0, p1, p0, p1));
+    }
+}
+
 impl zc::encode::Encoder for WebpEncoder<'_> {
     type Error = At<EncodeError>;
 
@@ -598,9 +689,181 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
         At::from(EncodeError::from(op))
     }
 
+    fn preferred_strip_height(&self) -> u32 {
+        match &self.inner_config {
+            // Row pair for chroma subsampling (YUV420 processes 2 rows at a time)
+            EncoderConfig::Lossy(_) => 2,
+            // Lossless has no row-level preference
+            EncoderConfig::Lossless(_) => 1,
+        }
+    }
+
     fn encode(self, pixels: PixelSlice<'_>) -> Result<EncodeOutput, At<EncodeError>> {
         let (buf, layout, w, h) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
         self.do_encode(&buf, layout, w, h).map_err(whereat::at)
+    }
+
+    fn push_rows(&mut self, rows: PixelSlice<'_>) -> Result<(), At<EncodeError>> {
+        let desc = rows.descriptor();
+        let strip_w = rows.width();
+        let strip_h = rows.rows();
+
+        if strip_h == 0 {
+            return Ok(());
+        }
+
+        // Initialize streaming state on first push
+        if self.stream.is_none() {
+            let is_lossy = matches!(self.inner_config, EncoderConfig::Lossy(_));
+            let is_rgb8 = desc == PixelDescriptor::RGB8_SRGB;
+            let sharp_yuv = match &self.inner_config {
+                EncoderConfig::Lossy(cfg) => cfg.sharp_yuv,
+                EncoderConfig::Lossless(_) => false,
+            };
+
+            if is_lossy && is_rgb8 && !sharp_yuv {
+                // YUV conversion path: lower peak memory
+                let (cw, ch) = self.canvas_size.unwrap_or((strip_w, 0));
+                let y_cap = cw as usize * ch as usize;
+                let uv_w = (cw as usize).div_ceil(2);
+                let uv_h = (ch as usize).div_ceil(2);
+                self.stream = Some(StreamAccum::Yuv {
+                    y_plane: Vec::with_capacity(y_cap),
+                    u_plane: Vec::with_capacity(uv_w * uv_h),
+                    v_plane: Vec::with_capacity(uv_w * uv_h),
+                    pending_row: Vec::new(),
+                    width: cw,
+                    total_rows: 0,
+                });
+            } else {
+                // Generic path: convert per-strip, accumulate bytes
+                let (_, layout, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                let (cw, ch) = self.canvas_size.unwrap_or((strip_w, 0));
+                let bpp = layout.bytes_per_pixel();
+                let cap = cw as usize * ch as usize * bpp;
+                self.stream = Some(StreamAccum::Raw {
+                    pixels: Vec::with_capacity(cap),
+                    layout,
+                    width: cw,
+                    total_rows: 0,
+                });
+                // First strip already converted; store it
+                let stream = self.stream.as_mut().unwrap();
+                if let StreamAccum::Raw {
+                    pixels,
+                    total_rows,
+                    ..
+                } = stream
+                {
+                    let (buf, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                    pixels.extend_from_slice(&buf);
+                    *total_rows += strip_h;
+                }
+                return Ok(());
+            }
+        }
+
+        match self.stream.as_mut().unwrap() {
+            StreamAccum::Yuv {
+                y_plane,
+                u_plane,
+                v_plane,
+                pending_row,
+                width,
+                total_rows,
+            } => {
+                let w = *width as usize;
+                let data = rows.contiguous_bytes();
+                let row_bytes = w * 3;
+                let input_row_count = data.len() / row_bytes;
+                let mut i = 0;
+
+                // Pair pending row from previous push with first new row
+                if !pending_row.is_empty() && input_row_count > 0 {
+                    let mut pr = core::mem::take(pending_row);
+                    let row1 = &data[0..row_bytes];
+                    convert_row_pair_to_yuv(&pr, row1, w, y_plane, u_plane, v_plane);
+                    pr.clear();
+                    *pending_row = pr; // return allocation
+                    i = 1;
+                }
+
+                // Process complete row pairs
+                while i + 1 < input_row_count {
+                    let r0 = &data[i * row_bytes..(i + 1) * row_bytes];
+                    let r1 = &data[(i + 1) * row_bytes..(i + 2) * row_bytes];
+                    convert_row_pair_to_yuv(r0, r1, w, y_plane, u_plane, v_plane);
+                    i += 2;
+                }
+
+                // Leftover row → pending
+                if i < input_row_count {
+                    pending_row.clear();
+                    pending_row
+                        .extend_from_slice(&data[i * row_bytes..(i + 1) * row_bytes]);
+                }
+
+                *total_rows += input_row_count as u32;
+            }
+            StreamAccum::Raw {
+                pixels,
+                total_rows,
+                ..
+            } => {
+                let (buf, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                pixels.extend_from_slice(&buf);
+                *total_rows += strip_h;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<EncodeOutput, At<EncodeError>> {
+        let stream = self
+            .stream
+            .take()
+            .ok_or_else(|| whereat::at(EncodeError::InvalidBufferSize("no rows pushed".into())))?;
+
+        match stream {
+            StreamAccum::Yuv {
+                mut y_plane,
+                mut u_plane,
+                mut v_plane,
+                pending_row,
+                width,
+                total_rows,
+            } => {
+                // Process pending row (odd image height)
+                if !pending_row.is_empty() {
+                    convert_single_row_to_yuv(
+                        &pending_row,
+                        width as usize,
+                        &mut y_plane,
+                        &mut u_plane,
+                        &mut v_plane,
+                    );
+                }
+
+                // Pack Y+U+V into a single buffer for the Yuv420 encode path
+                let mut yuv_buf =
+                    Vec::with_capacity(y_plane.len() + u_plane.len() + v_plane.len());
+                yuv_buf.append(&mut y_plane);
+                yuv_buf.append(&mut u_plane);
+                yuv_buf.append(&mut v_plane);
+
+                self.do_encode(&yuv_buf, PixelLayout::Yuv420, width, total_rows)
+                    .map_err(whereat::at)
+            }
+            StreamAccum::Raw {
+                pixels,
+                layout,
+                width,
+                total_rows,
+            } => self
+                .do_encode(&pixels, layout, width, total_rows)
+                .map_err(whereat::at),
+        }
     }
 }
 
@@ -1689,5 +1952,154 @@ mod tests {
         assert_eq!(f.frame_index(), 3);
 
         assert!(dec.render_next_frame(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn streaming_encode_lossy_rgb8() {
+        // Push rows in strips of 2, verify output decodes correctly.
+        let buf = make_rgb8_pixels(64, 64);
+        let config = WebpEncoderConfig::lossy().with_quality(90.0);
+        let mut encoder = config
+            .job()
+            .with_canvas_size(64, 64)
+            .encoder()
+            .unwrap();
+        assert_eq!(encoder.preferred_strip_height(), 2);
+
+        // Push 32 strips of 2 rows each
+        let raw = buf.as_slice().contiguous_bytes();
+        let raw = raw.as_ref();
+        let row_bytes = 64 * 3;
+        for y in (0..64).step_by(2) {
+            let strip = PixelSlice::new(
+                &raw[y * row_bytes..(y + 2) * row_bytes],
+                64,
+                2,
+                row_bytes,
+                PixelDescriptor::RGB8_SRGB,
+            )
+            .unwrap();
+            encoder.push_rows(strip).unwrap();
+        }
+
+        let output = encoder.finish().unwrap();
+        assert!(!output.is_empty());
+        assert_eq!(output.format(), ImageFormat::WebP);
+
+        // Verify decodable
+        let dec = WebpDecoderConfig::new();
+        let decoded = dec.decode(output.data()).unwrap();
+        assert_eq!(decoded.width(), 64);
+        assert_eq!(decoded.height(), 64);
+    }
+
+    #[test]
+    fn streaming_encode_lossy_rgb8_odd_height() {
+        // Image with odd height: tests the pending row chroma handling.
+        let buf = make_rgb8_pixels(32, 33);
+        let config = WebpEncoderConfig::lossy().with_quality(80.0);
+        let mut encoder = config
+            .job()
+            .with_canvas_size(32, 33)
+            .encoder()
+            .unwrap();
+
+        // Push one row at a time: 16 pairs + 1 leftover
+        let raw = buf.as_slice().contiguous_bytes();
+        let raw = raw.as_ref();
+        let row_bytes = 32 * 3;
+        for y in 0..33usize {
+            let strip = PixelSlice::new(
+                &raw[y * row_bytes..(y + 1) * row_bytes],
+                32,
+                1,
+                row_bytes,
+                PixelDescriptor::RGB8_SRGB,
+            )
+            .unwrap();
+            encoder.push_rows(strip).unwrap();
+        }
+
+        let output = encoder.finish().unwrap();
+        let dec = WebpDecoderConfig::new();
+        let decoded = dec.decode(output.data()).unwrap();
+        assert_eq!(decoded.width(), 32);
+        assert_eq!(decoded.height(), 33);
+    }
+
+    #[test]
+    fn streaming_encode_lossless_rgba8() {
+        // Lossless RGBA: uses the Raw accumulation path.
+        let buf = make_rgba8_pixels(16, 16);
+        let config = WebpEncoderConfig::lossless();
+        let mut encoder = config
+            .job()
+            .with_canvas_size(16, 16)
+            .encoder()
+            .unwrap();
+        assert_eq!(encoder.preferred_strip_height(), 1);
+
+        let raw = buf.as_slice().contiguous_bytes();
+        let raw = raw.as_ref();
+        let row_bytes = 16 * 4;
+        for y in 0..16usize {
+            let strip = PixelSlice::new(
+                &raw[y * row_bytes..(y + 1) * row_bytes],
+                16,
+                1,
+                row_bytes,
+                PixelDescriptor::RGBA8_SRGB,
+            )
+            .unwrap();
+            encoder.push_rows(strip).unwrap();
+        }
+
+        let output = encoder.finish().unwrap();
+        assert!(!output.is_empty());
+
+        let dec = WebpDecoderConfig::new();
+        let decoded = dec.decode(output.data()).unwrap();
+        assert_eq!(decoded.width(), 16);
+        assert_eq!(decoded.height(), 16);
+    }
+
+    #[test]
+    fn streaming_encode_matches_oneshot() {
+        // Verify streaming produces output of similar size to one-shot.
+        let buf = make_rgb8_pixels(64, 64);
+        let config = WebpEncoderConfig::lossy().with_quality(75.0);
+
+        // One-shot
+        let oneshot_output = config
+            .job()
+            .encoder()
+            .unwrap()
+            .encode(buf.as_slice())
+            .unwrap();
+
+        // Streaming (full image in one push)
+        let mut encoder = config
+            .job()
+            .with_canvas_size(64, 64)
+            .encoder()
+            .unwrap();
+        encoder.push_rows(buf.as_slice()).unwrap();
+        let stream_output = encoder.finish().unwrap();
+
+        // Streaming via YUV path may differ slightly from one-shot RGB path
+        // due to different conversion rounding, but sizes should be similar.
+        let oneshot_len = oneshot_output.data().len();
+        let stream_len = stream_output.data().len();
+        let ratio = stream_len as f64 / oneshot_len as f64;
+        assert!(
+            (0.8..1.25).contains(&ratio),
+            "streaming output size {stream_len} too different from one-shot {oneshot_len} (ratio {ratio:.3})"
+        );
+    }
+
+    #[test]
+    fn streaming_encode_capabilities() {
+        let caps = WebpEncoderConfig::capabilities();
+        assert!(caps.row_level());
     }
 }
