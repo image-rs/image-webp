@@ -583,11 +583,12 @@ fn pixels_to_webp_input<'a>(
         let floats: &[f32] = bytemuck::cast_slice(&raw);
         let mut gray_u8 = alloc::vec![0u8; floats.len()];
         linear_srgb::default::linear_to_srgb_u8_slice(floats, &mut gray_u8);
+        // gray→rgb: no garb::gray_to_rgb without experimental feature, expand manually
         let mut rgb = alloc::vec![0u8; floats.len() * 3];
-        for (g, out) in gray_u8.iter().zip(rgb.chunks_exact_mut(3)) {
-            out[0] = *g;
-            out[1] = *g;
-            out[2] = *g;
+        for (i, &g) in gray_u8.iter().enumerate() {
+            rgb[i * 3] = g;
+            rgb[i * 3 + 1] = g;
+            rgb[i * 3 + 2] = g;
         }
         Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h))
     } else {
