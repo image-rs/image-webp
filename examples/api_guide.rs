@@ -531,7 +531,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("7.1 Encode error handling");
 
     // Exceeded limits (test first since 0x0 dimensions cause panic - encoder bug)
-    let result: Result<Vec<u8>, EncodeError> = {
+    let result: Result<Vec<u8>, whereat::At<EncodeError>> = {
         let limits = Limits::default().max_total_pixels(100);
         let config = EncoderConfig::new_lossy().with_quality(75.0).limits(limits);
 
@@ -546,13 +546,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("7.2 Decode error handling");
 
     // Invalid data
-    let result: Result<(Vec<u8>, u32, u32), DecodeError> = zenwebp::decode_rgba(b"not a webp");
+    let result: Result<(Vec<u8>, u32, u32), whereat::At<DecodeError>> =
+        zenwebp::decode_rgba(b"not a webp");
     if let Err(e) = result {
         println!("  ✓ Invalid data: {}", e);
     }
 
     // Exceeded limits
-    let result: Result<(Vec<u8>, u32, u32), DecodeError> = {
+    let result: Result<(Vec<u8>, u32, u32), whereat::At<DecodeError>> = {
         let limits = Limits::default().max_total_pixels(100);
         let config = zenwebp::DecodeConfig::default().limits(limits);
         let request = zenwebp::DecodeRequest::new(&config, &test_webp);
@@ -565,7 +566,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7.3 Mux errors
     println!("7.3 Mux error handling");
-    let result: Result<AnimationEncoder, MuxError> =
+    let result: Result<AnimationEncoder, whereat::At<MuxError>> =
         AnimationEncoder::new(0, 0, AnimationConfig::default());
     if let Err(e) = result {
         println!("  ✓ Invalid dimensions: {}", e);

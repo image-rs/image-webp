@@ -22,7 +22,7 @@ use alloc::borrow::Cow;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use whereat::{At, ResultAtExt};
+use whereat::{At, ResultAtExt, at};
 use zc::decode::{DecodeOutput, FullFrame, OutputInfo, OwnedFullFrame, SinkError};
 use zc::encode::EncodeOutput;
 use zc::{ImageFormat, ImageInfo, MetadataView, ResourceLimits, UnsupportedOperation};
@@ -540,7 +540,7 @@ impl<'a> WebpEncoder<'a> {
         if let Some(meta) = self.metadata {
             req = req.with_metadata(meta);
         }
-        let data = req.encode()?;
+        let data = req.encode().map_err(|e| e.into_inner())?;
         Ok(EncodeOutput::new(data, ImageFormat::WebP))
     }
 }
@@ -699,9 +699,9 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
     }
 
     fn encode(self, pixels: PixelSlice<'_>) -> Result<EncodeOutput, At<EncodeError>> {
-        let (buf, layout, w, h, stride) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
+        let (buf, layout, w, h, stride) = pixels_to_webp_input(&pixels).map_err(|e| at!(e))?;
         self.do_encode(&buf, layout, w, h, stride)
-            .map_err(whereat::at)
+            .map_err(|e| at!(e))
     }
 
     fn push_rows(&mut self, rows: PixelSlice<'_>) -> Result<(), At<EncodeError>> {
@@ -738,7 +738,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 });
             } else {
                 // Generic path: convert per-strip, accumulate bytes
-                let (_, layout, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                let (_, layout, _, _, _) = pixels_to_webp_input(&rows).map_err(|e| at!(e))?;
                 let (cw, ch) = self.canvas_size.unwrap_or((strip_w, 0));
                 let bpp = layout.bytes_per_pixel();
                 let cap = cw as usize * ch as usize * bpp;
@@ -754,7 +754,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                     pixels, total_rows, ..
                 } = stream
                 {
-                    let (buf, _, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                    let (buf, _, _, _, _) = pixels_to_webp_input(&rows).map_err(|e| at!(e))?;
                     pixels.extend_from_slice(&buf);
                     *total_rows += strip_h;
                 }
@@ -806,7 +806,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
             StreamAccum::Raw {
                 pixels, total_rows, ..
             } => {
-                let (buf, _, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                let (buf, _, _, _, _) = pixels_to_webp_input(&rows).map_err(|e| at!(e))?;
                 pixels.extend_from_slice(&buf);
                 *total_rows += strip_h;
             }
@@ -819,7 +819,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
         let stream = self
             .stream
             .take()
-            .ok_or_else(|| whereat::at(EncodeError::InvalidBufferSize("no rows pushed".into())))?;
+            .ok_or_else(|| at!(EncodeError::InvalidBufferSize("no rows pushed".into())))?;
 
         match stream {
             StreamAccum::Yuv {
@@ -854,7 +854,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                     total_rows,
                     width as usize,
                 )
-                .map_err(whereat::at)
+                .map_err(|e| at!(e))
             }
             StreamAccum::Raw {
                 pixels,
@@ -863,7 +863,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 total_rows,
             } => self
                 .do_encode(&pixels, layout, width, total_rows, width as usize)
-                .map_err(whereat::at),
+                .map_err(|e| at!(e)),
         }
     }
 }
@@ -902,7 +902,7 @@ impl WebpFullFrameEncoder {
                 ..AnimationConfig::default()
             };
             let enc = AnimationEncoder::new(cw, ch, config)
-                .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
+                .map_err(|e| at!(mux_to_encode_err(e.into_inner())))?;
             self.anim_enc = Some(enc);
         }
         Ok(())
@@ -923,14 +923,14 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
         stop: Option<&dyn enough::Stop>,
     ) -> Result<(), At<EncodeError>> {
         if let Some(s) = stop {
-            s.check().map_err(|e| whereat::at(EncodeError::from(e)))?;
+            s.check().map_err(|e| at!(EncodeError::from(e)))?;
         }
-        let (buf, layout, w, h, _stride) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
+        let (buf, layout, w, h, _stride) = pixels_to_webp_input(&pixels).map_err(|e| at!(e))?;
         self.ensure_encoder(w, h)?;
         let timestamp_ms = self.cumulative_ms;
         let enc = self.anim_enc.as_mut().unwrap();
         enc.add_frame(&buf, layout, timestamp_ms, &self.inner_config)
-            .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
+            .map_err(|e| at!(mux_to_encode_err(e.into_inner())))?;
         self.cumulative_ms = self.cumulative_ms.saturating_add(duration_ms);
         self.last_frame_duration_ms = duration_ms;
         Ok(())
@@ -938,15 +938,15 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
 
     fn finish(self, stop: Option<&dyn enough::Stop>) -> Result<EncodeOutput, At<EncodeError>> {
         if let Some(s) = stop {
-            s.check().map_err(|e| whereat::at(EncodeError::from(e)))?;
+            s.check().map_err(|e| at!(EncodeError::from(e)))?;
         }
         let enc = self
             .anim_enc
             .ok_or_else(|| EncodeError::InvalidBufferSize("no frames added".into()))
-            .map_err(whereat::at)?;
+            .map_err(|e| at!(e))?;
         let data = enc
             .finalize(self.last_frame_duration_ms)
-            .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
+            .map_err(|e| at!(mux_to_encode_err(e.into_inner())))?;
         Ok(EncodeOutput::new(data, ImageFormat::WebP))
     }
 }
@@ -1129,7 +1129,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
     }
 
     fn probe(&self, data: &[u8]) -> Result<ImageInfo, At<DecodeError>> {
-        let native = crate::ImageInfo::from_webp(data).map_err(whereat::at)?;
+        let native = crate::ImageInfo::from_webp(data)?;
         let mut info = to_image_info(&native);
         if let Ok(probe) = crate::detect::probe(data) {
             info = info.with_source_encoding_details(probe);
@@ -1138,7 +1138,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
     }
 
     fn output_info(&self, data: &[u8]) -> Result<OutputInfo, At<DecodeError>> {
-        let native = crate::ImageInfo::from_webp(data).map_err(whereat::at)?;
+        let native = crate::ImageInfo::from_webp(data)?;
         let desc = if native.has_alpha {
             PixelDescriptor::RGBA8_SRGB
         } else {
@@ -1168,7 +1168,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         _data: Cow<'a, [u8]>,
         _preferred: &[PixelDescriptor],
     ) -> Result<zc::Unsupported<At<DecodeError>>, At<DecodeError>> {
-        Err(whereat::at(DecodeError::InvalidParameter(
+        Err(at!(DecodeError::InvalidParameter(
             "WebP does not support streaming decode".into(),
         )))
     }
@@ -1180,7 +1180,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         preferred: &[PixelDescriptor],
     ) -> Result<OutputInfo, Self::Error> {
         zc::decode::push_decoder_via_full_decode(self, data, sink, preferred, |e| {
-            whereat::at(DecodeError::InvalidParameter(alloc::format!("{e}")))
+            at!(DecodeError::InvalidParameter(alloc::format!("{e}")))
         })
     }
 
@@ -1191,7 +1191,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
     ) -> Result<WebpFullFrameDecoder, At<DecodeError>> {
         if let Some(max) = self.effective_input_size_limit() {
             if data.len() as u64 > max {
-                return Err(whereat::at(DecodeError::InvalidParameter(alloc::format!(
+                return Err(at!(DecodeError::InvalidParameter(alloc::format!(
                     "input size {} exceeds limit {}",
                     data.len(),
                     max
@@ -1205,7 +1205,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         let native_info = crate::ImageInfo::from_webp(&data).ok();
 
         // Probe animation metadata with a temporary decoder.
-        let probe_anim = AnimationDecoder::new_with_config(&data, &cfg).map_err(whereat::at)?;
+        let probe_anim = AnimationDecoder::new_with_config(&data, &cfg).map_err(|e| at!(e))?;
         let anim_info = probe_anim.info();
         let base_info = if let Some(ref ni) = native_info {
             to_image_info(ni)
@@ -1238,7 +1238,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
             },
             |owner| AnimationDecoder::new_with_config(&owner.data, &owner.config),
         )
-        .map_err(whereat::at)?;
+        .map_err(|e| at!(e))?;
 
         let has_alpha = anim_info.has_alpha;
         let canvas_width = anim_info.canvas_width;
@@ -1310,7 +1310,7 @@ impl WebpDecoder<'_> {
             req = req.stop(stop);
         }
 
-        let (pixels, w, h, layout) = req.decode()?;
+        let (pixels, w, h, layout) = req.decode().map_err(|e| e.into_inner())?;
 
         let buf: PixelBuffer = match layout {
             PixelLayout::Rgb8 => PixelBuffer::from_vec(pixels, w, h, PixelDescriptor::RGB8_SRGB)
@@ -1321,9 +1321,12 @@ impl WebpDecoder<'_> {
                 // Fallback: decode as RGBA
                 let rgba_req = DecodeRequest::new(&self.config, data);
                 let (rgba_pixels, rw, rh) = if let Some(stop) = self.stop {
-                    rgba_req.stop(stop).decode_rgba()?
+                    rgba_req
+                        .stop(stop)
+                        .decode_rgba()
+                        .map_err(|e| e.into_inner())?
                 } else {
-                    rgba_req.decode_rgba()?
+                    rgba_req.decode_rgba().map_err(|e| e.into_inner())?
                 };
                 PixelBuffer::from_vec(rgba_pixels, rw, rh, PixelDescriptor::RGBA8_SRGB)
                     .map_err(|_| DecodeError::InvalidParameter("pixel count mismatch".into()))?
@@ -1369,7 +1372,7 @@ impl zc::decode::Decode for WebpDecoder<'_> {
     type Error = At<DecodeError>;
 
     fn decode(self) -> Result<DecodeOutput, At<DecodeError>> {
-        let output = self.do_decode(&self.data).map_err(whereat::at)?;
+        let output = self.do_decode(&self.data).map_err(|e| at!(e))?;
         if self.preferred.is_empty() {
             return Ok(output);
         }
@@ -1452,7 +1455,7 @@ impl WebpFullFrameDecoder {
                     Ok(None) => Ok(true),
                     Err(e) => Err(e),
                 })
-                .map_err(whereat::at)?;
+                .map_err(|e| at!(e))?;
             if done {
                 break;
             }
@@ -1485,7 +1488,7 @@ impl WebpFullFrameDecoder {
                     Err(e) => Err(e),
                 }
             })
-            .map_err(whereat::at)?;
+            .map_err(|e| at!(e))?;
 
         match result {
             Some(duration_ms) => {
@@ -1533,7 +1536,7 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
     type Error = At<DecodeError>;
 
     fn wrap_sink_error(err: SinkError) -> At<DecodeError> {
-        whereat::at(DecodeError::InvalidParameter(alloc::format!("{err}")))
+        at!(DecodeError::InvalidParameter(alloc::format!("{err}")))
     }
 
     fn info(&self) -> &ImageInfo {
@@ -1553,7 +1556,7 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         stop: Option<&dyn enough::Stop>,
     ) -> Result<Option<FullFrame<'_>>, At<DecodeError>> {
         if let Some(s) = stop {
-            s.check().map_err(|e| whereat::at(DecodeError::from(e)))?;
+            s.check().map_err(|e| at!(DecodeError::from(e)))?;
         }
         self.skip_to_start()?;
 
@@ -1573,7 +1576,7 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
             self.current_descriptor,
         )
         .map_err(|_| {
-            whereat::at(DecodeError::InvalidParameter(
+            at!(DecodeError::InvalidParameter(
                 "frame buffer mismatch".into(),
             ))
         })?;
@@ -1585,7 +1588,7 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
         stop: Option<&dyn enough::Stop>,
     ) -> Result<Option<OwnedFullFrame>, At<DecodeError>> {
         if let Some(s) = stop {
-            s.check().map_err(|e| whereat::at(DecodeError::from(e)))?;
+            s.check().map_err(|e| at!(DecodeError::from(e)))?;
         }
         self.skip_to_start()?;
 
@@ -1604,7 +1607,7 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
             self.canvas_height,
             self.current_descriptor,
         )
-        .map_err(|_| whereat::at(DecodeError::InvalidParameter("frame size mismatch".into())))?;
+        .map_err(|_| at!(DecodeError::InvalidParameter("frame size mismatch".into())))?;
         Ok(Some(OwnedFullFrame::new(
             buf,
             self.current_duration_ms,

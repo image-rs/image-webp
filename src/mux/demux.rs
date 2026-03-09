@@ -17,12 +17,12 @@
 //!         frame.frame_num, frame.width, frame.height,
 //!         frame.x_offset, frame.y_offset, frame.duration_ms);
 //! }
-//! # Ok::<(), zenwebp::mux::MuxError>(())
+//! # Ok::<(), whereat::At<zenwebp::mux::MuxError>>(())
 //! ```
 
 use alloc::vec::Vec;
 
-use super::error::MuxError;
+use super::error::{MuxError, MuxResult};
 use crate::decoder::LoopCount;
 use crate::slice_reader::SliceReader;
 
@@ -116,7 +116,12 @@ impl<'a> WebPDemuxer<'a> {
     ///
     /// This only parses the container structure and records byte ranges.
     /// No pixel decoding is performed.
-    pub fn new(data: &'a [u8]) -> Result<Self, MuxError> {
+    #[track_caller]
+    pub fn new(data: &'a [u8]) -> MuxResult<Self> {
+        Self::new_inner(data).map_err(|e| whereat::at!(e))
+    }
+
+    fn new_inner(data: &'a [u8]) -> Result<Self, MuxError> {
         if data.len() < 12 {
             return Err(MuxError::InvalidFormat("File too small".into()));
         }

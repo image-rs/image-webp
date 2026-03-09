@@ -11,7 +11,7 @@
 //! let rgba_data = vec![255u8; 4 * 4 * 4]; // 4x4 RGBA image
 //! let webp = EncodeRequest::new(&config, &rgba_data, PixelLayout::Rgba8, 4, 4)
 //!     .encode()?;
-//! # Ok::<(), zenwebp::EncodeError>(())
+//! # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
 //! ```
 use alloc::collections::BinaryHeap;
 use alloc::format;
@@ -22,6 +22,7 @@ use core::fmt;
 use core::iter::Peekable;
 use core::slice::ChunksExact;
 use thiserror::Error;
+use whereat::at;
 
 use super::config;
 use super::vec_writer::VecWriter;
@@ -638,7 +639,7 @@ pub struct EncodeStats {
 /// let image2 = vec![0u8; 8 * 6 * 4]; // 8x6 RGBA
 /// let webp1 = EncodeRequest::new(&config, &image1, PixelLayout::Rgba8, 4, 4).encode()?;
 /// let webp2 = EncodeRequest::new(&config, &image2, PixelLayout::Rgba8, 8, 6).encode()?;
-/// # Ok::<(), zenwebp::EncodeError>(())
+/// # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
 /// ```
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
@@ -926,7 +927,7 @@ static NO_PROGRESS: NoProgress = NoProgress;
 /// let webp = EncodeRequest::lossy(&config, &pixels, PixelLayout::Rgba8, 4, 4)
 ///     .with_metadata(metadata)
 ///     .encode()?;
-/// # Ok::<(), zenwebp::EncodeError>(())
+/// # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ImageMetadata<'a> {
@@ -1006,7 +1007,7 @@ impl<'a> ConfigKind<'a> {
 /// let rgba = vec![0u8; 640 * 480 * 4];
 /// let webp = EncodeRequest::lossy(&config, &rgba, PixelLayout::Rgba8, 640, 480)
 ///     .encode()?;
-/// # Ok::<(), zenwebp::EncodeError>(())
+/// # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
 /// ```
 pub struct EncodeRequest<'a> {
     config: ConfigKind<'a>,
@@ -1034,7 +1035,7 @@ impl<'a> EncodeRequest<'a> {
     /// let rgba = vec![0u8; 640 * 480 * 4];
     /// let webp = EncodeRequest::lossy(&config, &rgba, PixelLayout::Rgba8, 640, 480)
     ///     .encode()?;
-    /// # Ok::<(), zenwebp::EncodeError>(())
+    /// # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
     /// ```
     #[must_use]
     pub fn lossy(
@@ -1070,7 +1071,7 @@ impl<'a> EncodeRequest<'a> {
     /// let rgba = vec![0u8; 640 * 480 * 4];
     /// let webp = EncodeRequest::lossless(&config, &rgba, PixelLayout::Rgba8, 640, 480)
     ///     .encode()?;
-    /// # Ok::<(), zenwebp::EncodeError>(())
+    /// # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
     /// ```
     #[must_use]
     pub fn lossless(
@@ -1110,7 +1111,7 @@ impl<'a> EncodeRequest<'a> {
     /// let rgba = vec![0u8; 640 * 480 * 4];
     /// let webp = EncodeRequest::new(&config, &rgba, PixelLayout::Rgba8, 640, 480)
     ///     .encode()?;
-    /// # Ok::<(), zenwebp::EncodeError>(())
+    /// # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
     /// ```
     #[must_use]
     pub fn new(
@@ -1197,7 +1198,7 @@ impl<'a> EncodeRequest<'a> {
     /// let webp = EncodeRequest::lossy(&config, &pixels, PixelLayout::Rgba8, 4, 4)
     ///     .with_metadata(metadata)
     ///     .encode()?;
-    /// # Ok::<(), zenwebp::EncodeError>(())
+    /// # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
     /// ```
     #[must_use]
     pub fn with_metadata(mut self, meta: ImageMetadata<'a>) -> Self {
@@ -1214,46 +1215,52 @@ impl<'a> EncodeRequest<'a> {
     }
 
     /// Encode to WebP bytes.
-    pub fn encode(self) -> Result<Vec<u8>, EncodeError> {
+    #[track_caller]
+    pub fn encode(self) -> EncodeResult<Vec<u8>> {
         let (output, _stats) = self.encode_inner()?;
         Ok(output)
     }
 
     /// Encode to WebP bytes, appending to an existing Vec.
-    pub fn encode_into(self, output: &mut Vec<u8>) -> Result<(), EncodeError> {
+    #[track_caller]
+    pub fn encode_into(self, output: &mut Vec<u8>) -> EncodeResult<()> {
         let encoded = self.encode()?;
         output.extend_from_slice(&encoded);
         Ok(())
     }
 
     /// Encode to WebP bytes and return encoding statistics.
-    pub fn encode_with_stats(self) -> Result<(Vec<u8>, EncodeStats), EncodeError> {
+    #[track_caller]
+    pub fn encode_with_stats(self) -> EncodeResult<(Vec<u8>, EncodeStats)> {
         self.encode_inner()
     }
 
     /// Encode to WebP, writing to an [`io::Write`](std::io::Write) implementor.
     #[cfg(feature = "std")]
-    pub fn encode_to<W: std::io::Write>(self, mut writer: W) -> Result<(), EncodeError> {
+    #[track_caller]
+    pub fn encode_to<W: std::io::Write>(self, mut writer: W) -> EncodeResult<()> {
         let encoded = self.encode()?;
-        writer.write_all(&encoded)?;
+        writer
+            .write_all(&encoded)
+            .map_err(|e| at!(EncodeError::IoError(e)))?;
         Ok(())
     }
 
-    fn encode_inner(self) -> Result<(Vec<u8>, EncodeStats), EncodeError> {
+    fn encode_inner(self) -> EncodeResult<(Vec<u8>, EncodeStats)> {
         // Validate dimensions against limits
         self.config
             .get_limits()
             .check_dimensions(self.width, self.height)
-            .map_err(|e| EncodeError::InvalidBufferSize(format!("{}", e)))?;
+            .map_err(|e| at!(EncodeError::InvalidBufferSize(format!("{}", e))))?;
 
         let bpp = self.color_type.bytes_per_pixel();
         let stride = self.stride_pixels.unwrap_or(self.width as usize);
 
         if stride < self.width as usize {
-            return Err(EncodeError::InvalidBufferSize(format!(
+            return Err(at!(EncodeError::InvalidBufferSize(format!(
                 "stride_pixels {} < width {}",
                 stride, self.width
-            )));
+            ))));
         }
 
         if self.color_type != PixelLayout::Yuv420 {
@@ -1263,7 +1270,8 @@ impl<'a> EncodeRequest<'a> {
                 self.height,
                 stride,
                 bpp as u32,
-            )?;
+            )
+            .map_err(|e| at!(e))?;
         }
 
         let mut output = Vec::new();
@@ -1282,13 +1290,15 @@ impl<'a> EncodeRequest<'a> {
             if let Some(xmp) = self.xmp_metadata {
                 encoder.set_xmp_metadata(xmp.to_vec());
             }
-            stats = encoder.encode(
-                self.pixels,
-                self.width,
-                self.height,
-                stride,
-                self.color_type,
-            )?;
+            stats = encoder
+                .encode(
+                    self.pixels,
+                    self.width,
+                    self.height,
+                    stride,
+                    self.color_type,
+                )
+                .map_err(|e| at!(e))?;
         }
         Ok((output, stats))
     }

@@ -26,12 +26,12 @@
 //! }
 //!
 //! let (pixels, w, h) = decoder.finish_rgba()?;
-//! # Ok::<(), zenwebp::DecodeError>(())
+//! # Ok::<(), whereat::At<zenwebp::DecodeError>>(())
 //! ```
 
 use alloc::vec::Vec;
 
-use super::api::{DecodeConfig, DecodeError, ImageInfo, WebPDecoder};
+use super::api::{DecodeConfig, DecodeError, DecodeResult, ImageInfo, WebPDecoder};
 
 /// Status returned from [`StreamingDecoder::append`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,10 +128,10 @@ impl StreamingDecoder {
     }
 
     /// Get image information, available after [`StreamStatus::HeaderReady`].
-    pub fn info(&self) -> Result<ImageInfo, DecodeError> {
+    pub fn info(&self) -> DecodeResult<ImageInfo> {
         if !self.header_parsed {
-            return Err(DecodeError::InvalidParameter(alloc::string::String::from(
-                "headers not yet available",
+            return Err(whereat::at!(DecodeError::InvalidParameter(
+                alloc::string::String::from("headers not yet available"),
             )));
         }
         ImageInfo::from_webp(&self.buf)
@@ -159,24 +159,24 @@ impl StreamingDecoder {
     /// Consume the decoder and decode to RGBA pixels.
     ///
     /// Returns an error if data is incomplete.
-    pub fn finish_rgba(self) -> Result<(Vec<u8>, u32, u32), DecodeError> {
-        self.ensure_complete()?;
+    pub fn finish_rgba(self) -> DecodeResult<(Vec<u8>, u32, u32)> {
+        self.ensure_complete().map_err(|e| whereat::at!(e))?;
         super::api::DecodeRequest::new(&self.config, &self.buf).decode_rgba()
     }
 
     /// Consume the decoder and decode to RGB pixels.
     ///
     /// Returns an error if data is incomplete.
-    pub fn finish_rgb(self) -> Result<(Vec<u8>, u32, u32), DecodeError> {
-        self.ensure_complete()?;
+    pub fn finish_rgb(self) -> DecodeResult<(Vec<u8>, u32, u32)> {
+        self.ensure_complete().map_err(|e| whereat::at!(e))?;
         super::api::DecodeRequest::new(&self.config, &self.buf).decode_rgb()
     }
 
     /// Consume the decoder and decode RGBA into a pre-allocated buffer.
     ///
     /// Returns an error if data is incomplete.
-    pub fn finish_rgba_into(self, output: &mut [u8]) -> Result<(u32, u32), DecodeError> {
-        self.ensure_complete()?;
+    pub fn finish_rgba_into(self, output: &mut [u8]) -> DecodeResult<(u32, u32)> {
+        self.ensure_complete().map_err(|e| whereat::at!(e))?;
         super::api::DecodeRequest::new(&self.config, &self.buf).decode_rgba_into(output)
     }
 
