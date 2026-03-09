@@ -18,6 +18,7 @@ use core::arch::x86_64::*;
 
 /// Detected content type for auto-preset selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ContentType {
     /// Natural photograph or complex texture.
     Photo,
