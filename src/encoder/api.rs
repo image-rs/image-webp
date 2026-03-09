@@ -2098,7 +2098,13 @@ mod tests {
         let mut encoder = WebPEncoder::new(&mut output);
         encoder.set_params(params.clone());
         encoder
-            .encode(&img[..256 * 256 * 3], 256, 256, 256, crate::PixelLayout::Rgb8)
+            .encode(
+                &img[..256 * 256 * 3],
+                256,
+                256,
+                256,
+                crate::PixelLayout::Rgb8,
+            )
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
         assert_eq!(img[..256 * 256 * 3], *decoded);
