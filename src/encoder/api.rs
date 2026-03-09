@@ -1391,8 +1391,7 @@ pub(crate) fn encode_frame_lossless(
     let mut pixels: Vec<u8> = match color {
         PixelLayout::L8 => {
             let mut out = alloc::vec![0u8; npixels * 4];
-            garb::bytes::gray_to_rgba(&data[..npixels], &mut out)
-                .expect("validated buffer sizes");
+            garb::bytes::gray_to_rgba(&data[..npixels], &mut out).expect("validated buffer sizes");
             out
         }
         PixelLayout::La8 => {

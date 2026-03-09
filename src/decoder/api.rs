@@ -496,7 +496,12 @@ impl<'a> DecodeRequest<'a> {
                 }
             } else {
                 garb::bytes::rgb_to_rgba_strided(
-                    &temp, output, w as usize, h as usize, w as usize * 3, dst_stride,
+                    &temp,
+                    output,
+                    w as usize,
+                    h as usize,
+                    w as usize * 3,
+                    dst_stride,
                 )
                 .map_err(garb_err)?;
             }
@@ -522,7 +527,8 @@ impl<'a> DecodeRequest<'a> {
         if stride_px < wu {
             return Err(DecodeError::InvalidParameter(alloc::format!(
                 "stride_pixels {} < width {}",
-                stride_px, w
+                stride_px,
+                w
             )));
         }
         let dst_stride = stride_px * 3;
@@ -1495,8 +1501,7 @@ pub fn decode_rgba_into(
             output[..w * h * 4].copy_from_slice(&temp);
         } else {
             for y in 0..h {
-                output[y * dst_stride..][..w * 4]
-                    .copy_from_slice(&temp[y * src_stride..][..w * 4]);
+                output[y * dst_stride..][..w * 4].copy_from_slice(&temp[y * src_stride..][..w * 4]);
             }
         }
     } else {
@@ -1558,8 +1563,7 @@ pub fn decode_rgb_into(
             output[..w * h * 3].copy_from_slice(&temp);
         } else {
             for y in 0..h {
-                output[y * dst_stride..][..w * 3]
-                    .copy_from_slice(&temp[y * src_stride..][..w * 3]);
+                output[y * dst_stride..][..w * 3].copy_from_slice(&temp[y * src_stride..][..w * 3]);
             }
         }
     }

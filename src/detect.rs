@@ -131,7 +131,9 @@ pub fn probe(data: &[u8]) -> Result<WebPProbe, ProbeError> {
 
     while pos + 8 <= data.len() {
         let fourcc = &data[pos..pos + 4];
-        let chunk_size = u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]) as usize;
+        let chunk_size =
+            u32::from_le_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]])
+                as usize;
         let payload_start = pos + 8;
         let payload_end = (payload_start + chunk_size).min(data.len());
 
@@ -202,14 +204,18 @@ pub fn probe(data: &[u8]) -> Result<WebPProbe, ProbeError> {
                         if sub_start + 8 <= payload_end {
                             let sub_fourcc = &data[sub_start..sub_start + 4];
                             let sub_size = u32::from_le_bytes([
-                                data[sub_start + 4], data[sub_start + 5],
-                                data[sub_start + 6], data[sub_start + 7],
+                                data[sub_start + 4],
+                                data[sub_start + 5],
+                                data[sub_start + 6],
+                                data[sub_start + 7],
                             ]) as usize;
                             let sub_payload_start = sub_start + 8;
                             let sub_payload_end = (sub_payload_start + sub_size).min(payload_end);
                             match sub_fourcc {
                                 b"VP8 " => {
-                                    bitstream_result = Some(parse_vp8_header(&data[sub_payload_start..sub_payload_end])?);
+                                    bitstream_result = Some(parse_vp8_header(
+                                        &data[sub_payload_start..sub_payload_end],
+                                    )?);
                                 }
                                 b"VP8L" => {
                                     bitstream_result = Some(ParsedBitstream::Lossless);
@@ -239,8 +245,10 @@ pub fn probe(data: &[u8]) -> Result<WebPProbe, ProbeError> {
         while scan_pos + 8 <= data.len() {
             let fourcc = &data[scan_pos..scan_pos + 4];
             let chunk_size = u32::from_le_bytes([
-                data[scan_pos + 4], data[scan_pos + 5],
-                data[scan_pos + 6], data[scan_pos + 7],
+                data[scan_pos + 4],
+                data[scan_pos + 5],
+                data[scan_pos + 6],
+                data[scan_pos + 7],
             ]) as usize;
             if fourcc == b"ANMF" {
                 frame_count += 1;
@@ -283,7 +291,9 @@ impl WebPProbe {
     /// Estimated source quality (0-100), or `None` for lossless.
     pub fn estimated_quality(&self) -> Option<f32> {
         match &self.bitstream {
-            BitstreamType::Lossy { quality_estimate, .. } => Some(*quality_estimate),
+            BitstreamType::Lossy {
+                quality_estimate, ..
+            } => Some(*quality_estimate),
             BitstreamType::Lossless => None,
         }
     }
@@ -295,7 +305,9 @@ impl WebPProbe {
     /// perceptual quality without unnecessary size bloat.
     pub fn recommended_quality(&self) -> Option<f32> {
         match &self.bitstream {
-            BitstreamType::Lossy { quality_estimate, .. } => {
+            BitstreamType::Lossy {
+                quality_estimate, ..
+            } => {
                 // Use the same quality — zenwebp uses the same mapping as libwebp
                 Some(*quality_estimate)
             }

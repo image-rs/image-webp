@@ -65,8 +65,9 @@ pub(crate) fn composite_frame(
         if frame_has_alpha {
             canvas.copy_from_slice(frame);
         } else {
-            garb::bytes::rgb_to_rgba(frame, canvas)
-                .map_err(|e| DecodeError::InvalidParameter(alloc::format!("pixel conversion: {e}")))?;
+            garb::bytes::rgb_to_rgba(frame, canvas).map_err(|e| {
+                DecodeError::InvalidParameter(alloc::format!("pixel conversion: {e}"))
+            })?;
         }
         return Ok(());
     }

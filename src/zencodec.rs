@@ -729,9 +729,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 // First strip already converted; store it
                 let stream = self.stream.as_mut().unwrap();
                 if let StreamAccum::Raw {
-                    pixels,
-                    total_rows,
-                    ..
+                    pixels, total_rows, ..
                 } = stream
                 {
                     let (buf, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
@@ -778,16 +776,13 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 // Leftover row → pending
                 if i < input_row_count {
                     pending_row.clear();
-                    pending_row
-                        .extend_from_slice(&data[i * row_bytes..(i + 1) * row_bytes]);
+                    pending_row.extend_from_slice(&data[i * row_bytes..(i + 1) * row_bytes]);
                 }
 
                 *total_rows += input_row_count as u32;
             }
             StreamAccum::Raw {
-                pixels,
-                total_rows,
-                ..
+                pixels, total_rows, ..
             } => {
                 let (buf, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
                 pixels.extend_from_slice(&buf);
@@ -825,8 +820,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 }
 
                 // Pack Y+U+V into a single buffer for the Yuv420 encode path
-                let mut yuv_buf =
-                    Vec::with_capacity(y_plane.len() + u_plane.len() + v_plane.len());
+                let mut yuv_buf = Vec::with_capacity(y_plane.len() + u_plane.len() + v_plane.len());
                 yuv_buf.append(&mut y_plane);
                 yuv_buf.append(&mut u_plane);
                 yuv_buf.append(&mut v_plane);
@@ -1421,13 +1415,14 @@ impl WebpFullFrameDecoder {
         self.frames_skipped = true;
         let skip_count = self.start_frame_index as usize;
         for _ in 0..skip_count {
-            let done = self.decoder.with_dependent_mut(|_, anim| {
-                match anim.decode_next() {
+            let done = self
+                .decoder
+                .with_dependent_mut(|_, anim| match anim.decode_next() {
                     Ok(Some(_)) => Ok(false),
                     Ok(None) => Ok(true),
                     Err(e) => Err(e),
-                }
-            }).map_err(whereat::at)?;
+                })
+                .map_err(whereat::at)?;
             if done {
                 break;
             }
@@ -1446,18 +1441,21 @@ impl WebpFullFrameDecoder {
         }
 
         let frame_buf = &mut self.frame_buf;
-        let result = self.decoder.with_dependent_mut(|_, anim| {
-            match anim.decode_next() {
-                Ok(Some(info)) => {
-                    let data = anim.current_frame_data();
-                    // frame_buf is pre-allocated to canvas size; this is a memcpy, no alloc.
-                    frame_buf[..data.len()].copy_from_slice(data);
-                    Ok(Some(info.duration_ms))
+        let result = self
+            .decoder
+            .with_dependent_mut(|_, anim| {
+                match anim.decode_next() {
+                    Ok(Some(info)) => {
+                        let data = anim.current_frame_data();
+                        // frame_buf is pre-allocated to canvas size; this is a memcpy, no alloc.
+                        frame_buf[..data.len()].copy_from_slice(data);
+                        Ok(Some(info.duration_ms))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => Err(e),
                 }
-                Ok(None) => Ok(None),
-                Err(e) => Err(e),
-            }
-        }).map_err(whereat::at)?;
+            })
+            .map_err(whereat::at)?;
 
         match result {
             Some(duration_ms) => {
@@ -1468,11 +1466,8 @@ impl WebpFullFrameDecoder {
                 } else {
                     PixelDescriptor::RGB8_SRGB
                 };
-                self.current_descriptor = negotiate_format_inplace(
-                    &mut self.frame_buf,
-                    source,
-                    &self.preferred,
-                );
+                self.current_descriptor =
+                    negotiate_format_inplace(&mut self.frame_buf, source, &self.preferred);
                 Ok(true)
             }
             None => Ok(false),
@@ -1548,7 +1543,9 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
             self.current_descriptor,
         )
         .map_err(|_| {
-            whereat::at(DecodeError::InvalidParameter("frame buffer mismatch".into()))
+            whereat::at(DecodeError::InvalidParameter(
+                "frame buffer mismatch".into(),
+            ))
         })?;
         Ok(Some(FullFrame::new(slice, self.current_duration_ms, idx)))
     }
@@ -1577,10 +1574,12 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
             self.canvas_height,
             self.current_descriptor,
         )
-        .map_err(|_| {
-            whereat::at(DecodeError::InvalidParameter("frame size mismatch".into()))
-        })?;
-        Ok(Some(OwnedFullFrame::new(buf, self.current_duration_ms, idx)))
+        .map_err(|_| whereat::at(DecodeError::InvalidParameter("frame size mismatch".into())))?;
+        Ok(Some(OwnedFullFrame::new(
+            buf,
+            self.current_duration_ms,
+            idx,
+        )))
     }
 
     fn render_next_frame_to_sink(
@@ -1962,11 +1961,7 @@ mod tests {
         // Push rows in strips of 2, verify output decodes correctly.
         let buf = make_rgb8_pixels(64, 64);
         let config = WebpEncoderConfig::lossy().with_quality(90.0);
-        let mut encoder = config
-            .job()
-            .with_canvas_size(64, 64)
-            .encoder()
-            .unwrap();
+        let mut encoder = config.job().with_canvas_size(64, 64).encoder().unwrap();
         assert_eq!(encoder.preferred_strip_height(), 2);
 
         // Push 32 strips of 2 rows each
@@ -2001,11 +1996,7 @@ mod tests {
         // Image with odd height: tests the pending row chroma handling.
         let buf = make_rgb8_pixels(32, 33);
         let config = WebpEncoderConfig::lossy().with_quality(80.0);
-        let mut encoder = config
-            .job()
-            .with_canvas_size(32, 33)
-            .encoder()
-            .unwrap();
+        let mut encoder = config.job().with_canvas_size(32, 33).encoder().unwrap();
 
         // Push one row at a time: 16 pairs + 1 leftover
         let raw = buf.as_slice().contiguous_bytes();
@@ -2035,11 +2026,7 @@ mod tests {
         // Lossless RGBA: uses the Raw accumulation path.
         let buf = make_rgba8_pixels(16, 16);
         let config = WebpEncoderConfig::lossless();
-        let mut encoder = config
-            .job()
-            .with_canvas_size(16, 16)
-            .encoder()
-            .unwrap();
+        let mut encoder = config.job().with_canvas_size(16, 16).encoder().unwrap();
         assert_eq!(encoder.preferred_strip_height(), 1);
 
         let raw = buf.as_slice().contiguous_bytes();
@@ -2081,11 +2068,7 @@ mod tests {
             .unwrap();
 
         // Streaming (full image in one push)
-        let mut encoder = config
-            .job()
-            .with_canvas_size(64, 64)
-            .encoder()
-            .unwrap();
+        let mut encoder = config.job().with_canvas_size(64, 64).encoder().unwrap();
         encoder.push_rows(buf.as_slice()).unwrap();
         let stream_output = encoder.finish().unwrap();
 
