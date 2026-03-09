@@ -602,6 +602,7 @@ impl<'a> Vp8Encoder<'a> {
         color: PixelLayout,
         width: u16,
         height: u16,
+        stride: usize,
         params: &super::api::EncoderParams,
         stop: &dyn enough::Stop,
         progress: &dyn super::api::EncodeProgress,
@@ -636,36 +637,46 @@ impl<'a> Vp8Encoder<'a> {
 
             crate::decoder::yuv::import_yuv420_planes(y_plane, u_plane, v_plane, width, height)
         } else if params.use_sharp_yuv {
-            convert_image_sharp_yuv(data, color, width, height)
+            convert_image_sharp_yuv(data, color, width, height, stride)
         } else {
             match color {
-                PixelLayout::Rgb8 => convert_image_yuv::<3>(data, width, height),
-                PixelLayout::Rgba8 => convert_image_yuv::<4>(data, width, height),
+                PixelLayout::Rgb8 => convert_image_yuv::<3>(data, width, height, stride),
+                PixelLayout::Rgba8 => convert_image_yuv::<4>(data, width, height, stride),
                 PixelLayout::Bgr8 => {
-                    crate::decoder::yuv::convert_image_yuv_bgr::<3>(data, width, height)
+                    crate::decoder::yuv::convert_image_yuv_bgr::<3>(data, width, height, stride)
                 }
                 PixelLayout::Bgra8 => {
-                    crate::decoder::yuv::convert_image_yuv_bgr::<4>(data, width, height)
+                    crate::decoder::yuv::convert_image_yuv_bgr::<4>(data, width, height, stride)
                 }
-                PixelLayout::L8 => convert_image_y::<1>(data, width, height),
-                PixelLayout::La8 => convert_image_y::<2>(data, width, height),
+                PixelLayout::L8 => convert_image_y::<1>(data, width, height, stride),
+                PixelLayout::La8 => convert_image_y::<2>(data, width, height, stride),
                 PixelLayout::Yuv420 => unreachable!(),
             }
         };
 
         if color != PixelLayout::Yuv420 {
-            let bytes_per_pixel = match color {
-                PixelLayout::L8 => 1,
+            let bpp = match color {
+                PixelLayout::L8 => 1usize,
                 PixelLayout::La8 => 2,
                 PixelLayout::Rgb8 | PixelLayout::Bgr8 => 3,
                 PixelLayout::Rgba8 | PixelLayout::Bgra8 => 4,
                 PixelLayout::Yuv420 => unreachable!(),
             };
-            assert_eq!(
-                (u64::from(width) * u64::from(height)).saturating_mul(bytes_per_pixel),
-                data.len() as u64,
-                "width/height doesn't match data length of {} for the color type {:?}",
+            let w = usize::from(width);
+            let h = usize::from(height);
+            let min_size = if h > 0 {
+                stride * bpp * (h - 1) + w * bpp
+            } else {
+                0
+            };
+            assert!(
+                data.len() >= min_size,
+                "buffer too small: got {}, need at least {} for {}x{} stride={} {:?}",
                 data.len(),
+                min_size,
+                w,
+                h,
+                stride,
                 color
             );
         }
@@ -1448,6 +1459,7 @@ pub(crate) fn encode_frame_lossy(
     data: &[u8],
     width: u32,
     height: u32,
+    stride: usize,
     color: PixelLayout,
     params: &super::api::EncoderParams,
     stop: &dyn enough::Stop,
@@ -1462,13 +1474,17 @@ pub(crate) fn encode_frame_lossy(
 
     // Quality search: if target_size or target_psnr is set, iterate quality to converge
     if params.target_size > 0 {
-        encode_with_quality_search(writer, data, width, height, color, params, stop, progress)
+        encode_with_quality_search(
+            writer, data, width, height, stride, color, params, stop, progress,
+        )
     } else if params.target_psnr > 0.0 {
-        encode_with_psnr_search(writer, data, width, height, color, params, stop, progress)
+        encode_with_psnr_search(
+            writer, data, width, height, stride, color, params, stop, progress,
+        )
     } else {
         // Single encoding at specified quality
         let mut vp8_encoder = Vp8Encoder::new(writer);
-        vp8_encoder.encode_image(data, color, width, height, params, stop, progress)
+        vp8_encoder.encode_image(data, color, width, height, stride, params, stop, progress)
     }
 }
 
@@ -1480,6 +1496,7 @@ fn encode_with_quality_search(
     data: &[u8],
     width: u16,
     height: u16,
+    stride: usize,
     color: PixelLayout,
     params: &super::api::EncoderParams,
     stop: &dyn enough::Stop,
@@ -1512,6 +1529,7 @@ fn encode_with_quality_search(
             color,
             width,
             height,
+            stride,
             &trial_params,
             stop,
             progress,
@@ -1555,6 +1573,7 @@ fn encode_with_psnr_search(
     data: &[u8],
     width: u16,
     height: u16,
+    stride: usize,
     color: PixelLayout,
     params: &super::api::EncoderParams,
     stop: &dyn enough::Stop,
@@ -1581,6 +1600,7 @@ fn encode_with_psnr_search(
             color,
             width,
             height,
+            stride,
             &trial_params,
             stop,
             progress,

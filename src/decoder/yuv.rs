@@ -817,6 +817,7 @@ pub(crate) fn convert_image_yuv_simd<const BPP: usize>(
     image_data: &[u8],
     width: u16,
     height: u16,
+    stride: usize,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     use yuv::{
         YuvChromaSubsampling, YuvConversionMode, YuvPlanarImageMut, YuvRange, YuvStandardMatrix,
@@ -841,7 +842,7 @@ pub(crate) fn convert_image_yuv_simd<const BPP: usize>(
         rgba_to_yuv420(
             &mut yuv_image,
             image_data,
-            (width_usize * BPP) as u32,
+            (stride * BPP) as u32,
             YuvRange::Limited,
             YuvStandardMatrix::Bt601,
             YuvConversionMode::Balanced,
@@ -850,7 +851,7 @@ pub(crate) fn convert_image_yuv_simd<const BPP: usize>(
         rgb_to_yuv420(
             &mut yuv_image,
             image_data,
-            (width_usize * BPP) as u32,
+            (stride * BPP) as u32,
             YuvRange::Limited,
             YuvStandardMatrix::Bt601,
             YuvConversionMode::Balanced,
@@ -859,7 +860,7 @@ pub(crate) fn convert_image_yuv_simd<const BPP: usize>(
 
     if result.is_err() {
         // Fall back to scalar implementation on error
-        return convert_image_yuv::<BPP>(image_data, width, height);
+        return convert_image_yuv::<BPP>(image_data, width, height, stride);
     }
 
     // Extract planes from yuv crate output
@@ -941,6 +942,7 @@ pub(crate) fn convert_image_yuv<const BPP: usize>(
     image_data: &[u8],
     width: u16,
     height: u16,
+    stride: usize,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let width = usize::from(width);
     let height = usize::from(height);
@@ -972,10 +974,10 @@ pub(crate) fn convert_image_yuv<const BPP: usize>(
             let chroma_col = col_pair;
 
             // Get 4 RGB pixels for 2x2 block
-            let rgb1 = &image_data[(src_row1 * width + src_col1) * BPP..][..BPP];
-            let rgb2 = &image_data[(src_row1 * width + src_col2) * BPP..][..BPP];
-            let rgb3 = &image_data[(src_row2 * width + src_col1) * BPP..][..BPP];
-            let rgb4 = &image_data[(src_row2 * width + src_col2) * BPP..][..BPP];
+            let rgb1 = &image_data[(src_row1 * stride + src_col1) * BPP..][..BPP];
+            let rgb2 = &image_data[(src_row1 * stride + src_col2) * BPP..][..BPP];
+            let rgb3 = &image_data[(src_row2 * stride + src_col1) * BPP..][..BPP];
+            let rgb4 = &image_data[(src_row2 * stride + src_col2) * BPP..][..BPP];
 
             // Convert to Y
             y_bytes[src_row1 * luma_width + src_col1] = rgb_to_y(rgb1);
@@ -994,8 +996,8 @@ pub(crate) fn convert_image_yuv<const BPP: usize>(
             let chroma_col = col_pairs;
 
             // Get 2 RGB pixels (duplicate horizontally for chroma)
-            let rgb1 = &image_data[(src_row1 * width + src_col) * BPP..][..BPP];
-            let rgb3 = &image_data[(src_row2 * width + src_col) * BPP..][..BPP];
+            let rgb1 = &image_data[(src_row1 * stride + src_col) * BPP..][..BPP];
+            let rgb3 = &image_data[(src_row2 * stride + src_col) * BPP..][..BPP];
 
             // Convert to Y
             y_bytes[src_row1 * luma_width + src_col] = rgb_to_y(rgb1);
@@ -1019,8 +1021,8 @@ pub(crate) fn convert_image_yuv<const BPP: usize>(
             let chroma_col = col_pair;
 
             // Get 2 RGB pixels (duplicate vertically for chroma)
-            let rgb1 = &image_data[(src_row * width + src_col1) * BPP..][..BPP];
-            let rgb2 = &image_data[(src_row * width + src_col2) * BPP..][..BPP];
+            let rgb1 = &image_data[(src_row * stride + src_col1) * BPP..][..BPP];
+            let rgb2 = &image_data[(src_row * stride + src_col2) * BPP..][..BPP];
 
             // Convert to Y
             y_bytes[src_row * luma_width + src_col1] = rgb_to_y(rgb1);
@@ -1037,7 +1039,7 @@ pub(crate) fn convert_image_yuv<const BPP: usize>(
             let chroma_col = col_pairs;
 
             // Get single RGB pixel (duplicate in all directions for chroma)
-            let rgb = &image_data[(src_row * width + src_col) * BPP..][..BPP];
+            let rgb = &image_data[(src_row * stride + src_col) * BPP..][..BPP];
 
             // Convert to Y
             y_bytes[src_row * luma_width + src_col] = rgb_to_y(rgb);
@@ -1091,6 +1093,7 @@ pub(crate) fn convert_image_y<const BPP: usize>(
     image_data: &[u8],
     width: u16,
     height: u16,
+    stride: usize,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let width = usize::from(width);
     let height = usize::from(height);
@@ -1105,7 +1108,7 @@ pub(crate) fn convert_image_y<const BPP: usize>(
 
     // Process all source rows
     for y in 0..height {
-        let src_row = &image_data[y * width * BPP..(y + 1) * width * BPP];
+        let src_row = &image_data[y * stride * BPP..y * stride * BPP + width * BPP];
         for x in 0..width {
             y_bytes[y * luma_width + x] = src_row[x * BPP];
         }
@@ -1194,6 +1197,7 @@ pub(crate) fn convert_image_sharp_yuv(
     color: crate::encoder::PixelLayout,
     width: u16,
     height: u16,
+    stride: usize,
 ) -> (
     alloc::vec::Vec<u8>,
     alloc::vec::Vec<u8>,
@@ -1206,8 +1210,8 @@ pub(crate) fn convert_image_sharp_yuv(
         // Sharp YUV only applies to RGB/RGBA/BGR/BGRA inputs (chroma subsampling matters).
         // For grayscale, fall back to standard conversion.
         match color {
-            PixelLayout::L8 => return convert_image_y::<1>(image_data, width, height),
-            PixelLayout::La8 => return convert_image_y::<2>(image_data, width, height),
+            PixelLayout::L8 => return convert_image_y::<1>(image_data, width, height, stride),
+            PixelLayout::La8 => return convert_image_y::<2>(image_data, width, height, stride),
             PixelLayout::Yuv420 => {
                 // Sharp YUV doesn't apply to already-subsampled data
                 unreachable!("sharp YUV should not be called with Yuv420 input");
@@ -1246,7 +1250,7 @@ pub(crate) fn convert_image_sharp_yuv(
             PixelLayout::Rgba8 | PixelLayout::Bgra8 => 4,
             _ => unreachable!(),
         };
-        let src_stride = (w * bpp) as u32;
+        let src_stride = (stride * bpp) as u32;
 
         let result = match color {
             PixelLayout::Rgb8 => yuv::rgb_to_sharp_yuv420(
@@ -1287,10 +1291,10 @@ pub(crate) fn convert_image_sharp_yuv(
         if result.is_err() {
             // Fall back to standard conversion if sharp YUV fails
             return match color {
-                PixelLayout::Rgb8 => convert_image_yuv::<3>(image_data, width, height),
-                PixelLayout::Rgba8 => convert_image_yuv::<4>(image_data, width, height),
-                PixelLayout::Bgr8 => convert_image_yuv_bgr::<3>(image_data, width, height),
-                PixelLayout::Bgra8 => convert_image_yuv_bgr::<4>(image_data, width, height),
+                PixelLayout::Rgb8 => convert_image_yuv::<3>(image_data, width, height, stride),
+                PixelLayout::Rgba8 => convert_image_yuv::<4>(image_data, width, height, stride),
+                PixelLayout::Bgr8 => convert_image_yuv_bgr::<3>(image_data, width, height, stride),
+                PixelLayout::Bgra8 => convert_image_yuv_bgr::<4>(image_data, width, height, stride),
                 _ => unreachable!(),
             };
         }
@@ -1303,12 +1307,12 @@ pub(crate) fn convert_image_sharp_yuv(
         // Fall back to standard conversion without the fast-yuv feature
         use crate::encoder::PixelLayout;
         match color {
-            PixelLayout::Rgb8 => convert_image_yuv::<3>(image_data, width, height),
-            PixelLayout::Rgba8 => convert_image_yuv::<4>(image_data, width, height),
-            PixelLayout::Bgr8 => convert_image_yuv_bgr::<3>(image_data, width, height),
-            PixelLayout::Bgra8 => convert_image_yuv_bgr::<4>(image_data, width, height),
-            PixelLayout::L8 => convert_image_y::<1>(image_data, width, height),
-            PixelLayout::La8 => convert_image_y::<2>(image_data, width, height),
+            PixelLayout::Rgb8 => convert_image_yuv::<3>(image_data, width, height, stride),
+            PixelLayout::Rgba8 => convert_image_yuv::<4>(image_data, width, height, stride),
+            PixelLayout::Bgr8 => convert_image_yuv_bgr::<3>(image_data, width, height, stride),
+            PixelLayout::Bgra8 => convert_image_yuv_bgr::<4>(image_data, width, height, stride),
+            PixelLayout::L8 => convert_image_y::<1>(image_data, width, height, stride),
+            PixelLayout::La8 => convert_image_y::<2>(image_data, width, height, stride),
             PixelLayout::Yuv420 => unreachable!("sharp YUV should not be called with Yuv420 input"),
         }
     }
@@ -1323,6 +1327,7 @@ pub(crate) fn convert_image_yuv_bgr<const BPP: usize>(
     image_data: &[u8],
     width: u16,
     height: u16,
+    stride: usize,
 ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let width = usize::from(width);
     let height = usize::from(height);
@@ -1359,10 +1364,10 @@ pub(crate) fn convert_image_yuv_bgr<const BPP: usize>(
             let src_col2 = src_col1 + 1;
             let chroma_col = col_pair;
 
-            let rgb1 = bgr_to_rgb(&image_data[(src_row1 * width + src_col1) * BPP..]);
-            let rgb2 = bgr_to_rgb(&image_data[(src_row1 * width + src_col2) * BPP..]);
-            let rgb3 = bgr_to_rgb(&image_data[(src_row2 * width + src_col1) * BPP..]);
-            let rgb4 = bgr_to_rgb(&image_data[(src_row2 * width + src_col2) * BPP..]);
+            let rgb1 = bgr_to_rgb(&image_data[(src_row1 * stride + src_col1) * BPP..]);
+            let rgb2 = bgr_to_rgb(&image_data[(src_row1 * stride + src_col2) * BPP..]);
+            let rgb3 = bgr_to_rgb(&image_data[(src_row2 * stride + src_col1) * BPP..]);
+            let rgb4 = bgr_to_rgb(&image_data[(src_row2 * stride + src_col2) * BPP..]);
 
             y_bytes[src_row1 * luma_width + src_col1] = rgb_to_y(&rgb1);
             y_bytes[src_row1 * luma_width + src_col2] = rgb_to_y(&rgb2);
@@ -1379,8 +1384,8 @@ pub(crate) fn convert_image_yuv_bgr<const BPP: usize>(
             let src_col = width - 1;
             let chroma_col = col_pairs;
 
-            let rgb1 = bgr_to_rgb(&image_data[(src_row1 * width + src_col) * BPP..]);
-            let rgb3 = bgr_to_rgb(&image_data[(src_row2 * width + src_col) * BPP..]);
+            let rgb1 = bgr_to_rgb(&image_data[(src_row1 * stride + src_col) * BPP..]);
+            let rgb3 = bgr_to_rgb(&image_data[(src_row2 * stride + src_col) * BPP..]);
 
             y_bytes[src_row1 * luma_width + src_col] = rgb_to_y(&rgb1);
             y_bytes[src_row2 * luma_width + src_col] = rgb_to_y(&rgb3);
@@ -1401,8 +1406,8 @@ pub(crate) fn convert_image_yuv_bgr<const BPP: usize>(
             let src_col2 = src_col1 + 1;
             let chroma_col = col_pair;
 
-            let rgb1 = bgr_to_rgb(&image_data[(src_row * width + src_col1) * BPP..]);
-            let rgb2 = bgr_to_rgb(&image_data[(src_row * width + src_col2) * BPP..]);
+            let rgb1 = bgr_to_rgb(&image_data[(src_row * stride + src_col1) * BPP..]);
+            let rgb2 = bgr_to_rgb(&image_data[(src_row * stride + src_col2) * BPP..]);
 
             y_bytes[src_row * luma_width + src_col1] = rgb_to_y(&rgb1);
             y_bytes[src_row * luma_width + src_col2] = rgb_to_y(&rgb2);
@@ -1417,7 +1422,7 @@ pub(crate) fn convert_image_yuv_bgr<const BPP: usize>(
             let src_col = width - 1;
             let chroma_col = col_pairs;
 
-            let rgb = bgr_to_rgb(&image_data[(src_row * width + src_col) * BPP..]);
+            let rgb = bgr_to_rgb(&image_data[(src_row * stride + src_col) * BPP..]);
 
             y_bytes[src_row * luma_width + src_col] = rgb_to_y(&rgb);
 

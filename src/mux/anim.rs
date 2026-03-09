@@ -460,12 +460,14 @@ fn encode_frame_data(
     let mut bitstream = Vec::new();
     let lossy_with_alpha = params.use_lossy && color.has_alpha();
 
+    let stride = width as usize;
     if params.use_lossy {
         encode_frame_lossy(
             &mut bitstream,
             pixels,
             width,
             height,
+            stride,
             color,
             params,
             &Unstoppable,
@@ -479,6 +481,7 @@ fn encode_frame_data(
                 pixels,
                 width,
                 height,
+                stride,
                 color,
                 params.alpha_quality,
                 &Unstoppable,
@@ -499,6 +502,7 @@ fn encode_frame_data(
             pixels,
             width,
             height,
+            stride,
             color,
             params.clone(),
             false,

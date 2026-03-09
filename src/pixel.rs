@@ -234,18 +234,13 @@ pub fn encode_img<P: EncodePixel>(img: imgref::ImgRef<'_, P>) -> Result<Vec<u8>,
 where
     [P]: ComponentBytes<u8>,
 {
-    // imgref may have stride > width; we need contiguous pixels
     let width = img.width() as u32;
     let height = img.height() as u32;
-    if img.stride() == img.width() {
-        // Contiguous — encode directly
-        let buf = img.buf();
-        EncoderConfig::new_lossy().encode_pixels(buf, width, height)
-    } else {
-        // Strided — collect rows into contiguous buffer
-        let pixels: Vec<P> = img.rows().flat_map(|row| row.iter().copied()).collect();
-        EncoderConfig::new_lossy().encode_pixels(&pixels, width, height)
-    }
+    let buf: &[u8] = img.buf().as_bytes();
+    let config = EncoderConfig::new_lossy();
+    EncodeRequest::new(&config, buf, P::color_type(), width, height)
+        .with_stride(img.stride())
+        .encode()
 }
 
 /// Encode typed pixel data to WebP with default settings.
@@ -289,11 +284,9 @@ impl EncoderConfig {
     {
         let width = img.width() as u32;
         let height = img.height() as u32;
-        if img.stride() == img.width() {
-            self.encode_pixels(img.buf(), width, height)
-        } else {
-            let pixels: Vec<P> = img.rows().flat_map(|row| row.iter().copied()).collect();
-            self.encode_pixels(&pixels, width, height)
-        }
+        let buf: &[u8] = img.buf().as_bytes();
+        EncodeRequest::new(self, buf, P::color_type(), width, height)
+            .with_stride(img.stride())
+            .encode()
     }
 }

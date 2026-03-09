@@ -1931,7 +1931,8 @@ pub fn decode_yuv420(data: &[u8]) -> Result<YuvPlanes, DecodeError> {
 
     // For lossless or animated images, decode to RGBA then convert to YUV
     let (rgba, w, h) = decode_rgba(data)?;
-    let (y_bytes, u_bytes, v_bytes) = super::yuv::convert_image_yuv::<4>(&rgba, w as u16, h as u16);
+    let (y_bytes, u_bytes, v_bytes) =
+        super::yuv::convert_image_yuv::<4>(&rgba, w as u16, h as u16, w as usize);
 
     let uv_w = w.div_ceil(2);
     let uv_h = h.div_ceil(2);

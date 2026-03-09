@@ -1247,33 +1247,23 @@ impl<'a> EncodeRequest<'a> {
             .map_err(|e| EncodeError::InvalidBufferSize(format!("{}", e)))?;
 
         let bpp = self.color_type.bytes_per_pixel();
-        let row_bytes = self.width as usize * bpp;
+        let stride = self.stride_pixels.unwrap_or(self.width as usize);
 
-        // If stride is set and differs from row width, compact the data
-        let compacted;
-        let encode_data = if let Some(stride_px) = self.stride_pixels {
-            if stride_px < self.width as usize {
-                return Err(EncodeError::InvalidBufferSize(format!(
-                    "stride_pixels {} < width {}",
-                    stride_px, self.width
-                )));
-            }
-            let stride_bytes = stride_px * bpp;
-            if stride_bytes == row_bytes {
-                self.pixels
-            } else {
-                compacted = (0..self.height as usize)
-                    .flat_map(|y| &self.pixels[y * stride_bytes..y * stride_bytes + row_bytes])
-                    .copied()
-                    .collect::<Vec<u8>>();
-                &compacted
-            }
-        } else {
-            self.pixels
-        };
+        if stride < self.width as usize {
+            return Err(EncodeError::InvalidBufferSize(format!(
+                "stride_pixels {} < width {}",
+                stride, self.width
+            )));
+        }
 
         if self.color_type != PixelLayout::Yuv420 {
-            validate_buffer_size(encode_data.len(), self.width, self.height, bpp as u32)?;
+            validate_buffer_size(
+                self.pixels.len(),
+                self.width,
+                self.height,
+                stride,
+                bpp as u32,
+            )?;
         }
 
         let mut output = Vec::new();
@@ -1292,22 +1282,39 @@ impl<'a> EncodeRequest<'a> {
             if let Some(xmp) = self.xmp_metadata {
                 encoder.set_xmp_metadata(xmp.to_vec());
             }
-            stats = encoder.encode(encode_data, self.width, self.height, self.color_type)?;
+            stats = encoder.encode(
+                self.pixels,
+                self.width,
+                self.height,
+                stride,
+                self.color_type,
+            )?;
         }
         Ok((output, stats))
     }
 }
 
 /// Validate buffer size for encoding.
-fn validate_buffer_size(size: usize, width: u32, height: u32, bpp: u32) -> Result<(), EncodeError> {
-    let expected = (width as usize)
-        .saturating_mul(height as usize)
-        .saturating_mul(bpp as usize);
+fn validate_buffer_size(
+    size: usize,
+    width: u32,
+    height: u32,
+    stride: usize,
+    bpp: u32,
+) -> Result<(), EncodeError> {
+    let w = width as usize;
+    let h = height as usize;
+    let bpp = bpp as usize;
+    let expected = if h > 0 {
+        stride.saturating_mul(bpp).saturating_mul(h - 1) + w.saturating_mul(bpp)
+    } else {
+        0
+    };
 
     if size < expected {
         return Err(EncodeError::InvalidBufferSize(format!(
-            "buffer too small: got {}, expected {}",
-            size, expected
+            "buffer too small: got {}, expected at least {} ({}x{}, stride={}, bpp={})",
+            size, expected, w, h, stride, bpp
         )));
     }
     Ok(())
@@ -1328,6 +1335,7 @@ pub(crate) fn encode_frame_lossless(
     data: &[u8],
     width: u32,
     height: u32,
+    stride: usize,
     color: PixelLayout,
     params: EncoderParams,
     implicit_dimensions: bool,
@@ -1347,9 +1355,24 @@ pub(crate) fn encode_frame_lossless(
         }
     };
 
-    assert_eq!(
-        (u64::from(width) * u64::from(height)).saturating_mul(bytes_per_pixel),
-        data.len() as u64
+    let bpp = bytes_per_pixel as usize;
+    let ww = width as usize;
+    let hh = height as usize;
+    let npixels = ww * hh;
+    let min_size = if hh > 0 {
+        stride * bpp * (hh - 1) + ww * bpp
+    } else {
+        0
+    };
+    assert!(
+        data.len() >= min_size,
+        "buffer too small: got {}, need at least {} for {}x{} stride={} {:?}",
+        data.len(),
+        min_size,
+        ww,
+        hh,
+        stride,
+        color
     );
 
     if width == 0 || width > 16384 || height == 0 || height > 16384 {
@@ -1386,37 +1409,71 @@ pub(crate) fn encode_frame_lossless(
     // meta-huffman codes
     w.write_bits(0x0, 1);
 
-    // expand to RGBA
-    let npixels = data.len() / color.bytes_per_pixel();
+    // expand to RGBA (row-by-row to handle stride)
+    let stride_bytes = stride * bpp;
+    let row_bytes = ww * bpp;
     let mut pixels: Vec<u8> = match color {
         PixelLayout::L8 => {
             let mut out = alloc::vec![0u8; npixels * 4];
-            garb::bytes::gray_to_rgba(&data[..npixels], &mut out).expect("validated buffer sizes");
+            for y in 0..hh {
+                garb::bytes::gray_to_rgba(
+                    &data[y * stride_bytes..y * stride_bytes + ww],
+                    &mut out[y * ww * 4..(y + 1) * ww * 4],
+                )
+                .expect("validated buffer sizes");
+            }
             out
         }
         PixelLayout::La8 => {
             let mut out = alloc::vec![0u8; npixels * 4];
-            garb::bytes::gray_alpha_to_rgba(&data[..npixels * 2], &mut out)
+            for y in 0..hh {
+                garb::bytes::gray_alpha_to_rgba(
+                    &data[y * stride_bytes..y * stride_bytes + row_bytes],
+                    &mut out[y * ww * 4..(y + 1) * ww * 4],
+                )
                 .expect("validated buffer sizes");
+            }
             out
         }
         PixelLayout::Rgb8 => {
             let mut out = alloc::vec![0u8; npixels * 4];
-            garb::bytes::rgb_to_rgba(&data[..npixels * 3], &mut out)
+            for y in 0..hh {
+                garb::bytes::rgb_to_rgba(
+                    &data[y * stride_bytes..y * stride_bytes + row_bytes],
+                    &mut out[y * ww * 4..(y + 1) * ww * 4],
+                )
                 .expect("validated buffer sizes");
+            }
             out
         }
-        PixelLayout::Rgba8 => data.to_vec(),
+        PixelLayout::Rgba8 => {
+            let mut out = alloc::vec![0u8; npixels * 4];
+            for y in 0..hh {
+                out[y * ww * 4..(y + 1) * ww * 4]
+                    .copy_from_slice(&data[y * stride_bytes..y * stride_bytes + row_bytes]);
+            }
+            out
+        }
         PixelLayout::Bgr8 => {
             let mut out = alloc::vec![0u8; npixels * 4];
-            garb::bytes::bgr_to_rgba(&data[..npixels * 3], &mut out)
+            for y in 0..hh {
+                garb::bytes::bgr_to_rgba(
+                    &data[y * stride_bytes..y * stride_bytes + row_bytes],
+                    &mut out[y * ww * 4..(y + 1) * ww * 4],
+                )
                 .expect("validated buffer sizes");
+            }
             out
         }
         PixelLayout::Bgra8 => {
             let mut out = alloc::vec![0u8; npixels * 4];
-            garb::bytes::bgra_to_rgba(&data[..npixels * 4], &mut out)
+            for y in 0..hh {
+                garb::bytes::bgra_to_rgba(
+                    &data[y * stride_bytes..y * stride_bytes + row_bytes],
+                    &mut out[y * ww * 4..(y + 1) * ww * 4],
+                )
                 .expect("validated buffer sizes");
+            }
             out
         }
         PixelLayout::Yuv420 => unreachable!(), // already rejected above
@@ -1688,17 +1745,19 @@ fn quantize_alpha_levels(data: &mut [u8], num_levels: u16) {
 /// # Panics
 ///
 /// Panics if the image data is not of the indicated dimensions.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_alpha_lossless(
     writer: &mut Vec<u8>,
     data: &[u8],
     width: u32,
     height: u32,
+    stride: usize,
     color: PixelLayout,
     alpha_quality: u8,
     stop: &dyn enough::Stop,
 ) -> Result<(), EncodeError> {
     let bytes_per_pixel = match color {
-        PixelLayout::La8 => 2,
+        PixelLayout::La8 => 2usize,
         PixelLayout::Rgba8 | PixelLayout::Bgra8 => 4,
         _ => unreachable!(),
     };
@@ -1711,13 +1770,20 @@ pub(crate) fn encode_alpha_lossless(
     // 1 is using the lossless format to encode alpha data
     let compression_method = 1u8;
 
-    // Extract alpha channel
-    let mut alpha_data: Vec<u8> = data
-        .iter()
-        .skip(bytes_per_pixel - 1)
-        .step_by(bytes_per_pixel)
-        .copied()
-        .collect();
+    // Extract alpha channel (row-by-row to handle stride)
+    let ww = width as usize;
+    let hh = height as usize;
+    let stride_bytes = stride * bytes_per_pixel;
+    let row_bytes = ww * bytes_per_pixel;
+    let mut alpha_data = Vec::with_capacity(ww * hh);
+    for y in 0..hh {
+        let row = &data[y * stride_bytes..y * stride_bytes + row_bytes];
+        alpha_data.extend(
+            row.iter()
+                .skip(bytes_per_pixel - 1)
+                .step_by(bytes_per_pixel),
+        );
+    }
 
     debug_assert_eq!(alpha_data.len(), (width * height) as usize);
 
@@ -1738,6 +1804,7 @@ pub(crate) fn encode_alpha_lossless(
         &alpha_data,
         width,
         height,
+        ww, // alpha data is contiguous, stride = width
         PixelLayout::L8,
         EncoderParams::default(),
         true,
@@ -1835,6 +1902,7 @@ impl<'a> WebPEncoder<'a> {
         data: &[u8],
         width: u32,
         height: u32,
+        stride: usize,
         color: PixelLayout,
     ) -> Result<EncodeStats, EncodeError> {
         let mut frame = Vec::new();
@@ -1850,6 +1918,7 @@ impl<'a> WebPEncoder<'a> {
                 data,
                 width,
                 height,
+                stride,
                 color,
                 &self.params,
                 self.stop,
@@ -1862,6 +1931,7 @@ impl<'a> WebPEncoder<'a> {
                 data,
                 width,
                 height,
+                stride,
                 color,
                 self.params,
                 false,
@@ -1901,6 +1971,7 @@ impl<'a> WebPEncoder<'a> {
                     data,
                     width,
                     height,
+                    stride,
                     color,
                     alpha_quality,
                     self.stop,
@@ -1974,7 +2045,7 @@ mod tests {
 
         let mut output = Vec::new();
         WebPEncoder::new(&mut output)
-            .encode(&img, 256, 256, crate::PixelLayout::Rgba8)
+            .encode(&img, 256, 256, 256, crate::PixelLayout::Rgba8)
             .unwrap();
 
         let mut decoder = crate::WebPDecoder::new(&output).unwrap();
@@ -1995,7 +2066,7 @@ mod tests {
         let mut encoder = WebPEncoder::new(&mut output);
         encoder.set_exif_metadata(exif.clone());
         encoder
-            .encode(&img, 256, 256, crate::PixelLayout::Rgb8)
+            .encode(&img, 256, 256, 256, crate::PixelLayout::Rgb8)
             .unwrap();
 
         let mut decoder = crate::WebPDecoder::new(&output).unwrap();
@@ -2027,7 +2098,7 @@ mod tests {
         let mut encoder = WebPEncoder::new(&mut output);
         encoder.set_params(params.clone());
         encoder
-            .encode(&img[..256 * 256 * 3], 256, 256, crate::PixelLayout::Rgb8)
+            .encode(&img[..256 * 256 * 3], 256, 256, 256, crate::PixelLayout::Rgb8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
         assert_eq!(img[..256 * 256 * 3], *decoded);
@@ -2036,7 +2107,7 @@ mod tests {
         let mut encoder = WebPEncoder::new(&mut output);
         encoder.set_params(params.clone());
         encoder
-            .encode(&img, 256, 256, crate::PixelLayout::Rgba8)
+            .encode(&img, 256, 256, 256, crate::PixelLayout::Rgba8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
         assert_eq!(img, *decoded);
@@ -2046,7 +2117,7 @@ mod tests {
         encoder.set_params(params.clone());
         encoder.set_icc_profile(vec![0; 10]);
         encoder
-            .encode(&img, 256, 256, crate::PixelLayout::Rgba8)
+            .encode(&img, 256, 256, 256, crate::PixelLayout::Rgba8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
         assert_eq!(img, *decoded);
@@ -2056,7 +2127,7 @@ mod tests {
         encoder.set_params(params.clone());
         encoder.set_exif_metadata(vec![0; 10]);
         encoder
-            .encode(&img, 256, 256, crate::PixelLayout::Rgba8)
+            .encode(&img, 256, 256, 256, crate::PixelLayout::Rgba8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
         assert_eq!(img, *decoded);
@@ -2068,7 +2139,7 @@ mod tests {
         encoder.set_icc_profile(vec![0; 8]);
         encoder.set_icc_profile(vec![0; 9]);
         encoder
-            .encode(&img, 256, 256, crate::PixelLayout::Rgba8)
+            .encode(&img, 256, 256, 256, crate::PixelLayout::Rgba8)
             .unwrap();
         let decoded = webp::Decoder::new(&output).decode().unwrap();
         assert_eq!(img, *decoded);
