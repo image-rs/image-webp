@@ -23,14 +23,14 @@
 //! anim.add_frame(&pixels, PixelLayout::Rgba8, 100, &frame_config)?;
 //!
 //! let webp = anim.finalize(100)?;
-//! # Ok::<(), zenwebp::mux::MuxError>(())
+//! # Ok::<(), whereat::At<zenwebp::mux::MuxError>>(())
 //! ```
 
 use alloc::vec::Vec;
 
 use super::assemble::{MuxFrame, WebPMux};
 use super::demux::{BlendMethod, DisposeMethod};
-use super::error::MuxError;
+use super::error::{MuxError, MuxResult};
 use crate::decoder::LoopCount;
 use crate::encoder::vp8::encode_frame_lossy;
 use crate::encoder::{
@@ -86,9 +86,10 @@ impl AnimationEncoder {
     /// Create a new animation encoder.
     ///
     /// The canvas dimensions must be between 1 and 16384 (inclusive).
-    pub fn new(width: u32, height: u32, config: AnimationConfig) -> Result<Self, MuxError> {
+    #[track_caller]
+    pub fn new(width: u32, height: u32, config: AnimationConfig) -> MuxResult<Self> {
         if width == 0 || height == 0 || width > 16384 || height > 16384 {
-            return Err(MuxError::InvalidDimensions { width, height });
+            return Err(whereat::at!(MuxError::InvalidDimensions { width, height }));
         }
         let mut mux = WebPMux::new(width, height);
         mux.set_animation(config.background_color, config.loop_count);
@@ -120,7 +121,7 @@ impl AnimationEncoder {
             let duration = timestamp_ms.saturating_sub(prev.timestamp_ms);
             let mut frame = prev.mux_frame;
             frame.duration_ms = duration;
-            self.mux.push_frame(frame)?;
+            self.mux.push_frame(frame).map_err(|e| e.into_inner())?;
         }
 
         let mux_frame = MuxFrame {
@@ -159,13 +160,14 @@ impl AnimationEncoder {
     ///
     /// For manual sub-frame control, use
     /// [`add_frame_advanced`](Self::add_frame_advanced).
+    #[track_caller]
     pub fn add_frame(
         &mut self,
         pixels: &[u8],
         color_type: PixelLayout,
         timestamp_ms: u32,
         encoder_config: &EncoderConfig,
-    ) -> Result<(), MuxError> {
+    ) -> MuxResult<()> {
         // If optimization is disabled, or input is YUV420 (can't diff planar
         // data pixel-by-pixel), fall through to full-canvas encoding.
         if !self.minimize_size || color_type == PixelLayout::Yuv420 {
@@ -267,6 +269,7 @@ impl AnimationEncoder {
     /// Using this method invalidates canvas tracking for sub-frame
     /// optimization. The next [`add_frame`](Self::add_frame) call will encode
     /// a full keyframe.
+    #[track_caller]
     #[allow(clippy::too_many_arguments)]
     pub fn add_frame_advanced(
         &mut self,
@@ -280,7 +283,7 @@ impl AnimationEncoder {
         encoder_config: &EncoderConfig,
         dispose: DisposeMethod,
         blend: BlendMethod,
-    ) -> Result<(), MuxError> {
+    ) -> MuxResult<()> {
         let params = encoder_config.to_params();
         let encoded = encode_frame_data(pixels, frame_width, frame_height, color_type, &params)?;
         self.push_encoded_frame(
@@ -302,7 +305,8 @@ impl AnimationEncoder {
     ///
     /// `last_frame_duration_ms` is the display duration for the final frame,
     /// since there is no subsequent timestamp to derive it from.
-    pub fn finalize(mut self, last_frame_duration_ms: u32) -> Result<Vec<u8>, MuxError> {
+    #[track_caller]
+    pub fn finalize(mut self, last_frame_duration_ms: u32) -> MuxResult<Vec<u8>> {
         // Flush the last pending frame
         if let Some(prev) = self.pending.take() {
             let mut frame = prev.mux_frame;

@@ -26,13 +26,13 @@
 //! })?;
 //!
 //! let webp_bytes = mux.assemble()?;
-//! # Ok::<(), zenwebp::mux::MuxError>(())
+//! # Ok::<(), whereat::At<zenwebp::mux::MuxError>>(())
 //! ```
 
 use alloc::vec::Vec;
 
 use super::demux::{BlendMethod, DisposeMethod, WebPDemuxer};
-use super::error::MuxError;
+use super::error::{MuxError, MuxResult};
 use crate::decoder::LoopCount;
 use crate::encoder::{VecWriter, chunk_size, write_chunk};
 
@@ -104,7 +104,8 @@ impl WebPMux {
     /// Parse an existing WebP file into a mux assembler.
     ///
     /// This allows modifying an existing file (e.g., adding metadata, replacing frames).
-    pub fn from_data(data: &[u8]) -> Result<Self, MuxError> {
+    #[track_caller]
+    pub fn from_data(data: &[u8]) -> MuxResult<Self> {
         let demuxer = WebPDemuxer::new(data)?;
         let mut mux = Self::new(demuxer.canvas_width(), demuxer.canvas_height());
 
@@ -214,30 +215,31 @@ impl WebPMux {
     /// Add a frame to the animation.
     ///
     /// Frame offsets must be even. The frame must fit within the canvas.
-    pub fn push_frame(&mut self, frame: MuxFrame) -> Result<(), MuxError> {
+    #[track_caller]
+    pub fn push_frame(&mut self, frame: MuxFrame) -> MuxResult<()> {
         if !frame.x_offset.is_multiple_of(2) || !frame.y_offset.is_multiple_of(2) {
-            return Err(MuxError::OddFrameOffset {
+            return Err(whereat::at!(MuxError::OddFrameOffset {
                 x: frame.x_offset,
                 y: frame.y_offset,
-            });
+            }));
         }
         if frame.width == 0 || frame.height == 0 || frame.width > 16384 || frame.height > 16384 {
-            return Err(MuxError::InvalidDimensions {
+            return Err(whereat::at!(MuxError::InvalidDimensions {
                 width: frame.width,
                 height: frame.height,
-            });
+            }));
         }
         if frame.x_offset + frame.width > self.canvas_width
             || frame.y_offset + frame.height > self.canvas_height
         {
-            return Err(MuxError::FrameOutsideCanvas {
+            return Err(whereat::at!(MuxError::FrameOutsideCanvas {
                 x: frame.x_offset,
                 y: frame.y_offset,
                 width: frame.width,
                 height: frame.height,
                 canvas_width: self.canvas_width,
                 canvas_height: self.canvas_height,
-            });
+            }));
         }
         self.frames.push(frame);
         Ok(())
@@ -254,11 +256,12 @@ impl WebPMux {
     }
 
     /// Assemble the final WebP file.
-    pub fn assemble(&self) -> Result<Vec<u8>, MuxError> {
+    #[track_caller]
+    pub fn assemble(&self) -> MuxResult<Vec<u8>> {
         if self.animation.is_some() {
-            self.assemble_animated()
+            self.assemble_animated().map_err(|e| whereat::at!(e))
         } else {
-            self.assemble_single()
+            self.assemble_single().map_err(|e| whereat::at!(e))
         }
     }
 

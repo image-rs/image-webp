@@ -17,7 +17,7 @@
 //! let pixels = vec![0u8; 64 * 64 * 4];
 //! let webp = EncodeRequest::lossy(&config, &pixels, PixelLayout::Rgba8, 64, 64)
 //!     .encode()?;
-//! # Ok::<(), zenwebp::EncodeError>(())
+//! # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
 //! ```
 //!
 //! # Runtime Mode Selection

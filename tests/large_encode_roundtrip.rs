@@ -78,7 +78,7 @@ fn expect_partition0_overflow(pixels: &[u8], width: u32, height: u32, quality: f
     match result {
         Err(e) => {
             assert!(
-                matches!(e, EncodeError::Partition0Overflow { .. }),
+                matches!(e.error(), EncodeError::Partition0Overflow { .. }),
                 "expected Partition0Overflow at {width}x{height} q{quality}, got: {e}"
             );
         }

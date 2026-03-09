@@ -21,4 +21,4 @@ pub use anim::{AnimationConfig, AnimationEncoder};
 pub use anim_decode::{AnimFrame, AnimationDecoder, AnimationInfo, FrameInfo};
 pub use assemble::{MuxFrame, WebPMux};
 pub use demux::{BlendMethod, DemuxFrame, DemuxFrameIter, DisposeMethod, WebPDemuxer};
-pub use error::MuxError;
+pub use error::{MuxError, MuxResult};

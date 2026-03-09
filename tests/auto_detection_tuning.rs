@@ -159,6 +159,7 @@ fn ct_label(ct: ContentType) -> &'static str {
         ContentType::Drawing => "Draw",
         ContentType::Text => "Text",
         ContentType::Icon => "Icon",
+        _ => "Unknown",
     }
 }
 

@@ -1,5 +1,6 @@
 use alloc::string::String;
 use thiserror::Error;
+use whereat::at;
 
 /// Errors that can occur when attempting to decode a WebP image
 #[derive(Debug, Error)]
@@ -351,7 +352,7 @@ impl DecodeConfig {
 /// let config = DecodeConfig::default();
 /// let webp_data: &[u8] = &[]; // your WebP data
 /// let (pixels, w, h) = DecodeRequest::new(&config, webp_data).decode_rgba()?;
-/// # Ok::<(), zenwebp::DecodeError>(())
+/// # Ok::<(), whereat::At<zenwebp::DecodeError>>(())
 /// ```
 pub struct DecodeRequest<'a> {
     config: &'a DecodeConfig,
@@ -392,16 +393,17 @@ impl<'a> DecodeRequest<'a> {
     /// both unnecessary alpha expansion and alpha stripping.
     ///
     /// The returned [`PixelLayout`](crate::PixelLayout) indicates the format.
-    pub fn decode(self) -> Result<(Vec<u8>, u32, u32, crate::PixelLayout), DecodeError> {
-        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())?;
+    pub fn decode(self) -> DecodeResult<(Vec<u8>, u32, u32, crate::PixelLayout)> {
+        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())
+            .map_err(|e| at!(e))?;
         decoder.set_limits(self.config.limits.clone());
         decoder.set_stop(self.stop);
         let (w, h) = decoder.dimensions();
         let output_size = decoder
             .output_buffer_size()
-            .ok_or(DecodeError::ImageTooLarge)?;
+            .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
         let mut pixels = alloc::vec![0u8; output_size];
-        decoder.read_image(&mut pixels)?;
+        decoder.read_image(&mut pixels).map_err(|e| at!(e))?;
         let layout = if decoder.has_alpha() {
             crate::PixelLayout::Rgba8
         } else {
@@ -411,16 +413,17 @@ impl<'a> DecodeRequest<'a> {
     }
 
     /// Decode to RGBA pixels. If the image has no alpha channel, alpha is set to 255.
-    pub fn decode_rgba(self) -> Result<(Vec<u8>, u32, u32), DecodeError> {
-        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())?;
+    pub fn decode_rgba(self) -> DecodeResult<(Vec<u8>, u32, u32)> {
+        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())
+            .map_err(|e| at!(e))?;
         decoder.set_limits(self.config.limits.clone());
         decoder.set_stop(self.stop);
         let (w, h) = decoder.dimensions();
         let output_size = decoder
             .output_buffer_size()
-            .ok_or(DecodeError::ImageTooLarge)?;
+            .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
         let mut native = alloc::vec![0u8; output_size];
-        decoder.read_image(&mut native)?;
+        decoder.read_image(&mut native).map_err(|e| at!(e))?;
 
         if decoder.has_alpha() {
             Ok((native, w, h))
@@ -428,22 +431,23 @@ impl<'a> DecodeRequest<'a> {
             // Expand RGB to RGBA
             let pixel_count = (w as usize) * (h as usize);
             let mut rgba = alloc::vec![0u8; pixel_count * 4];
-            garb::bytes::rgb_to_rgba(&native, &mut rgba).map_err(garb_err)?;
+            garb::bytes::rgb_to_rgba(&native, &mut rgba).map_err(|e| at!(garb_err(e)))?;
             Ok((rgba, w, h))
         }
     }
 
     /// Decode to RGB pixels (no alpha). If the image has alpha, it is discarded.
-    pub fn decode_rgb(self) -> Result<(Vec<u8>, u32, u32), DecodeError> {
-        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())?;
+    pub fn decode_rgb(self) -> DecodeResult<(Vec<u8>, u32, u32)> {
+        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())
+            .map_err(|e| at!(e))?;
         decoder.set_limits(self.config.limits.clone());
         decoder.set_stop(self.stop);
         let (w, h) = decoder.dimensions();
         let output_size = decoder
             .output_buffer_size()
-            .ok_or(DecodeError::ImageTooLarge)?;
+            .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
         let mut native = alloc::vec![0u8; output_size];
-        decoder.read_image(&mut native)?;
+        decoder.read_image(&mut native).map_err(|e| at!(e))?;
 
         if !decoder.has_alpha() {
             Ok((native, w, h))
@@ -451,7 +455,7 @@ impl<'a> DecodeRequest<'a> {
             // Strip alpha from RGBA
             let pixel_count = (w as usize) * (h as usize);
             let mut rgb = alloc::vec![0u8; pixel_count * 3];
-            garb::bytes::rgba_to_rgb(&native, &mut rgb).map_err(garb_err)?;
+            garb::bytes::rgba_to_rgb(&native, &mut rgb).map_err(|e| at!(garb_err(e)))?;
             Ok((rgb, w, h))
         }
     }
@@ -460,33 +464,34 @@ impl<'a> DecodeRequest<'a> {
     ///
     /// If [`stride`](Self::stride) is set, rows are written with that pixel stride.
     /// Otherwise rows are packed (stride == width).
-    pub fn decode_rgba_into(self, output: &mut [u8]) -> Result<(u32, u32), DecodeError> {
-        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())?;
+    pub fn decode_rgba_into(self, output: &mut [u8]) -> DecodeResult<(u32, u32)> {
+        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())
+            .map_err(|e| at!(e))?;
         decoder.set_limits(self.config.limits.clone());
         decoder.set_stop(self.stop);
         let (w, h) = decoder.dimensions();
 
         if let Some(stride_px) = self.stride_pixels {
             if stride_px < w {
-                return Err(DecodeError::InvalidParameter(format!(
+                return Err(at!(DecodeError::InvalidParameter(format!(
                     "stride_pixels {} < width {}",
                     stride_px, w
-                )));
+                ))));
             }
             let dst_stride = stride_px as usize * 4;
             let required = dst_stride * h as usize;
             if output.len() < required {
-                return Err(DecodeError::InvalidParameter(format!(
+                return Err(at!(DecodeError::InvalidParameter(format!(
                     "output buffer too small: got {}, need {}",
                     output.len(),
                     required
-                )));
+                ))));
             }
             let buf_size = decoder
                 .output_buffer_size()
-                .ok_or(DecodeError::ImageTooLarge)?;
+                .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
             let mut temp = alloc::vec![0u8; buf_size];
-            decoder.read_image(&mut temp)?;
+            decoder.read_image(&mut temp).map_err(|e| at!(e))?;
 
             if decoder.has_alpha() {
                 let src_stride = w as usize * 4;
@@ -503,10 +508,10 @@ impl<'a> DecodeRequest<'a> {
                     w as usize * 3,
                     dst_stride,
                 )
-                .map_err(garb_err)?;
+                .map_err(|e| at!(garb_err(e)))?;
             }
         } else {
-            decoder.read_image(output)?;
+            decoder.read_image(output).map_err(|e| at!(e))?;
         }
         Ok((w, h))
     }
@@ -515,8 +520,9 @@ impl<'a> DecodeRequest<'a> {
     ///
     /// If [`stride`](Self::stride) is set, rows are written with that pixel stride.
     /// Otherwise rows are packed (stride == width).
-    pub fn decode_rgb_into(self, output: &mut [u8]) -> Result<(u32, u32), DecodeError> {
-        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())?;
+    pub fn decode_rgb_into(self, output: &mut [u8]) -> DecodeResult<(u32, u32)> {
+        let mut decoder = WebPDecoder::new_with_options(self.data, self.config.to_options())
+            .map_err(|e| at!(e))?;
         decoder.set_limits(self.config.limits.clone());
         decoder.set_stop(self.stop);
         let (w, h) = decoder.dimensions();
@@ -525,20 +531,20 @@ impl<'a> DecodeRequest<'a> {
 
         let stride_px = self.stride_pixels.unwrap_or(w) as usize;
         if stride_px < wu {
-            return Err(DecodeError::InvalidParameter(alloc::format!(
+            return Err(at!(DecodeError::InvalidParameter(alloc::format!(
                 "stride_pixels {} < width {}",
                 stride_px,
                 w
-            )));
+            ))));
         }
         let dst_stride = stride_px * 3;
         let required = dst_stride * hu;
         if output.len() < required {
-            return Err(DecodeError::InvalidParameter(alloc::format!(
+            return Err(at!(DecodeError::InvalidParameter(alloc::format!(
                 "output buffer too small: got {}, need {}",
                 output.len(),
                 required
-            )));
+            ))));
         }
 
         let no_stride = self.stride_pixels.is_none() || stride_px == wu;
@@ -546,19 +552,21 @@ impl<'a> DecodeRequest<'a> {
             // No stride padding and native format is RGB — decode directly into output.
             let buf_size = decoder
                 .output_buffer_size()
-                .ok_or(DecodeError::ImageTooLarge)?;
-            decoder.read_image(&mut output[..buf_size])?;
+                .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
+            decoder
+                .read_image(&mut output[..buf_size])
+                .map_err(|e| at!(e))?;
         } else {
             // Need temp buffer — either for RGBA→RGB conversion or stride scatter
             let buf_size = decoder
                 .output_buffer_size()
-                .ok_or(DecodeError::ImageTooLarge)?;
+                .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
             let mut temp = alloc::vec![0u8; buf_size];
-            decoder.read_image(&mut temp)?;
+            decoder.read_image(&mut temp).map_err(|e| at!(e))?;
 
             if decoder.has_alpha() {
                 garb::bytes::rgba_to_rgb_strided(&temp, output, wu, hu, wu * 4, dst_stride)
-                    .map_err(garb_err)?;
+                    .map_err(|e| at!(garb_err(e)))?;
             } else {
                 // RGB with stride padding — row scatter
                 let src_stride = wu * 3;
@@ -572,12 +580,12 @@ impl<'a> DecodeRequest<'a> {
     }
 
     /// Read image info without decoding pixel data.
-    pub fn info(self) -> Result<ImageInfo, DecodeError> {
+    pub fn info(self) -> DecodeResult<ImageInfo> {
         ImageInfo::from_webp(self.data)
     }
 
     /// Decode to YUV 4:2:0 planes (lossy only).
-    pub fn decode_yuv420(self) -> Result<YuvPlanes, DecodeError> {
+    pub fn decode_yuv420(self) -> DecodeResult<YuvPlanes> {
         decode_yuv420(self.data)
     }
 }
@@ -1399,23 +1407,24 @@ pub(crate) fn read_chunk_header(
 /// ```rust,no_run
 /// let webp_data: &[u8] = &[]; // your WebP data
 /// let (pixels, width, height) = zenwebp::decode_rgba(webp_data)?;
-/// # Ok::<(), zenwebp::DecodeError>(())
+/// # Ok::<(), whereat::At<zenwebp::DecodeError>>(())
 /// ```
-pub fn decode_rgba(data: &[u8]) -> Result<(Vec<u8>, u32, u32), DecodeError> {
-    let mut decoder = WebPDecoder::new(data)?;
+#[track_caller]
+pub fn decode_rgba(data: &[u8]) -> DecodeResult<(Vec<u8>, u32, u32)> {
+    let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
     let (width, height) = decoder.dimensions();
     let output_size = decoder
         .output_buffer_size()
-        .ok_or(DecodeError::ImageTooLarge)?;
+        .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
 
     // Get output in native format (RGB or RGBA)
     let mut output = vec![0u8; output_size];
-    decoder.read_image(&mut output)?;
+    decoder.read_image(&mut output).map_err(|e| at!(e))?;
 
     // If the decoder outputs RGB, convert to RGBA
     if !decoder.has_alpha() {
         let mut rgba = vec![0u8; (width * height * 4) as usize];
-        garb::bytes::rgb_to_rgba(&output, &mut rgba).map_err(garb_err)?;
+        garb::bytes::rgb_to_rgba(&output, &mut rgba).map_err(|e| at!(garb_err(e)))?;
         return Ok((rgba, width, height));
     }
 
@@ -1431,22 +1440,23 @@ pub fn decode_rgba(data: &[u8]) -> Result<(Vec<u8>, u32, u32), DecodeError> {
 /// ```rust,no_run
 /// let webp_data: &[u8] = &[]; // your WebP data
 /// let (pixels, width, height) = zenwebp::decode_rgb(webp_data)?;
-/// # Ok::<(), zenwebp::DecodeError>(())
+/// # Ok::<(), whereat::At<zenwebp::DecodeError>>(())
 /// ```
-pub fn decode_rgb(data: &[u8]) -> Result<(Vec<u8>, u32, u32), DecodeError> {
-    let mut decoder = WebPDecoder::new(data)?;
+#[track_caller]
+pub fn decode_rgb(data: &[u8]) -> DecodeResult<(Vec<u8>, u32, u32)> {
+    let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
     let (width, height) = decoder.dimensions();
     let output_size = decoder
         .output_buffer_size()
-        .ok_or(DecodeError::ImageTooLarge)?;
+        .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
 
     let mut output = vec![0u8; output_size];
-    decoder.read_image(&mut output)?;
+    decoder.read_image(&mut output).map_err(|e| at!(e))?;
 
     // If the decoder outputs RGBA, convert to RGB
     if decoder.has_alpha() {
         let mut rgb = vec![0u8; (width * height * 3) as usize];
-        garb::bytes::rgba_to_rgb(&output, &mut rgb).map_err(garb_err)?;
+        garb::bytes::rgba_to_rgb(&output, &mut rgb).map_err(|e| at!(garb_err(e)))?;
         return Ok((rgb, width, height));
     }
 
@@ -1462,38 +1472,39 @@ pub fn decode_rgb(data: &[u8]) -> Result<(Vec<u8>, u32, u32), DecodeError> {
 ///
 /// # Returns
 /// Width and height of the decoded image.
+#[track_caller]
 pub fn decode_rgba_into(
     data: &[u8],
     output: &mut [u8],
     stride_pixels: u32,
-) -> Result<(u32, u32), DecodeError> {
-    let mut decoder = WebPDecoder::new(data)?;
+) -> DecodeResult<(u32, u32)> {
+    let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
     let (width, height) = decoder.dimensions();
     let w = width as usize;
     let h = height as usize;
 
     if stride_pixels < width {
-        return Err(DecodeError::InvalidParameter(format!(
+        return Err(at!(DecodeError::InvalidParameter(format!(
             "stride_pixels {} < width {}",
             stride_pixels, width
-        )));
+        ))));
     }
 
     let dst_stride = stride_pixels as usize * 4;
     let required = dst_stride * h;
     if output.len() < required {
-        return Err(DecodeError::InvalidParameter(format!(
+        return Err(at!(DecodeError::InvalidParameter(format!(
             "output buffer too small: got {}, need {}",
             output.len(),
             required
-        )));
+        ))));
     }
 
     let output_size = decoder
         .output_buffer_size()
-        .ok_or(DecodeError::ImageTooLarge)?;
+        .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
     let mut temp = vec![0u8; output_size];
-    decoder.read_image(&mut temp)?;
+    decoder.read_image(&mut temp).map_err(|e| at!(e))?;
 
     if decoder.has_alpha() {
         let src_stride = w * 4;
@@ -1506,7 +1517,7 @@ pub fn decode_rgba_into(
         }
     } else {
         garb::bytes::rgb_to_rgba_strided(&temp, output, w, h, w * 3, dst_stride)
-            .map_err(garb_err)?;
+            .map_err(|e| at!(garb_err(e)))?;
     }
 
     Ok((width, height))
@@ -1521,42 +1532,43 @@ pub fn decode_rgba_into(
 ///
 /// # Returns
 /// Width and height of the decoded image.
+#[track_caller]
 pub fn decode_rgb_into(
     data: &[u8],
     output: &mut [u8],
     stride_pixels: u32,
-) -> Result<(u32, u32), DecodeError> {
-    let mut decoder = WebPDecoder::new(data)?;
+) -> DecodeResult<(u32, u32)> {
+    let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
     let (width, height) = decoder.dimensions();
     let w = width as usize;
     let h = height as usize;
 
     if stride_pixels < width {
-        return Err(DecodeError::InvalidParameter(format!(
+        return Err(at!(DecodeError::InvalidParameter(format!(
             "stride_pixels {} < width {}",
             stride_pixels, width
-        )));
+        ))));
     }
 
     let dst_stride = stride_pixels as usize * 3;
     let required = dst_stride * h;
     if output.len() < required {
-        return Err(DecodeError::InvalidParameter(format!(
+        return Err(at!(DecodeError::InvalidParameter(format!(
             "output buffer too small: got {}, need {}",
             output.len(),
             required
-        )));
+        ))));
     }
 
     let output_size = decoder
         .output_buffer_size()
-        .ok_or(DecodeError::ImageTooLarge)?;
+        .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
     let mut temp = vec![0u8; output_size];
-    decoder.read_image(&mut temp)?;
+    decoder.read_image(&mut temp).map_err(|e| at!(e))?;
 
     if decoder.has_alpha() {
         garb::bytes::rgba_to_rgb_strided(&temp, output, w, h, w * 4, dst_stride)
-            .map_err(garb_err)?;
+            .map_err(|e| at!(garb_err(e)))?;
     } else {
         let src_stride = w * 3;
         if src_stride == dst_stride {
@@ -1617,9 +1629,10 @@ impl ImageInfo {
     /// let webp_data: &[u8] = &[]; // your WebP data
     /// let info = ImageInfo::from_bytes(webp_data)?;
     /// println!("{}x{}, alpha={}", info.width, info.height, info.has_alpha);
-    /// # Ok::<(), zenwebp::DecodeError>(())
+    /// # Ok::<(), whereat::At<zenwebp::DecodeError>>(())
     /// ```
-    pub fn from_bytes(data: &[u8]) -> Result<Self, DecodeError> {
+    #[track_caller]
+    pub fn from_bytes(data: &[u8]) -> DecodeResult<Self> {
         Self::from_webp(data)
     }
 
@@ -1628,8 +1641,9 @@ impl ImageInfo {
     /// Extracts dimensions, format info, and metadata (ICC, EXIF, XMP) in a single
     /// pass. This replaces the need to use both [`WebPDecoder`] and
     /// [`WebPDemuxer`](crate::WebPDemuxer) for probing.
-    pub fn from_webp(data: &[u8]) -> Result<Self, DecodeError> {
-        let mut decoder = WebPDecoder::new(data)?;
+    #[track_caller]
+    pub fn from_webp(data: &[u8]) -> DecodeResult<Self> {
+        let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
         let (width, height) = decoder.dimensions();
         let is_lossy = decoder.is_lossy();
         let is_animated = decoder.is_animated();
@@ -1715,23 +1729,22 @@ pub struct YuvPlanes {
 /// Decode WebP data to BGRA pixels (blue, green, red, alpha order).
 ///
 /// Returns the decoded pixels and dimensions.
-pub fn decode_bgra(data: &[u8]) -> Result<(Vec<u8>, u32, u32), DecodeError> {
-    let mut decoder = WebPDecoder::new(data)?;
+#[track_caller]
+pub fn decode_bgra(data: &[u8]) -> DecodeResult<(Vec<u8>, u32, u32)> {
+    let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
     let (width, height) = decoder.dimensions();
     let output_size = decoder
         .output_buffer_size()
-        .ok_or(DecodeError::ImageTooLarge)?;
+        .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
     let mut native = vec![0u8; output_size];
-    decoder.read_image(&mut native)?;
+    decoder.read_image(&mut native).map_err(|e| at!(e))?;
 
     if decoder.has_alpha() {
-        // RGBA → BGRA in-place
-        garb::bytes::rgba_to_bgra_inplace(&mut native).map_err(garb_err)?;
+        garb::bytes::rgba_to_bgra_inplace(&mut native).map_err(|e| at!(garb_err(e)))?;
         Ok((native, width, height))
     } else {
-        // RGB → BGRA (adds alpha=255, swaps R↔B in one pass)
         let mut bgra = vec![0u8; (width * height * 4) as usize];
-        garb::bytes::rgb_to_bgra(&native, &mut bgra).map_err(garb_err)?;
+        garb::bytes::rgb_to_bgra(&native, &mut bgra).map_err(|e| at!(garb_err(e)))?;
         Ok((bgra, width, height))
     }
 }
@@ -1739,23 +1752,22 @@ pub fn decode_bgra(data: &[u8]) -> Result<(Vec<u8>, u32, u32), DecodeError> {
 /// Decode WebP data to BGR pixels (blue, green, red order, no alpha).
 ///
 /// Returns the decoded pixels and dimensions.
-pub fn decode_bgr(data: &[u8]) -> Result<(Vec<u8>, u32, u32), DecodeError> {
-    let mut decoder = WebPDecoder::new(data)?;
+#[track_caller]
+pub fn decode_bgr(data: &[u8]) -> DecodeResult<(Vec<u8>, u32, u32)> {
+    let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
     let (width, height) = decoder.dimensions();
     let output_size = decoder
         .output_buffer_size()
-        .ok_or(DecodeError::ImageTooLarge)?;
+        .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
     let mut native = vec![0u8; output_size];
-    decoder.read_image(&mut native)?;
+    decoder.read_image(&mut native).map_err(|e| at!(e))?;
 
     if decoder.has_alpha() {
-        // RGBA → BGR (drop alpha + swap R↔B)
         let mut bgr = vec![0u8; (width * height * 3) as usize];
-        garb::bytes::rgba_to_bgr(&native, &mut bgr).map_err(garb_err)?;
+        garb::bytes::rgba_to_bgr(&native, &mut bgr).map_err(|e| at!(garb_err(e)))?;
         Ok((bgr, width, height))
     } else {
-        // RGB → BGR in-place
-        garb::bytes::rgb_to_bgr_inplace(&mut native).map_err(garb_err)?;
+        garb::bytes::rgb_to_bgr_inplace(&mut native).map_err(|e| at!(garb_err(e)))?;
         Ok((native, width, height))
     }
 }
@@ -1771,46 +1783,45 @@ pub fn decode_bgr(data: &[u8]) -> Result<(Vec<u8>, u32, u32), DecodeError> {
 ///
 /// # Returns
 /// Width and height of the decoded image.
+#[track_caller]
 pub fn decode_bgra_into(
     data: &[u8],
     output: &mut [u8],
     stride_pixels: u32,
-) -> Result<(u32, u32), DecodeError> {
-    let mut decoder = WebPDecoder::new(data)?;
+) -> DecodeResult<(u32, u32)> {
+    let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
     let (width, height) = decoder.dimensions();
     let w = width as usize;
     let h = height as usize;
 
     if stride_pixels < width {
-        return Err(DecodeError::InvalidParameter(format!(
+        return Err(at!(DecodeError::InvalidParameter(format!(
             "stride_pixels {} < width {}",
             stride_pixels, width
-        )));
+        ))));
     }
     let dst_stride = stride_pixels as usize * 4;
     let required = dst_stride * h;
     if output.len() < required {
-        return Err(DecodeError::InvalidParameter(format!(
+        return Err(at!(DecodeError::InvalidParameter(format!(
             "output buffer too small: got {}, need {}",
             output.len(),
             required
-        )));
+        ))));
     }
 
     let output_size = decoder
         .output_buffer_size()
-        .ok_or(DecodeError::ImageTooLarge)?;
+        .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
     let mut temp = vec![0u8; output_size];
-    decoder.read_image(&mut temp)?;
+    decoder.read_image(&mut temp).map_err(|e| at!(e))?;
 
     if decoder.has_alpha() {
-        // RGBA → BGRA with stride (swap R↔B + scatter in one pass)
         garb::bytes::rgba_to_bgra_strided(&temp, output, w, h, w * 4, dst_stride)
-            .map_err(garb_err)?;
+            .map_err(|e| at!(garb_err(e)))?;
     } else {
-        // RGB → BGRA with stride (add alpha=255 + swap R↔B in one pass)
         garb::bytes::rgb_to_bgra_strided(&temp, output, w, h, w * 3, dst_stride)
-            .map_err(garb_err)?;
+            .map_err(|e| at!(garb_err(e)))?;
     }
 
     Ok((width, height))
@@ -1825,46 +1836,45 @@ pub fn decode_bgra_into(
 ///
 /// # Returns
 /// Width and height of the decoded image.
+#[track_caller]
 pub fn decode_bgr_into(
     data: &[u8],
     output: &mut [u8],
     stride_pixels: u32,
-) -> Result<(u32, u32), DecodeError> {
-    let mut decoder = WebPDecoder::new(data)?;
+) -> DecodeResult<(u32, u32)> {
+    let mut decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
     let (width, height) = decoder.dimensions();
     let w = width as usize;
     let h = height as usize;
 
     if stride_pixels < width {
-        return Err(DecodeError::InvalidParameter(format!(
+        return Err(at!(DecodeError::InvalidParameter(format!(
             "stride_pixels {} < width {}",
             stride_pixels, width
-        )));
+        ))));
     }
     let dst_stride = stride_pixels as usize * 3;
     let required = dst_stride * h;
     if output.len() < required {
-        return Err(DecodeError::InvalidParameter(format!(
+        return Err(at!(DecodeError::InvalidParameter(format!(
             "output buffer too small: got {}, need {}",
             output.len(),
             required
-        )));
+        ))));
     }
 
     let output_size = decoder
         .output_buffer_size()
-        .ok_or(DecodeError::ImageTooLarge)?;
+        .ok_or_else(|| at!(DecodeError::ImageTooLarge))?;
     let mut temp = vec![0u8; output_size];
-    decoder.read_image(&mut temp)?;
+    decoder.read_image(&mut temp).map_err(|e| at!(e))?;
 
     if decoder.has_alpha() {
-        // RGBA → BGR with stride (drop alpha + swap R↔B in one pass)
         garb::bytes::rgba_to_bgr_strided(&temp, output, w, h, w * 4, dst_stride)
-            .map_err(garb_err)?;
+            .map_err(|e| at!(garb_err(e)))?;
     } else {
-        // RGB → BGR with stride (swap R↔B in one pass)
         garb::bytes::rgb_to_bgr_strided(&temp, output, w, h, w * 3, dst_stride)
-            .map_err(garb_err)?;
+            .map_err(|e| at!(garb_err(e)))?;
     }
 
     Ok((width, height))
@@ -1877,14 +1887,15 @@ pub fn decode_bgr_into(
 ///
 /// # Returns
 /// [`YuvPlanes`] containing separate Y, U, and V buffers.
-pub fn decode_yuv420(data: &[u8]) -> Result<YuvPlanes, DecodeError> {
-    let decoder = WebPDecoder::new(data)?;
+#[track_caller]
+pub fn decode_yuv420(data: &[u8]) -> DecodeResult<YuvPlanes> {
+    let decoder = WebPDecoder::new(data).map_err(|e| at!(e))?;
 
     if decoder.is_lossy() && !decoder.is_animated() {
         // For lossy images, extract the native YUV planes from the VP8 frame
         if let Some(range) = decoder.chunks.get(&WebPRiffChunk::VP8) {
             let data_slice = &decoder.r.get_ref()[range.start as usize..range.end as usize];
-            let frame = Vp8Decoder::decode_frame(data_slice)?;
+            let frame = Vp8Decoder::decode_frame(data_slice).map_err(|e| at!(e))?;
 
             let w = u32::from(frame.width);
             let h = u32::from(frame.height);

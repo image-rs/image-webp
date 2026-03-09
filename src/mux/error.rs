@@ -6,6 +6,9 @@ use thiserror::Error;
 use crate::decoder::DecodeError;
 use crate::encoder::EncodeError;
 
+/// Result type alias using `At<MuxError>` for automatic location tracking.
+pub type MuxResult<T> = core::result::Result<T, whereat::At<MuxError>>;
+
 /// Errors that can occur during mux/demux operations.
 #[derive(Debug, Error)]
 #[non_exhaustive]

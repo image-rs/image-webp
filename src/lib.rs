@@ -39,7 +39,7 @@
 //! let rgba_data = vec![255u8; 4 * 4 * 4];
 //! let webp = EncodeRequest::lossy(&config, &rgba_data, PixelLayout::Rgba8, 4, 4)
 //!     .encode()?;
-//! # Ok::<(), zenwebp::EncodeError>(())
+//! # Ok::<(), whereat::At<zenwebp::EncodeError>>(())
 //! ```
 //!
 //! # Decoding
@@ -49,7 +49,7 @@
 //! ```rust,no_run
 //! let webp_data: &[u8] = &[]; // your WebP data
 //! let (pixels, width, height) = zenwebp::decode_rgba(webp_data)?;
-//! # Ok::<(), zenwebp::DecodeError>(())
+//! # Ok::<(), whereat::At<zenwebp::DecodeError>>(())
 //! ```
 //!
 //! Or [`WebPDecoder`] for two-phase decoding (inspect headers before allocating):
@@ -86,6 +86,8 @@
 #![cfg_attr(all(test, feature = "_benchmarks"), feature(test))]
 
 extern crate alloc;
+
+whereat::define_at_crate_info!();
 
 #[cfg(all(test, feature = "_benchmarks"))]
 extern crate test;
@@ -158,7 +160,7 @@ pub use encoder::{
 // Re-export mux/demux public API
 pub use mux::{
     AnimFrame, AnimationConfig, AnimationDecoder, AnimationEncoder, AnimationInfo, BlendMethod,
-    DemuxFrame, DisposeMethod, MuxError, MuxFrame, WebPDemuxer, WebPMux,
+    DemuxFrame, DisposeMethod, MuxError, MuxFrame, MuxResult, WebPDemuxer, WebPMux,
 };
 
 // Re-export cooperative cancellation types
