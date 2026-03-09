@@ -558,10 +558,12 @@ fn pixels_to_webp_input<'a>(
     let w = pixels.width();
     let h = pixels.rows();
 
+    let stride_pixels = pixels.stride() / desc.bytes_per_pixel();
+
     if desc == PixelDescriptor::RGB8_SRGB {
-        Ok((pixels.contiguous_bytes(), PixelLayout::Rgb8, w, h, w as usize))
+        Ok((Cow::Borrowed(pixels.as_strided_bytes()), PixelLayout::Rgb8, w, h, stride_pixels))
     } else if desc == PixelDescriptor::RGBA8_SRGB {
-        Ok((pixels.contiguous_bytes(), PixelLayout::Rgba8, w, h, w as usize))
+        Ok((Cow::Borrowed(pixels.as_strided_bytes()), PixelLayout::Rgba8, w, h, stride_pixels))
     } else if desc == PixelDescriptor::BGRA8_SRGB {
         let raw = pixels.contiguous_bytes();
         let mut rgba = alloc::vec![0u8; raw.len()];
