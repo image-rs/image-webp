@@ -696,12 +696,12 @@ fn quality_vs_source() {
         let wpx_img = RgbaSlice::new(wpx_px, W as usize, H as usize);
         let wpx_result = z.compute(&src_img, &wpx_img).expect("zensim failed");
 
-        let gap = wpx_result.score - zen_result.score;
+        let gap = wpx_result.score() - zen_result.score();
         max_gap = max_gap.max(gap);
 
         println!(
             "  {name}: zen={:.1} wpx={:.1} gap={gap:.1}",
-            zen_result.score, wpx_result.score
+            zen_result.score(), wpx_result.score()
         );
     }
 

@@ -520,6 +520,7 @@ impl<'a> WebpEncoder<'a> {
         layout: PixelLayout,
         w: u32,
         h: u32,
+        stride_pixels: usize,
     ) -> Result<EncodeOutput, EncodeError> {
         self.limits
             .check_dimensions(w, h)
@@ -530,7 +531,8 @@ impl<'a> WebpEncoder<'a> {
             .check_memory(estimated_mem)
             .map_err(|e| EncodeError::LimitExceeded(alloc::format!("{e}")))?;
 
-        let mut req = EncodeRequest::new(&self.inner_config, pixels, layout, w, h);
+        let mut req = EncodeRequest::new(&self.inner_config, pixels, layout, w, h)
+            .with_stride(stride_pixels);
         if let Some(stop) = self.stop {
             req = req.with_stop(stop);
         }
@@ -543,9 +545,13 @@ impl<'a> WebpEncoder<'a> {
 }
 
 /// Convert a type-erased PixelSlice to raw bytes + PixelLayout for the native WebP API.
+///
+/// Returns `(bytes, layout, width, height, stride_pixels)`.
+/// For passthrough formats (RGB8, RGBA8), bytes may be borrowed zero-copy.
+/// For converted formats, bytes are always owned and contiguous (stride = width).
 fn pixels_to_webp_input<'a>(
     pixels: &'a PixelSlice<'a>,
-) -> Result<(alloc::borrow::Cow<'a, [u8]>, PixelLayout, u32, u32), EncodeError> {
+) -> Result<(alloc::borrow::Cow<'a, [u8]>, PixelLayout, u32, u32, usize), EncodeError> {
     use alloc::borrow::Cow;
 
     let desc = pixels.descriptor();
@@ -553,31 +559,31 @@ fn pixels_to_webp_input<'a>(
     let h = pixels.rows();
 
     if desc == PixelDescriptor::RGB8_SRGB {
-        Ok((pixels.contiguous_bytes(), PixelLayout::Rgb8, w, h))
+        Ok((pixels.contiguous_bytes(), PixelLayout::Rgb8, w, h, w as usize))
     } else if desc == PixelDescriptor::RGBA8_SRGB {
-        Ok((pixels.contiguous_bytes(), PixelLayout::Rgba8, w, h))
+        Ok((pixels.contiguous_bytes(), PixelLayout::Rgba8, w, h, w as usize))
     } else if desc == PixelDescriptor::BGRA8_SRGB {
         let raw = pixels.contiguous_bytes();
         let mut rgba = alloc::vec![0u8; raw.len()];
         garb::bytes::bgra_to_rgba(&raw, &mut rgba)
             .map_err(|e| EncodeError::InvalidBufferSize(alloc::format!("pixel conversion: {e}")))?;
-        Ok((Cow::Owned(rgba), PixelLayout::Rgba8, w, h))
+        Ok((Cow::Owned(rgba), PixelLayout::Rgba8, w, h, w as usize))
     } else if desc == PixelDescriptor::GRAY8_SRGB {
         let raw = pixels.contiguous_bytes();
         let rgb: Vec<u8> = raw.iter().flat_map(|&g| [g, g, g]).collect();
-        Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h))
+        Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h, w as usize))
     } else if desc == PixelDescriptor::RGBF32_LINEAR {
         let raw = pixels.contiguous_bytes();
         let floats: &[f32] = bytemuck::cast_slice(&raw);
         let mut rgb = alloc::vec![0u8; floats.len()];
         linear_srgb::default::linear_to_srgb_u8_slice(floats, &mut rgb);
-        Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h))
+        Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h, w as usize))
     } else if desc == PixelDescriptor::RGBAF32_LINEAR {
         let raw = pixels.contiguous_bytes();
         let floats: &[f32] = bytemuck::cast_slice(&raw);
         let mut rgba = alloc::vec![0u8; floats.len()];
         linear_srgb::default::linear_to_srgb_u8_rgba_slice(floats, &mut rgba);
-        Ok((Cow::Owned(rgba), PixelLayout::Rgba8, w, h))
+        Ok((Cow::Owned(rgba), PixelLayout::Rgba8, w, h, w as usize))
     } else if desc == PixelDescriptor::GRAYF32_LINEAR {
         let raw = pixels.contiguous_bytes();
         let floats: &[f32] = bytemuck::cast_slice(&raw);
@@ -590,7 +596,7 @@ fn pixels_to_webp_input<'a>(
             rgb[i * 3 + 1] = g;
             rgb[i * 3 + 2] = g;
         }
-        Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h))
+        Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h, w as usize))
     } else {
         Err(EncodeError::InvalidBufferSize(alloc::format!(
             "unsupported pixel format for WebP encode: {:?}",
@@ -678,8 +684,8 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
     }
 
     fn encode(self, pixels: PixelSlice<'_>) -> Result<EncodeOutput, At<EncodeError>> {
-        let (buf, layout, w, h) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
-        self.do_encode(&buf, layout, w, h).map_err(whereat::at)
+        let (buf, layout, w, h, stride) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
+        self.do_encode(&buf, layout, w, h, stride).map_err(whereat::at)
     }
 
     fn push_rows(&mut self, rows: PixelSlice<'_>) -> Result<(), At<EncodeError>> {
@@ -716,7 +722,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 });
             } else {
                 // Generic path: convert per-strip, accumulate bytes
-                let (_, layout, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                let (_, layout, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
                 let (cw, ch) = self.canvas_size.unwrap_or((strip_w, 0));
                 let bpp = layout.bytes_per_pixel();
                 let cap = cw as usize * ch as usize * bpp;
@@ -732,7 +738,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                     pixels, total_rows, ..
                 } = stream
                 {
-                    let (buf, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                    let (buf, _, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
                     pixels.extend_from_slice(&buf);
                     *total_rows += strip_h;
                 }
@@ -784,7 +790,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
             StreamAccum::Raw {
                 pixels, total_rows, ..
             } => {
-                let (buf, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
+                let (buf, _, _, _, _) = pixels_to_webp_input(&rows).map_err(whereat::at)?;
                 pixels.extend_from_slice(&buf);
                 *total_rows += strip_h;
             }
@@ -825,7 +831,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 yuv_buf.append(&mut u_plane);
                 yuv_buf.append(&mut v_plane);
 
-                self.do_encode(&yuv_buf, PixelLayout::Yuv420, width, total_rows)
+                self.do_encode(&yuv_buf, PixelLayout::Yuv420, width, total_rows, width as usize)
                     .map_err(whereat::at)
             }
             StreamAccum::Raw {
@@ -834,7 +840,7 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 width,
                 total_rows,
             } => self
-                .do_encode(&pixels, layout, width, total_rows)
+                .do_encode(&pixels, layout, width, total_rows, width as usize)
                 .map_err(whereat::at),
         }
     }
@@ -896,7 +902,7 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
         if let Some(s) = stop {
             s.check().map_err(|e| whereat::at(EncodeError::from(e)))?;
         }
-        let (buf, layout, w, h) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
+        let (buf, layout, w, h, _stride) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
         self.ensure_encoder(w, h)?;
         let timestamp_ms = self.cumulative_ms;
         let enc = self.anim_enc.as_mut().unwrap();
