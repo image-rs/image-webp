@@ -33,13 +33,13 @@ linear-srgb = "0.6"
 yuv = { version = "0.8", optional = true }
 png = { version = "0.18", optional = true }
 webp = { version = "0.3.0", optional = true }
-archmage = { version = "0.9.2", optional = true, features = ["macros"] }
-magetypes = { version = "0.9", optional = true }
+archmage = { version = "0.9.4", optional = true, features = ["macros"] }
+magetypes = { version = "0.9.4", optional = true }
 rgb = { version = "0.8", optional = true, default-features = false, features = ["as-bytes"] }
 imgref = { version = "1.12", optional = true, default-features = false }
 
 [dev-dependencies]
-archmage = { version = "0.9.2", features = ["std", "macros"] }
+archmage = { version = "0.9.4", features = ["std", "macros"] }
 paste = "1.0.14"
 png = "0.18"
 rand = "0.8.5"
