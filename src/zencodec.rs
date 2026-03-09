@@ -471,6 +471,7 @@ impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
             inner_config,
             anim_enc: None,
             cumulative_ms: 0,
+            last_frame_duration_ms: 100,
             canvas_size: self.canvas_size,
             loop_count,
         })
@@ -531,8 +532,8 @@ impl<'a> WebpEncoder<'a> {
             .check_memory(estimated_mem)
             .map_err(|e| EncodeError::LimitExceeded(alloc::format!("{e}")))?;
 
-        let mut req = EncodeRequest::new(&self.inner_config, pixels, layout, w, h)
-            .with_stride(stride_pixels);
+        let mut req =
+            EncodeRequest::new(&self.inner_config, pixels, layout, w, h).with_stride(stride_pixels);
         if let Some(stop) = self.stop {
             req = req.with_stop(stop);
         }
@@ -561,9 +562,21 @@ fn pixels_to_webp_input<'a>(
     let stride_pixels = pixels.stride() / desc.bytes_per_pixel();
 
     if desc == PixelDescriptor::RGB8_SRGB {
-        Ok((Cow::Borrowed(pixels.as_strided_bytes()), PixelLayout::Rgb8, w, h, stride_pixels))
+        Ok((
+            Cow::Borrowed(pixels.as_strided_bytes()),
+            PixelLayout::Rgb8,
+            w,
+            h,
+            stride_pixels,
+        ))
     } else if desc == PixelDescriptor::RGBA8_SRGB {
-        Ok((Cow::Borrowed(pixels.as_strided_bytes()), PixelLayout::Rgba8, w, h, stride_pixels))
+        Ok((
+            Cow::Borrowed(pixels.as_strided_bytes()),
+            PixelLayout::Rgba8,
+            w,
+            h,
+            stride_pixels,
+        ))
     } else if desc == PixelDescriptor::BGRA8_SRGB {
         let raw = pixels.contiguous_bytes();
         let mut rgba = alloc::vec![0u8; raw.len()];
@@ -687,7 +700,8 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
 
     fn encode(self, pixels: PixelSlice<'_>) -> Result<EncodeOutput, At<EncodeError>> {
         let (buf, layout, w, h, stride) = pixels_to_webp_input(&pixels).map_err(whereat::at)?;
-        self.do_encode(&buf, layout, w, h, stride).map_err(whereat::at)
+        self.do_encode(&buf, layout, w, h, stride)
+            .map_err(whereat::at)
     }
 
     fn push_rows(&mut self, rows: PixelSlice<'_>) -> Result<(), At<EncodeError>> {
@@ -833,8 +847,14 @@ impl zc::encode::Encoder for WebpEncoder<'_> {
                 yuv_buf.append(&mut u_plane);
                 yuv_buf.append(&mut v_plane);
 
-                self.do_encode(&yuv_buf, PixelLayout::Yuv420, width, total_rows, width as usize)
-                    .map_err(whereat::at)
+                self.do_encode(
+                    &yuv_buf,
+                    PixelLayout::Yuv420,
+                    width,
+                    total_rows,
+                    width as usize,
+                )
+                .map_err(whereat::at)
             }
             StreamAccum::Raw {
                 pixels,
@@ -858,6 +878,7 @@ pub struct WebpFullFrameEncoder {
     inner_config: EncoderConfig,
     anim_enc: Option<AnimationEncoder>,
     cumulative_ms: u32,
+    last_frame_duration_ms: u32,
     canvas_size: Option<(u32, u32)>,
     loop_count: crate::LoopCount,
 }
@@ -911,6 +932,7 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
         enc.add_frame(&buf, layout, timestamp_ms, &self.inner_config)
             .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
         self.cumulative_ms = self.cumulative_ms.saturating_add(duration_ms);
+        self.last_frame_duration_ms = duration_ms;
         Ok(())
     }
 
@@ -922,9 +944,8 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
             .anim_enc
             .ok_or_else(|| EncodeError::InvalidBufferSize("no frames added".into()))
             .map_err(whereat::at)?;
-        let last_duration = 100;
         let data = enc
-            .finalize(last_duration)
+            .finalize(self.last_frame_duration_ms)
             .map_err(|e| whereat::at(mux_to_encode_err(e)))?;
         Ok(EncodeOutput::new(data, ImageFormat::WebP))
     }
@@ -1022,7 +1043,8 @@ static DECODE_CAPABILITIES: zc::decode::DecodeCapabilities = zc::decode::DecodeC
     .with_cheap_probe(true)
     .with_native_alpha(true)
     .with_enforces_max_pixels(true)
-    .with_enforces_max_memory(true);
+    .with_enforces_max_memory(true)
+    .with_enforces_max_input_bytes(true);
 
 impl zc::decode::DecoderConfig for WebpDecoderConfig {
     type Error = At<DecodeError>;
@@ -2095,5 +2117,55 @@ mod tests {
     fn streaming_encode_capabilities() {
         let caps = WebpEncoderConfig::capabilities();
         assert!(caps.row_level());
+    }
+
+    #[test]
+    fn last_frame_duration_preserved() {
+        use zc::decode::FullFrameDecoder;
+        use zc::encode::FullFrameEncoder;
+
+        // Encode 3 frames with distinct durations: 200, 50, 300.
+        let enc_config = WebpEncoderConfig::lossy().with_quality(90.0);
+        let mut enc = enc_config.job().full_frame_encoder().unwrap();
+        let frame = make_rgba8_pixels(16, 16);
+        enc.push_frame(frame.as_slice(), 200, None).unwrap();
+        enc.push_frame(frame.as_slice(), 50, None).unwrap();
+        enc.push_frame(frame.as_slice(), 300, None).unwrap();
+        let output = enc.finish(None).unwrap();
+
+        // Decode and verify each frame's duration.
+        let dec_config = WebpDecoderConfig::new();
+        let mut dec = dec_config
+            .job()
+            .full_frame_decoder(Cow::Owned(output.data().to_vec()), &[])
+            .unwrap();
+
+        let f1 = dec.render_next_frame(None).unwrap().expect("frame 1");
+        assert_eq!(
+            f1.duration_ms(),
+            200,
+            "first frame duration should be 200ms"
+        );
+
+        let f2 = dec.render_next_frame(None).unwrap().expect("frame 2");
+        assert_eq!(f2.duration_ms(), 50, "second frame duration should be 50ms");
+
+        let f3 = dec.render_next_frame(None).unwrap().expect("frame 3");
+        assert_eq!(
+            f3.duration_ms(),
+            300,
+            "last frame duration should be 300ms, not hardcoded 100ms"
+        );
+
+        assert!(dec.render_next_frame(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn decode_capabilities_enforces_max_input_bytes() {
+        let caps = WebpDecoderConfig::capabilities();
+        assert!(
+            caps.enforces_max_input_bytes(),
+            "decode capabilities should report enforces_max_input_bytes since effective_input_size_limit is checked"
+        );
     }
 }
