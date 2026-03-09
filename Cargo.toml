@@ -28,7 +28,7 @@ zencodec-types = { path = "../zencodec-types" }
 zenpixels = { path = "../zenpixels/zenpixels", default-features = false, features = ["buffer"], optional = true }
 self_cell = { version = "1.2", optional = true }
 bytemuck = { version = "1", default-features = false, features = ["extern_crate_alloc"] }
-garb = { version = "0.2", default-features = false }
+garb = { version = "0.2.1", default-features = false }
 linear-srgb = "0.6"
 yuv = { version = "0.8", optional = true }
 png = { version = "0.18", optional = true }
