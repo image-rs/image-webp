@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 use whereat::{At, ResultAtExt, at};
 use zc::decode::{DecodeOutput, FullFrame, OutputInfo, OwnedFullFrame, SinkError};
 use zc::encode::EncodeOutput;
-use zc::{ImageFormat, ImageInfo, MetadataView, ResourceLimits, UnsupportedOperation};
+use zc::{ImageFormat, ImageInfo, Metadata, ResourceLimits, UnsupportedOperation};
 use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice};
 
 use crate::encoder::config::EncoderConfig;
@@ -205,11 +205,11 @@ static ENCODE_CAPABILITIES: zc::encode::EncodeCapabilities = zc::encode::EncodeC
     .with_icc(true)
     .with_exif(true)
     .with_xmp(true)
-    .with_cancel(true)
+    .with_stop(true)
     .with_lossy(true)
     .with_lossless(true)
     .with_animation(true)
-    .with_row_level(true)
+    .with_push_rows(true)
     .with_native_alpha(true)
     .with_effort_range(0, 10)
     .with_quality_range(0.0, 100.0)
@@ -352,9 +352,9 @@ impl zc::encode::EncoderConfig for WebpEncoderConfig {
 pub struct WebpEncodeJob<'a> {
     config: &'a WebpEncoderConfig,
     stop: Option<&'a dyn enough::Stop>,
-    icc: Option<&'a [u8]>,
-    exif: Option<&'a [u8]>,
-    xmp: Option<&'a [u8]>,
+    icc: Option<Arc<[u8]>>,
+    exif: Option<Arc<[u8]>>,
+    xmp: Option<Arc<[u8]>>,
     limits: ResourceLimits,
     canvas_size: Option<(u32, u32)>,
     loop_count: Option<Option<u32>>,
@@ -380,16 +380,16 @@ impl<'a> WebpEncodeJob<'a> {
         inner
     }
 
-    fn build_metadata(&self) -> crate::ImageMetadata<'a> {
+    fn build_metadata(&self) -> crate::ImageMetadata<'_> {
         let mut meta = crate::ImageMetadata::new();
-        if let Some(icc) = self.icc {
-            meta = meta.with_icc_profile(icc);
+        if let Some(ref icc) = self.icc {
+            meta = meta.with_icc_profile(icc.as_ref());
         }
-        if let Some(exif) = self.exif {
-            meta = meta.with_exif(exif);
+        if let Some(ref exif) = self.exif {
+            meta = meta.with_exif(exif.as_ref());
         }
-        if let Some(xmp) = self.xmp {
-            meta = meta.with_xmp(xmp);
+        if let Some(ref xmp) = self.xmp {
+            meta = meta.with_xmp(xmp.as_ref());
         }
         meta
     }
@@ -409,15 +409,15 @@ impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
         self
     }
 
-    fn with_metadata(mut self, meta: &'a MetadataView<'a>) -> Self {
-        if let Some(icc) = meta.icc_profile {
-            self.icc = Some(icc);
+    fn with_metadata(mut self, meta: &Metadata) -> Self {
+        if let Some(ref icc) = meta.icc_profile {
+            self.icc = Some(icc.clone());
         }
-        if let Some(exif) = meta.exif {
-            self.exif = Some(exif);
+        if let Some(ref exif) = meta.exif {
+            self.exif = Some(exif.clone());
         }
-        if let Some(xmp) = meta.xmp {
-            self.xmp = Some(xmp);
+        if let Some(ref xmp) = meta.xmp {
+            self.xmp = Some(xmp.clone());
         }
         self
     }
@@ -439,15 +439,12 @@ impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
 
     fn encoder(self) -> Result<WebpEncoder<'a>, At<EncodeError>> {
         let inner_config = self.build_inner_config();
-        let metadata = if self.has_metadata() {
-            Some(self.build_metadata())
-        } else {
-            None
-        };
         Ok(WebpEncoder {
             inner_config,
             stop: self.stop,
-            metadata,
+            icc: self.icc,
+            exif: self.exif,
+            xmp: self.xmp,
             limits: self.limits,
             canvas_size: self.canvas_size,
             stream: None,
@@ -508,7 +505,9 @@ enum StreamAccum {
 pub struct WebpEncoder<'a> {
     inner_config: EncoderConfig,
     stop: Option<&'a dyn enough::Stop>,
-    metadata: Option<crate::ImageMetadata<'a>>,
+    icc: Option<Arc<[u8]>>,
+    exif: Option<Arc<[u8]>>,
+    xmp: Option<Arc<[u8]>>,
     limits: ResourceLimits,
     canvas_size: Option<(u32, u32)>,
     stream: Option<StreamAccum>,
@@ -537,7 +536,17 @@ impl<'a> WebpEncoder<'a> {
         if let Some(stop) = self.stop {
             req = req.with_stop(stop);
         }
-        if let Some(meta) = self.metadata {
+        {
+            let mut meta = crate::ImageMetadata::new();
+            if let Some(ref icc) = self.icc {
+                meta = meta.with_icc_profile(icc.as_ref());
+            }
+            if let Some(ref exif) = self.exif {
+                meta = meta.with_exif(exif.as_ref());
+            }
+            if let Some(ref xmp) = self.xmp {
+                meta = meta.with_xmp(xmp.as_ref());
+            }
             req = req.with_metadata(meta);
         }
         let data = req.encode().map_err(|e| e.into_inner())?;
@@ -1038,7 +1047,7 @@ static DECODE_CAPABILITIES: zc::decode::DecodeCapabilities = zc::decode::DecodeC
     .with_icc(true)
     .with_exif(true)
     .with_xmp(true)
-    .with_cancel(true)
+    .with_stop(true)
     .with_animation(true)
     .with_cheap_probe(true)
     .with_native_alpha(true)
