@@ -29,7 +29,7 @@ zenpixels = { path = "../zenpixels/zenpixels", default-features = false, feature
 self_cell = { version = "1.2", optional = true }
 bytemuck = { version = "1", default-features = false, features = ["extern_crate_alloc"] }
 garb = { version = "0.2.1", default-features = false }
-linear-srgb = "0.6"
+linear-srgb = "0.6.3"
 yuv = { version = "0.8", optional = true }
 png = { version = "0.18", optional = true }
 webp = { version = "0.3.0", optional = true }
