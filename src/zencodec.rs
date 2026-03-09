@@ -567,52 +567,28 @@ fn pixels_to_webp_input<'a>(
         let rgb: Vec<u8> = raw.iter().flat_map(|&g| [g, g, g]).collect();
         Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h))
     } else if desc == PixelDescriptor::RGBF32_LINEAR {
-        use linear_srgb::default::linear_to_srgb_u8;
         let raw = pixels.contiguous_bytes();
-        let rgb: Vec<u8> = raw
-            .chunks_exact(12)
-            .flat_map(|c| {
-                let r = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-                let g = f32::from_le_bytes([c[4], c[5], c[6], c[7]]);
-                let b = f32::from_le_bytes([c[8], c[9], c[10], c[11]]);
-                [
-                    linear_to_srgb_u8(r.clamp(0.0, 1.0)),
-                    linear_to_srgb_u8(g.clamp(0.0, 1.0)),
-                    linear_to_srgb_u8(b.clamp(0.0, 1.0)),
-                ]
-            })
-            .collect();
+        let floats: &[f32] = bytemuck::cast_slice(&raw);
+        let mut rgb = alloc::vec![0u8; floats.len()];
+        linear_srgb::default::linear_to_srgb_u8_slice(floats, &mut rgb);
         Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h))
     } else if desc == PixelDescriptor::RGBAF32_LINEAR {
-        use linear_srgb::default::linear_to_srgb_u8;
         let raw = pixels.contiguous_bytes();
-        let rgba: Vec<u8> = raw
-            .chunks_exact(16)
-            .flat_map(|c| {
-                let r = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-                let g = f32::from_le_bytes([c[4], c[5], c[6], c[7]]);
-                let b = f32::from_le_bytes([c[8], c[9], c[10], c[11]]);
-                let a = f32::from_le_bytes([c[12], c[13], c[14], c[15]]);
-                [
-                    linear_to_srgb_u8(r.clamp(0.0, 1.0)),
-                    linear_to_srgb_u8(g.clamp(0.0, 1.0)),
-                    linear_to_srgb_u8(b.clamp(0.0, 1.0)),
-                    (a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
-                ]
-            })
-            .collect();
+        let floats: &[f32] = bytemuck::cast_slice(&raw);
+        let mut rgba = alloc::vec![0u8; floats.len()];
+        linear_srgb::default::linear_to_srgb_u8_rgba_slice(floats, &mut rgba);
         Ok((Cow::Owned(rgba), PixelLayout::Rgba8, w, h))
     } else if desc == PixelDescriptor::GRAYF32_LINEAR {
-        use linear_srgb::default::linear_to_srgb_u8;
         let raw = pixels.contiguous_bytes();
-        let rgb: Vec<u8> = raw
-            .chunks_exact(4)
-            .flat_map(|c| {
-                let v = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
-                let s = linear_to_srgb_u8(v.clamp(0.0, 1.0));
-                [s, s, s]
-            })
-            .collect();
+        let floats: &[f32] = bytemuck::cast_slice(&raw);
+        let mut gray_u8 = alloc::vec![0u8; floats.len()];
+        linear_srgb::default::linear_to_srgb_u8_slice(floats, &mut gray_u8);
+        let mut rgb = alloc::vec![0u8; floats.len() * 3];
+        for (g, out) in gray_u8.iter().zip(rgb.chunks_exact_mut(3)) {
+            out[0] = *g;
+            out[1] = *g;
+            out[2] = *g;
+        }
         Ok((Cow::Owned(rgb), PixelLayout::Rgb8, w, h))
     } else {
         Err(EncodeError::InvalidBufferSize(alloc::format!(
