@@ -1900,11 +1900,11 @@ mod tests {
         assert!(caps.icc());
         assert!(caps.exif());
         assert!(caps.xmp());
-        assert!(caps.cancel());
+        assert!(caps.stop());
         assert!(caps.lossy());
         assert!(caps.lossless());
         assert!(caps.animation());
-        assert!(caps.row_level());
+        assert!(caps.push_rows());
         assert!(caps.native_alpha());
         assert!(caps.enforces_max_pixels());
         assert!(caps.enforces_max_memory());
@@ -1914,7 +1914,7 @@ mod tests {
         assert!(!caps.cicp());
         assert!(!caps.hdr());
         assert!(!caps.native_16bit());
-        assert!(!caps.pull());
+        assert!(!caps.encode_from());
     }
 
     #[test]
@@ -1923,7 +1923,7 @@ mod tests {
         assert!(caps.icc());
         assert!(caps.exif());
         assert!(caps.xmp());
-        assert!(caps.cancel());
+        assert!(caps.stop());
         assert!(caps.animation());
         assert!(caps.cheap_probe());
         assert!(caps.native_alpha());
@@ -1934,7 +1934,7 @@ mod tests {
         assert!(!caps.hdr());
         assert!(!caps.native_16bit());
         assert!(!caps.decode_into());
-        assert!(!caps.row_level());
+        assert!(!caps.streaming());
     }
 
     #[test]
@@ -2140,7 +2140,7 @@ mod tests {
     #[test]
     fn streaming_encode_capabilities() {
         let caps = WebpEncoderConfig::capabilities();
-        assert!(caps.row_level());
+        assert!(caps.push_rows());
     }
 
     #[test]
