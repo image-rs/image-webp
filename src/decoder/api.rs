@@ -124,6 +124,7 @@ pub enum DecodeError {
     Cancelled(enough::StopReason),
 
     /// Unsupported codec operation.
+    #[cfg(feature = "zencodec")]
     #[error(transparent)]
     UnsupportedOperation(#[from] zencodec::UnsupportedOperation),
 }

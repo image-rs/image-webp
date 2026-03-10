@@ -574,6 +574,7 @@ impl<'a> MiniBoolReader<'a> {
     }
 }
 
+#[cfg(feature = "zencodec")]
 impl zencodec::SourceEncodingDetails for WebPProbe {
     fn source_generic_quality(&self) -> Option<f32> {
         self.estimated_quality()

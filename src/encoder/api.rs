@@ -67,6 +67,7 @@ pub enum EncodeError {
     },
 
     /// Unsupported codec operation.
+    #[cfg(feature = "zencodec")]
     #[error(transparent)]
     UnsupportedOperation(#[from] zencodec::UnsupportedOperation),
 }
