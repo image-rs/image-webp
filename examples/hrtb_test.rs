@@ -1,4 +1,4 @@
-use zc::encode::DynEncoderConfig;
+use zencodec::encode::DynEncoderConfig;
 use zenwebp::WebpEncoderConfig;
 
 fn take_dyn(_: Box<dyn DynEncoderConfig>) {}

@@ -170,9 +170,9 @@ pub use enough::{Stop, StopReason, Unstoppable};
 pub use decoder::vp8;
 
 #[cfg(feature = "zencodec")]
-mod zencodec;
+mod codec;
 #[cfg(feature = "zencodec")]
-pub use zencodec::{
+pub use codec::{
     WebpDecodeJob, WebpDecoder, WebpDecoderConfig, WebpEncodeJob, WebpEncoder, WebpEncoderConfig,
     WebpFullFrameDecoder, WebpFullFrameEncoder,
 };

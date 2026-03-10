@@ -23,9 +23,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use whereat::{At, ResultAtExt, at};
-use zc::decode::{DecodeOutput, FullFrame, OutputInfo, OwnedFullFrame, SinkError};
-use zc::encode::EncodeOutput;
-use zc::{ImageFormat, ImageInfo, Metadata, ResourceLimits, UnsupportedOperation};
+use zencodec::decode::{DecodeOutput, FullFrame, OutputInfo, OwnedFullFrame, SinkError};
+use zencodec::encode::EncodeOutput;
+use zencodec::{ImageFormat, ImageInfo, Metadata, ResourceLimits, UnsupportedOperation};
 use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice};
 
 use crate::encoder::config::EncoderConfig;
@@ -34,7 +34,7 @@ use crate::{DecodeConfig, DecodeError, DecodeRequest, EncodeError, EncodeRequest
 
 // ── Encoding ────────────────────────────────────────────────────────────────
 
-/// WebP encoder configuration implementing [`zc::encode::EncoderConfig`].
+/// WebP encoder configuration implementing [`zencodec::encode::EncoderConfig`].
 ///
 /// Wraps the native [`EncoderConfig`] (lossy/lossless enum) and tracks
 /// universal quality/effort settings for the trait interface.
@@ -42,7 +42,7 @@ use crate::{DecodeConfig, DecodeError, DecodeRequest, EncodeError, EncodeRequest
 /// # Examples
 ///
 /// ```rust,ignore
-/// use zc::encode::EncoderConfig;
+/// use zencodec::encode::EncoderConfig;
 /// use zenwebp::WebpEncoderConfig;
 ///
 /// let enc = WebpEncoderConfig::lossy()
@@ -171,23 +171,23 @@ impl WebpEncoderConfig {
     /// Set calibrated quality (inherent convenience, delegates to trait).
     #[must_use]
     pub fn with_calibrated_quality(self, quality: f32) -> Self {
-        <Self as zc::encode::EncoderConfig>::with_generic_quality(self, quality)
+        <Self as zencodec::encode::EncoderConfig>::with_generic_quality(self, quality)
     }
 
     /// Get calibrated quality (inherent convenience, delegates to trait).
     pub fn calibrated_quality(&self) -> Option<f32> {
-        <Self as zc::encode::EncoderConfig>::generic_quality(self)
+        <Self as zencodec::encode::EncoderConfig>::generic_quality(self)
     }
 
     /// Set effort (inherent convenience, delegates to trait).
     #[must_use]
     pub fn with_effort(self, effort: i32) -> Self {
-        <Self as zc::encode::EncoderConfig>::with_generic_effort(self, effort)
+        <Self as zencodec::encode::EncoderConfig>::with_generic_effort(self, effort)
     }
 
     /// Get effort (inherent convenience, delegates to trait).
     pub fn effort(&self) -> Option<i32> {
-        <Self as zc::encode::EncoderConfig>::generic_effort(self)
+        <Self as zencodec::encode::EncoderConfig>::generic_effort(self)
     }
 }
 
@@ -201,7 +201,7 @@ static ENCODE_DESCRIPTORS: &[PixelDescriptor] = &[
     PixelDescriptor::GRAYF32_LINEAR,
 ];
 
-static ENCODE_CAPABILITIES: zc::encode::EncodeCapabilities = zc::encode::EncodeCapabilities::new()
+static ENCODE_CAPABILITIES: zencodec::encode::EncodeCapabilities = zencodec::encode::EncodeCapabilities::new()
     .with_icc(true)
     .with_exif(true)
     .with_xmp(true)
@@ -271,7 +271,7 @@ fn interp_quality(table: &[(f32, f32)], x: f32) -> f32 {
     table[table.len() - 1].1
 }
 
-impl zc::encode::EncoderConfig for WebpEncoderConfig {
+impl zencodec::encode::EncoderConfig for WebpEncoderConfig {
     type Error = At<EncodeError>;
     type Job<'a> = WebpEncodeJob<'a>;
 
@@ -283,7 +283,7 @@ impl zc::encode::EncoderConfig for WebpEncoderConfig {
         ENCODE_DESCRIPTORS
     }
 
-    fn capabilities() -> &'static zc::encode::EncodeCapabilities {
+    fn capabilities() -> &'static zencodec::encode::EncodeCapabilities {
         &ENCODE_CAPABILITIES
     }
 
@@ -399,7 +399,7 @@ impl<'a> WebpEncodeJob<'a> {
     }
 }
 
-impl<'a> zc::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
+impl<'a> zencodec::encode::EncodeJob<'a> for WebpEncodeJob<'a> {
     type Error = At<EncodeError>;
     type Enc = WebpEncoder<'a>;
     type FullFrameEnc = WebpFullFrameEncoder;
@@ -691,7 +691,7 @@ fn convert_single_row_to_yuv(
     }
 }
 
-impl zc::encode::Encoder for WebpEncoder<'_> {
+impl zencodec::encode::Encoder for WebpEncoder<'_> {
     type Error = At<EncodeError>;
 
     fn reject(op: UnsupportedOperation) -> At<EncodeError> {
@@ -918,7 +918,7 @@ impl WebpFullFrameEncoder {
     }
 }
 
-impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
+impl zencodec::encode::FullFrameEncoder for WebpFullFrameEncoder {
     type Error = At<EncodeError>;
 
     fn reject(op: UnsupportedOperation) -> At<EncodeError> {
@@ -962,7 +962,7 @@ impl zc::encode::FullFrameEncoder for WebpFullFrameEncoder {
 
 // ── Decoding ────────────────────────────────────────────────────────────────
 
-/// WebP decoder configuration implementing [`zc::decode::DecoderConfig`].
+/// WebP decoder configuration implementing [`zencodec::decode::DecoderConfig`].
 ///
 /// Wraps [`DecodeConfig`] for the trait interface.
 #[derive(Clone, Debug)]
@@ -1017,13 +1017,13 @@ impl WebpDecoderConfig {
 
     /// Convenience: probe image header.
     pub fn probe_header(&self, data: &[u8]) -> Result<ImageInfo, At<DecodeError>> {
-        use zc::decode::{DecodeJob, DecoderConfig};
+        use zencodec::decode::{DecodeJob, DecoderConfig};
         <Self as DecoderConfig>::job(self).probe(data)
     }
 
     /// Convenience: decode image with this config.
     pub fn decode(&self, data: &[u8]) -> Result<DecodeOutput, At<DecodeError>> {
-        use zc::decode::{Decode, DecodeJob, DecoderConfig};
+        use zencodec::decode::{Decode, DecodeJob, DecoderConfig};
         <Self as DecoderConfig>::job(self)
             .decoder(Cow::Borrowed(data), &[])
             .at()?
@@ -1043,7 +1043,7 @@ static DECODE_DESCRIPTORS: &[PixelDescriptor] = &[
     PixelDescriptor::BGRA8_SRGB,
 ];
 
-static DECODE_CAPABILITIES: zc::decode::DecodeCapabilities = zc::decode::DecodeCapabilities::new()
+static DECODE_CAPABILITIES: zencodec::decode::DecodeCapabilities = zencodec::decode::DecodeCapabilities::new()
     .with_icc(true)
     .with_exif(true)
     .with_xmp(true)
@@ -1055,7 +1055,7 @@ static DECODE_CAPABILITIES: zc::decode::DecodeCapabilities = zc::decode::DecodeC
     .with_enforces_max_memory(true)
     .with_enforces_max_input_bytes(true);
 
-impl zc::decode::DecoderConfig for WebpDecoderConfig {
+impl zencodec::decode::DecoderConfig for WebpDecoderConfig {
     type Error = At<DecodeError>;
     type Job<'a> = WebpDecodeJob<'a>;
 
@@ -1067,7 +1067,7 @@ impl zc::decode::DecoderConfig for WebpDecoderConfig {
         DECODE_DESCRIPTORS
     }
 
-    fn capabilities() -> &'static zc::decode::DecodeCapabilities {
+    fn capabilities() -> &'static zencodec::decode::DecodeCapabilities {
         &DECODE_CAPABILITIES
     }
 
@@ -1116,10 +1116,10 @@ impl<'a> WebpDecodeJob<'a> {
     }
 }
 
-impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
+impl<'a> zencodec::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
     type Error = At<DecodeError>;
     type Dec = WebpDecoder<'a>;
-    type StreamDec = zc::Unsupported<At<DecodeError>>;
+    type StreamDec = zencodec::Unsupported<At<DecodeError>>;
     type FullFrameDec = WebpFullFrameDecoder;
 
     fn with_stop(mut self, stop: &'a dyn enough::Stop) -> Self {
@@ -1176,7 +1176,7 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         self,
         _data: Cow<'a, [u8]>,
         _preferred: &[PixelDescriptor],
-    ) -> Result<zc::Unsupported<At<DecodeError>>, At<DecodeError>> {
+    ) -> Result<zencodec::Unsupported<At<DecodeError>>, At<DecodeError>> {
         Err(at!(DecodeError::InvalidParameter(
             "WebP does not support streaming decode".into(),
         )))
@@ -1185,10 +1185,10 @@ impl<'a> zc::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
     fn push_decoder(
         self,
         data: Cow<'a, [u8]>,
-        sink: &mut dyn zc::decode::DecodeRowSink,
+        sink: &mut dyn zencodec::decode::DecodeRowSink,
         preferred: &[PixelDescriptor],
     ) -> Result<OutputInfo, Self::Error> {
-        zc::decode::push_decoder_via_full_decode(self, data, sink, preferred, |e| {
+        zencodec::decode::push_decoder_via_full_decode(self, data, sink, preferred, |e| {
             at!(DecodeError::InvalidParameter(alloc::format!("{e}")))
         })
     }
@@ -1377,7 +1377,7 @@ fn negotiate_format(pixels: PixelBuffer, preferred: &[PixelDescriptor]) -> Pixel
     pixels
 }
 
-impl zc::decode::Decode for WebpDecoder<'_> {
+impl zencodec::decode::Decode for WebpDecoder<'_> {
     type Error = At<DecodeError>;
 
     fn decode(self) -> Result<DecodeOutput, At<DecodeError>> {
@@ -1541,7 +1541,7 @@ fn negotiate_format_inplace(
     source
 }
 
-impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
+impl zencodec::decode::FullFrameDecoder for WebpFullFrameDecoder {
     type Error = At<DecodeError>;
 
     fn wrap_sink_error(err: SinkError) -> At<DecodeError> {
@@ -1627,15 +1627,15 @@ impl zc::decode::FullFrameDecoder for WebpFullFrameDecoder {
     fn render_next_frame_to_sink(
         &mut self,
         stop: Option<&dyn enough::Stop>,
-        sink: &mut dyn zc::decode::DecodeRowSink,
+        sink: &mut dyn zencodec::decode::DecodeRowSink,
     ) -> Result<Option<OutputInfo>, Self::Error> {
-        zc::decode::render_frame_to_sink_via_copy(self, stop, sink)
+        zencodec::decode::render_frame_to_sink_via_copy(self, stop, sink)
     }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Convert a native `crate::ImageInfo` to a `zc::ImageInfo`.
+/// Convert a native `crate::ImageInfo` to a `zencodec::ImageInfo`.
 fn to_image_info(native: &crate::ImageInfo) -> ImageInfo {
     let mut info = ImageInfo::new(native.width, native.height, ImageFormat::WebP)
         .with_alpha(native.has_alpha)
@@ -1656,8 +1656,8 @@ fn to_image_info(native: &crate::ImageInfo) -> ImageInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zc::decode::{Decode, DecodeJob, DecoderConfig};
-    use zc::encode::{EncodeJob, Encoder, EncoderConfig};
+    use zencodec::decode::{Decode, DecodeJob, DecoderConfig};
+    use zencodec::encode::{EncodeJob, Encoder, EncoderConfig};
 
     fn make_rgb8_pixels(w: u32, h: u32) -> PixelBuffer {
         let mut buf = PixelBuffer::new(w, h, PixelDescriptor::RGB8_SRGB);
@@ -1927,8 +1927,8 @@ mod tests {
 
     #[test]
     fn animation_roundtrip_lazy_decode() {
-        use zc::decode::FullFrameDecoder;
-        use zc::encode::FullFrameEncoder;
+        use zencodec::decode::FullFrameDecoder;
+        use zencodec::encode::FullFrameEncoder;
 
         // Encode a 3-frame animation.
         let frame1 = make_rgba8_pixels(16, 16);
@@ -1968,8 +1968,8 @@ mod tests {
 
     #[test]
     fn animation_lazy_decode_with_start_frame() {
-        use zc::decode::FullFrameDecoder;
-        use zc::encode::FullFrameEncoder;
+        use zencodec::decode::FullFrameDecoder;
+        use zencodec::encode::FullFrameEncoder;
 
         // Encode 4 frames.
         let enc_config = WebpEncoderConfig::lossy().with_quality(90.0);
@@ -2133,8 +2133,8 @@ mod tests {
 
     #[test]
     fn last_frame_duration_preserved() {
-        use zc::decode::FullFrameDecoder;
-        use zc::encode::FullFrameEncoder;
+        use zencodec::decode::FullFrameDecoder;
+        use zencodec::encode::FullFrameEncoder;
 
         // Encode 3 frames with distinct durations: 200, 50, 300.
         let enc_config = WebpEncoderConfig::lossy().with_quality(90.0);

@@ -125,7 +125,7 @@ pub enum DecodeError {
 
     /// Unsupported codec operation.
     #[error(transparent)]
-    UnsupportedOperation(#[from] zc::UnsupportedOperation),
+    UnsupportedOperation(#[from] zencodec::UnsupportedOperation),
 }
 
 /// Result type alias using `At<DecodeError>` for automatic location tracking.
