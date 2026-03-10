@@ -42,7 +42,7 @@ jobs:
       - name: Clone sibling repos for path deps
         shell: bash
         run: |
-          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec-types ../zencodec-types
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec ../zencodec
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zenpixels ../zenpixels
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/linear-srgb ../linear-srgb
           rm -f Cargo.lock
@@ -65,7 +65,7 @@ jobs:
       - name: Clone sibling repos for path deps
         shell: bash
         run: |
-          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec-types ../zencodec-types
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec ../zencodec
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zenpixels ../zenpixels
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/linear-srgb ../linear-srgb
           rm -f Cargo.lock
@@ -89,7 +89,7 @@ jobs:
       - name: Clone sibling repos for path deps
         shell: bash
         run: |
-          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec-types ../zencodec-types
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec ../zencodec
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zenpixels ../zenpixels
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/linear-srgb ../linear-srgb
           rm -f Cargo.lock
@@ -110,7 +110,7 @@ jobs:
       - name: Clone sibling repos for path deps
         shell: bash
         run: |
-          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec-types ../zencodec-types
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec ../zencodec
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zenpixels ../zenpixels
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/linear-srgb ../linear-srgb
           rm -f Cargo.lock
@@ -140,7 +140,7 @@ jobs:
       - name: Clone sibling repos for path deps
         shell: bash
         run: |
-          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec-types ../zencodec-types
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec ../zencodec
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zenpixels ../zenpixels
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/linear-srgb ../linear-srgb
           rm -f Cargo.lock
@@ -160,7 +160,7 @@ jobs:
       - name: Clone sibling repos for path deps
         shell: bash
         run: |
-          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec-types ../zencodec-types
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec ../zencodec
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zenpixels ../zenpixels
           git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/linear-srgb ../linear-srgb
           rm -f Cargo.lock

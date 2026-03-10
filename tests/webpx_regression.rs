@@ -701,7 +701,8 @@ fn quality_vs_source() {
 
         println!(
             "  {name}: zen={:.1} wpx={:.1} gap={gap:.1}",
-            zen_result.score(), wpx_result.score()
+            zen_result.score(),
+            wpx_result.score()
         );
     }
 

@@ -1,13 +1,13 @@
-//! zencodec-types trait implementations for zenwebp.
+//! zencodec trait implementations for zenwebp.
 //!
 //! Provides [`WebpEncoderConfig`] and [`WebpDecoderConfig`] types that implement
-//! the 4-layer trait hierarchy from zencodec-types, wrapping the native zenwebp API.
+//! the 4-layer trait hierarchy from zencodec, wrapping the native zenwebp API.
 //!
 //! The native API remains untouched — this is a thin adapter layer.
 //!
 //! # Trait mapping
 //!
-//! | zencodec-types | zenwebp adapter |
+//! | zencodec | zenwebp adapter |
 //! |----------------|-----------------|
 //! | `EncoderConfig` | [`WebpEncoderConfig`] |
 //! | `EncodeJob<'a>` | [`WebpEncodeJob`] |

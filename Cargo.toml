@@ -86,7 +86,7 @@ mode_debug = ["std"]
 _profiling = ["dep:png", "dep:webp"]
 # WASM profiling - minimal deps for wasm32 benchmarking.
 _wasm_profiling = ["std"]
-# Enable zencodec-types trait integration
+# Enable zencodec trait integration
 zencodec = ["dep:zenpixels", "dep:self_cell"]
 
 [[bin]]
