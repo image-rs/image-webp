@@ -25,7 +25,9 @@ use alloc::vec::Vec;
 use whereat::{At, ResultAtExt, at};
 use zencodec::decode::{DecodeOutput, FullFrame, OutputInfo, OwnedFullFrame, SinkError};
 use zencodec::encode::EncodeOutput;
-use zencodec::{ImageFormat, ImageInfo, Metadata, ResourceLimits, UnsupportedOperation};
+use zencodec::{
+    ImageFormat, ImageInfo, ImageSequence, Metadata, ResourceLimits, UnsupportedOperation,
+};
 use zenpixels::{PixelBuffer, PixelDescriptor, PixelSlice};
 
 use crate::encoder::config::EncoderConfig;
@@ -1225,8 +1227,11 @@ impl<'a> zencodec::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
                 ImageFormat::WebP,
             )
             .with_alpha(anim_info.has_alpha)
-            .with_animation(true)
-            .with_frame_count(anim_info.frame_count)
+            .with_sequence(ImageSequence::Animation {
+                frame_count: Some(anim_info.frame_count),
+                loop_count: None,
+                random_access: false,
+            })
         };
         let shared_info = Arc::new(base_info);
         let total_frames = anim_info.frame_count;
@@ -1639,8 +1644,15 @@ impl zencodec::decode::FullFrameDecoder for WebpFullFrameDecoder {
 fn to_image_info(native: &crate::ImageInfo) -> ImageInfo {
     let mut info = ImageInfo::new(native.width, native.height, ImageFormat::WebP)
         .with_alpha(native.has_alpha)
-        .with_animation(native.has_animation)
-        .with_frame_count(native.frame_count);
+        .with_sequence(if native.has_animation {
+            ImageSequence::Animation {
+                frame_count: Some(native.frame_count),
+                loop_count: None,
+                random_access: false,
+            }
+        } else {
+            ImageSequence::Single
+        });
     if let Some(ref icc) = native.icc_profile {
         info = info.with_icc_profile(icc.clone());
     }
