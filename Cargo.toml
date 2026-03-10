@@ -24,7 +24,7 @@ hashbrown = { version = "0.16", default-features = false, features = ["default-h
 thiserror = { version = "2.0.18", default-features = false }
 whereat = { version = "0.1.3", default-features = false }
 libm = "0.2.16"
-zencodec = { path = "../zencodec" }
+zencodec = { path = "../zencodec", optional = true }
 zenpixels = { path = "../zenpixels/zenpixels", default-features = false, optional = true }
 self_cell = { version = "1.2", optional = true }
 bytemuck = { version = "1", default-features = false, features = ["extern_crate_alloc"] }
