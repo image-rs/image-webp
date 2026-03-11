@@ -1043,12 +1043,22 @@ impl<'a> WebPDecoder<'a> {
                 if len > max_size {
                     return Err(DecodeError::MemoryLimitExceeded);
                 }
-                let start = range.start as usize;
-                let end = range.end as usize;
-                Ok(Some(self.r.get_ref()[start..end].to_vec()))
+                let slice = self.chunk_slice(range)?;
+                Ok(Some(slice.to_vec()))
             }
             None => Ok(None),
         }
+    }
+
+    /// Get a slice of the underlying buffer for a chunk range, with bounds validation.
+    fn chunk_slice(&self, range: &core::ops::Range<u64>) -> Result<&[u8], DecodeError> {
+        let buf = self.r.get_ref();
+        let start = range.start as usize;
+        let end = range.end as usize;
+        if end > buf.len() || start > end {
+            return Err(DecodeError::InvalidChunkSize);
+        }
+        Ok(&buf[start..end])
     }
 
     /// Returns the raw bytes of the ICC profile, or None if there is no ICC profile.
@@ -1091,7 +1101,7 @@ impl<'a> WebPDecoder<'a> {
             self.animation = saved;
             result?;
         } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
-            let data_slice = &self.r.get_ref()[range.start as usize..range.end as usize];
+            let data_slice = self.chunk_slice(range)?;
             let mut decoder = LosslessDecoder::new(data_slice);
             decoder.set_stop(self.stop);
 
@@ -1109,7 +1119,7 @@ impl<'a> WebPDecoder<'a> {
                 .chunks
                 .get(&WebPRiffChunk::VP8)
                 .ok_or(DecodeError::ChunkMissing)?;
-            let data_slice = &self.r.get_ref()[range.start as usize..range.end as usize];
+            let data_slice = self.chunk_slice(range)?;
             let frame = Vp8Decoder::decode_frame_with_stop(data_slice, self.stop)?;
             if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
                 return Err(DecodeError::InconsistentImageSizes);
@@ -1123,7 +1133,7 @@ impl<'a> WebPDecoder<'a> {
                     .get(&WebPRiffChunk::ALPH)
                     .ok_or(DecodeError::ChunkMissing)?
                     .clone();
-                let alpha_slice = &self.r.get_ref()[range.start as usize..range.end as usize];
+                let alpha_slice = self.chunk_slice(&range)?;
                 let alpha_chunk =
                     read_alpha_chunk(alpha_slice, self.width as u16, self.height as u16)?;
 
@@ -1895,7 +1905,7 @@ pub fn decode_yuv420(data: &[u8]) -> DecodeResult<YuvPlanes> {
     if decoder.is_lossy() && !decoder.is_animated() {
         // For lossy images, extract the native YUV planes from the VP8 frame
         if let Some(range) = decoder.chunks.get(&WebPRiffChunk::VP8) {
-            let data_slice = &decoder.r.get_ref()[range.start as usize..range.end as usize];
+            let data_slice = decoder.chunk_slice(range).map_err(|e| at!(e))?;
             let frame = Vp8Decoder::decode_frame(data_slice).map_err(|e| at!(e))?;
 
             let w = u32::from(frame.width);
