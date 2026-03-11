@@ -203,20 +203,21 @@ static ENCODE_DESCRIPTORS: &[PixelDescriptor] = &[
     PixelDescriptor::GRAYF32_LINEAR,
 ];
 
-static ENCODE_CAPABILITIES: zencodec::encode::EncodeCapabilities = zencodec::encode::EncodeCapabilities::new()
-    .with_icc(true)
-    .with_exif(true)
-    .with_xmp(true)
-    .with_stop(true)
-    .with_lossy(true)
-    .with_lossless(true)
-    .with_animation(true)
-    .with_push_rows(true)
-    .with_native_alpha(true)
-    .with_effort_range(0, 10)
-    .with_quality_range(0.0, 100.0)
-    .with_enforces_max_pixels(true)
-    .with_enforces_max_memory(true);
+static ENCODE_CAPABILITIES: zencodec::encode::EncodeCapabilities =
+    zencodec::encode::EncodeCapabilities::new()
+        .with_icc(true)
+        .with_exif(true)
+        .with_xmp(true)
+        .with_stop(true)
+        .with_lossy(true)
+        .with_lossless(true)
+        .with_animation(true)
+        .with_push_rows(true)
+        .with_native_alpha(true)
+        .with_effort_range(0, 10)
+        .with_quality_range(0.0, 100.0)
+        .with_enforces_max_pixels(true)
+        .with_enforces_max_memory(true);
 
 /// Map generic quality (libjpeg-turbo scale) to WebP native quality.
 ///
@@ -382,7 +383,7 @@ impl<'a> WebpEncodeJob<'a> {
         inner
     }
 
-    fn build_metadata(&self) -> crate::ImageMetadata<'_> {
+    fn _build_metadata(&self) -> crate::ImageMetadata<'_> {
         let mut meta = crate::ImageMetadata::new();
         if let Some(ref icc) = self.icc {
             meta = meta.with_icc_profile(icc.as_ref());
@@ -396,7 +397,7 @@ impl<'a> WebpEncodeJob<'a> {
         meta
     }
 
-    fn has_metadata(&self) -> bool {
+    fn _has_metadata(&self) -> bool {
         self.icc.is_some() || self.exif.is_some() || self.xmp.is_some()
     }
 }
@@ -1045,17 +1046,18 @@ static DECODE_DESCRIPTORS: &[PixelDescriptor] = &[
     PixelDescriptor::BGRA8_SRGB,
 ];
 
-static DECODE_CAPABILITIES: zencodec::decode::DecodeCapabilities = zencodec::decode::DecodeCapabilities::new()
-    .with_icc(true)
-    .with_exif(true)
-    .with_xmp(true)
-    .with_stop(true)
-    .with_animation(true)
-    .with_cheap_probe(true)
-    .with_native_alpha(true)
-    .with_enforces_max_pixels(true)
-    .with_enforces_max_memory(true)
-    .with_enforces_max_input_bytes(true);
+static DECODE_CAPABILITIES: zencodec::decode::DecodeCapabilities =
+    zencodec::decode::DecodeCapabilities::new()
+        .with_icc(true)
+        .with_exif(true)
+        .with_xmp(true)
+        .with_stop(true)
+        .with_animation(true)
+        .with_cheap_probe(true)
+        .with_native_alpha(true)
+        .with_enforces_max_pixels(true)
+        .with_enforces_max_memory(true)
+        .with_enforces_max_input_bytes(true);
 
 impl zencodec::decode::DecoderConfig for WebpDecoderConfig {
     type Error = At<DecodeError>;
@@ -1190,7 +1192,7 @@ impl<'a> zencodec::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         sink: &mut dyn zencodec::decode::DecodeRowSink,
         preferred: &[PixelDescriptor],
     ) -> Result<OutputInfo, Self::Error> {
-        zencodec::decode::push_decoder_via_full_decode(self, data, sink, preferred, |e| {
+        zencodec::helpers::copy_decode_to_sink(self, data, sink, preferred, |e| {
             at!(DecodeError::InvalidParameter(alloc::format!("{e}")))
         })
     }
@@ -1634,7 +1636,7 @@ impl zencodec::decode::FullFrameDecoder for WebpFullFrameDecoder {
         stop: Option<&dyn enough::Stop>,
         sink: &mut dyn zencodec::decode::DecodeRowSink,
     ) -> Result<Option<OutputInfo>, Self::Error> {
-        zencodec::decode::render_frame_to_sink_via_copy(self, stop, sink)
+        zencodec::helpers::copy_frame_to_sink(self, stop, sink)
     }
 }
 
