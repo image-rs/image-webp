@@ -922,3 +922,260 @@ fn subframe_rgb_input_works() {
         decoder.read_frame(&mut buf).unwrap();
     }
 }
+
+// ============================================================================
+// Metadata extraction tests
+// ============================================================================
+
+/// Encode a WebP with ICC, EXIF, and XMP metadata using the mux layer,
+/// then verify the decoder's ImageInfo returns all three.
+#[test]
+fn decoder_info_extracts_icc_exif_xmp() {
+    let pixels = solid_rgb(32, 32, 100, 150, 200);
+    let config = EncoderConfig::new_lossy().with_quality(75.0);
+    let webp = EncodeRequest::new(&config, &pixels, PixelLayout::Rgb8, 32, 32)
+        .encode()
+        .unwrap();
+
+    // Inject all three metadata types via mux
+    let demuxer = WebPDemuxer::new(&webp).unwrap();
+    let frame = demuxer.frame(1).unwrap();
+
+    let icc_data = vec![0x49, 0x43, 0x43, 0x50]; // "ICCP"
+    let exif_data = vec![0x45, 0x78, 0x69, 0x66, 0x00, 0x00]; // "Exif\0\0"
+    let xmp_data = b"<?xpacket begin='' id='W5M0MpCehiHzreSzNTczkc9d'?><x:xmpmeta/>".to_vec();
+
+    let mut mux = WebPMux::new(32, 32);
+    mux.set_icc_profile(icc_data.clone());
+    mux.set_exif(exif_data.clone());
+    mux.set_xmp(xmp_data.clone());
+    mux.set_image(MuxFrame {
+        x_offset: 0,
+        y_offset: 0,
+        width: 32,
+        height: 32,
+        duration_ms: 0,
+        dispose: DisposeMethod::None,
+        blend: BlendMethod::Overwrite,
+        bitstream: frame.bitstream.to_vec(),
+        alpha_data: None,
+        is_lossless: false,
+    });
+    let assembled = mux.assemble().unwrap();
+
+    // Verify via WebPDecoder.info()
+    let decoder = WebPDecoder::new(&assembled).unwrap();
+    let info = decoder.info();
+    assert_eq!(info.icc_profile.as_deref(), Some(icc_data.as_slice()));
+    assert_eq!(info.exif.as_deref(), Some(exif_data.as_slice()));
+    assert_eq!(info.xmp.as_deref(), Some(xmp_data.as_slice()));
+}
+
+/// Verify ImageInfo returns None for all metadata when no chunks are present.
+#[test]
+fn decoder_info_no_metadata_returns_none() {
+    let pixels = solid_rgb(16, 16, 50, 100, 150);
+    let config = EncoderConfig::new_lossy().with_quality(75.0);
+    let webp = EncodeRequest::new(&config, &pixels, PixelLayout::Rgb8, 16, 16)
+        .encode()
+        .unwrap();
+
+    let decoder = WebPDecoder::new(&webp).unwrap();
+    let info = decoder.info();
+    assert!(info.icc_profile.is_none(), "expected no ICC profile");
+    assert!(info.exif.is_none(), "expected no EXIF data");
+    assert!(info.xmp.is_none(), "expected no XMP data");
+}
+
+/// Round-trip metadata through encode (with_metadata) -> decode (info).
+#[test]
+fn metadata_roundtrip_via_encode_request() {
+    use zenwebp::ImageMetadata;
+
+    let icc_data = vec![1u8; 128]; // 128-byte fake ICC
+    let exif_data = vec![0x45, 0x78, 0x69, 0x66, 0x00, 0x00, 0xAA, 0xBB];
+    let xmp_data = b"<x:xmpmeta xmlns:x='adobe:ns:meta/'>test</x:xmpmeta>".to_vec();
+
+    let meta = ImageMetadata::new()
+        .with_icc_profile(&icc_data)
+        .with_exif(&exif_data)
+        .with_xmp(&xmp_data);
+
+    let pixels = solid_rgb(16, 16, 200, 100, 50);
+    let config = EncoderConfig::new_lossy().with_quality(80.0);
+    let webp = EncodeRequest::new(&config, &pixels, PixelLayout::Rgb8, 16, 16)
+        .with_metadata(meta)
+        .encode()
+        .unwrap();
+
+    // Verify via WebPDecoder
+    let decoder = WebPDecoder::new(&webp).unwrap();
+    let info = decoder.info();
+    assert_eq!(info.icc_profile.as_deref(), Some(icc_data.as_slice()));
+    assert_eq!(info.exif.as_deref(), Some(exif_data.as_slice()));
+    assert_eq!(info.xmp.as_deref(), Some(xmp_data.as_slice()));
+
+    // Also verify via demuxer for cross-checking
+    let demuxer = WebPDemuxer::new(&webp).unwrap();
+    assert_eq!(demuxer.icc_profile().unwrap(), &icc_data[..]);
+    assert_eq!(demuxer.exif().unwrap(), &exif_data[..]);
+    assert_eq!(demuxer.xmp().unwrap(), &xmp_data[..]);
+
+    // Also verify via the convenience metadata module
+    let extracted_icc = zenwebp::metadata::icc_profile(&webp).unwrap();
+    assert_eq!(extracted_icc.as_deref(), Some(icc_data.as_slice()));
+    let extracted_exif = zenwebp::metadata::exif(&webp).unwrap();
+    assert_eq!(extracted_exif.as_deref(), Some(exif_data.as_slice()));
+    let extracted_xmp = zenwebp::metadata::xmp(&webp).unwrap();
+    assert_eq!(extracted_xmp.as_deref(), Some(xmp_data.as_slice()));
+}
+
+/// Large ICC profile (>64KB) round-trips correctly.
+#[test]
+fn large_icc_profile_roundtrip() {
+    use zenwebp::ImageMetadata;
+
+    // Create a 100KB ICC profile
+    let icc_data: Vec<u8> = (0..100_000).map(|i| (i % 256) as u8).collect();
+
+    let meta = ImageMetadata::new().with_icc_profile(&icc_data);
+
+    let pixels = solid_rgb(8, 8, 128, 128, 128);
+    let config = EncoderConfig::new_lossy().with_quality(75.0);
+    let webp = EncodeRequest::new(&config, &pixels, PixelLayout::Rgb8, 8, 8)
+        .with_metadata(meta)
+        .encode()
+        .unwrap();
+
+    // Verify via decoder
+    let decoder = WebPDecoder::new(&webp).unwrap();
+    let info = decoder.info();
+    let extracted = info
+        .icc_profile
+        .as_ref()
+        .expect("ICC profile should be present");
+    assert_eq!(extracted.len(), 100_000);
+    assert_eq!(extracted, &icc_data);
+
+    // Verify via demuxer
+    let demuxer = WebPDemuxer::new(&webp).unwrap();
+    assert_eq!(demuxer.icc_profile().unwrap(), &icc_data[..]);
+}
+
+/// Lossless WebP with metadata.
+#[test]
+fn lossless_webp_metadata_roundtrip() {
+    use zenwebp::ImageMetadata;
+
+    let icc_data = vec![42u8; 64];
+    let exif_data = vec![0x45, 0x78, 0x69, 0x66, 0x00, 0x00];
+
+    let meta = ImageMetadata::new()
+        .with_icc_profile(&icc_data)
+        .with_exif(&exif_data);
+
+    let pixels = solid_rgba(16, 16, 100, 200, 50, 255);
+    let config = EncoderConfig::new_lossy()
+        .with_quality(100.0)
+        .with_lossless(true);
+    let webp = EncodeRequest::new(&config, &pixels, PixelLayout::Rgba8, 16, 16)
+        .with_metadata(meta)
+        .encode()
+        .unwrap();
+
+    let decoder = WebPDecoder::new(&webp).unwrap();
+    let info = decoder.info();
+    assert_eq!(info.icc_profile.as_deref(), Some(icc_data.as_slice()));
+    assert_eq!(info.exif.as_deref(), Some(exif_data.as_slice()));
+    assert!(info.xmp.is_none());
+}
+
+/// ImageInfo::from_bytes extracts metadata in a single call.
+#[test]
+fn image_info_from_bytes_extracts_metadata() {
+    use zenwebp::ImageMetadata;
+
+    let icc_data = vec![7u8; 32];
+    let xmp_data = b"<rdf:RDF>test</rdf:RDF>".to_vec();
+
+    let meta = ImageMetadata::new()
+        .with_icc_profile(&icc_data)
+        .with_xmp(&xmp_data);
+
+    let pixels = solid_rgb(8, 8, 64, 128, 192);
+    let config = EncoderConfig::new_lossy().with_quality(75.0);
+    let webp = EncodeRequest::new(&config, &pixels, PixelLayout::Rgb8, 8, 8)
+        .with_metadata(meta)
+        .encode()
+        .unwrap();
+
+    let info = zenwebp::ImageInfo::from_bytes(&webp).unwrap();
+    assert_eq!(info.width, 8);
+    assert_eq!(info.height, 8);
+    assert_eq!(info.icc_profile.as_deref(), Some(icc_data.as_slice()));
+    assert!(info.exif.is_none());
+    assert_eq!(info.xmp.as_deref(), Some(xmp_data.as_slice()));
+}
+
+/// Metadata embed/remove convenience functions work correctly.
+#[test]
+fn metadata_embed_and_remove() {
+    let pixels = solid_rgb(8, 8, 100, 100, 100);
+    let config = EncoderConfig::new_lossy().with_quality(75.0);
+    let webp = EncodeRequest::new(&config, &pixels, PixelLayout::Rgb8, 8, 8)
+        .encode()
+        .unwrap();
+
+    // Initially no metadata
+    assert!(zenwebp::metadata::icc_profile(&webp).unwrap().is_none());
+    assert!(zenwebp::metadata::exif(&webp).unwrap().is_none());
+    assert!(zenwebp::metadata::xmp(&webp).unwrap().is_none());
+
+    // Embed ICC
+    let icc_data = vec![1, 2, 3, 4, 5];
+    let with_icc = zenwebp::metadata::embed_icc(&webp, &icc_data).unwrap();
+    assert_eq!(
+        zenwebp::metadata::icc_profile(&with_icc)
+            .unwrap()
+            .as_deref(),
+        Some(icc_data.as_slice())
+    );
+
+    // Embed all three at once
+    let meta = zenwebp::ImageMetadata::new()
+        .with_icc_profile(&icc_data)
+        .with_exif(b"exif-bytes")
+        .with_xmp(b"xmp-bytes");
+    let with_all = zenwebp::metadata::embed(&webp, &meta).unwrap();
+    assert_eq!(
+        zenwebp::metadata::icc_profile(&with_all)
+            .unwrap()
+            .as_deref(),
+        Some(icc_data.as_slice())
+    );
+    assert_eq!(
+        zenwebp::metadata::exif(&with_all).unwrap().as_deref(),
+        Some(b"exif-bytes".as_slice())
+    );
+    assert_eq!(
+        zenwebp::metadata::xmp(&with_all).unwrap().as_deref(),
+        Some(b"xmp-bytes".as_slice())
+    );
+
+    // Remove ICC
+    let without_icc = zenwebp::metadata::remove_icc(&with_all).unwrap();
+    assert!(
+        zenwebp::metadata::icc_profile(&without_icc)
+            .unwrap()
+            .is_none()
+    );
+    // EXIF and XMP should still be there
+    assert_eq!(
+        zenwebp::metadata::exif(&without_icc).unwrap().as_deref(),
+        Some(b"exif-bytes".as_slice())
+    );
+
+    // The resulting file still decodes correctly
+    let decoder = WebPDecoder::new(&with_all).unwrap();
+    assert_eq!(decoder.dimensions(), (8, 8));
+}
