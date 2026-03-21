@@ -1,7 +1,7 @@
 use std::io::BufRead;
 
+use super::decoder::BitReader;
 use crate::decoder::DecodingError;
-use crate::lossless::BitReader;
 
 const MAX_ALLOWED_CODE_LENGTH: usize = 15;
 const MAX_TABLE_BITS: u8 = 10;

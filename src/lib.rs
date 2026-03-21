@@ -18,9 +18,7 @@ mod alpha_blending;
 mod decoder;
 mod encoder;
 mod extended;
-mod huffman;
 mod lossless;
-mod lossless_transform;
 mod lossy;
 
 /// An implementation of the VP8 Video Codec
