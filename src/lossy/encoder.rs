@@ -2,11 +2,11 @@ use std::io::Write;
 
 use byteorder_lite::{LittleEndian, WriteBytesExt};
 
+use super::arithmetic_encoder::ArithmeticEncoder;
+use super::common::*;
+use super::prediction::*;
+use super::Frame;
 use crate::transform;
-use crate::vp8::Frame;
-use crate::vp8_arithmetic_encoder::ArithmeticEncoder;
-use crate::vp8_common::*;
-use crate::vp8_prediction::*;
 use crate::yuv::convert_image_y;
 use crate::yuv::convert_image_yuv;
 use crate::ColorType;

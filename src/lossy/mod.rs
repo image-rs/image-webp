@@ -15,12 +15,18 @@ use std::default::Default;
 use std::io::Read;
 
 use crate::decoder::{DecodingError, UpsamplingMethod};
-use crate::vp8_common::*;
-use crate::vp8_prediction::*;
 use crate::yuv;
+use common::*;
+use prediction::*;
 
-use super::vp8_arithmetic_decoder::ArithmeticDecoder;
 use super::{loop_filter, transform};
+use arithmetic_decoder::ArithmeticDecoder;
+
+mod arithmetic_decoder;
+mod arithmetic_encoder;
+mod common;
+pub(crate) mod encoder;
+mod prediction;
 
 #[derive(Clone, Copy)]
 pub(crate) struct TreeNode {
