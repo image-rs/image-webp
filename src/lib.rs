@@ -19,15 +19,21 @@ mod decoder;
 mod encoder;
 mod extended;
 mod huffman;
-mod loop_filter;
 mod lossless;
 mod lossless_transform;
-mod transform;
-mod vp8_arithmetic_decoder;
-mod vp8_arithmetic_encoder;
-mod vp8_common;
-mod vp8_encoder;
-mod vp8_prediction;
-mod yuv;
+mod lossy;
 
-pub mod vp8;
+/// An implementation of the VP8 Video Codec
+///
+/// This module contains a partial implementation of the
+/// VP8 video format as defined in RFC-6386.
+///
+/// It decodes Keyframes only.
+/// VP8 is the underpinning of the WebP image format
+///
+/// # Related Links
+/// * [rfc-6386](http://tools.ietf.org/html/rfc6386) - The VP8 Data Format and Decoding Guide
+/// * [VP8.pdf](http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/37073.pdf) - An overview of of the VP8 format
+pub mod vp8 {
+    pub use crate::lossy::{Frame, Vp8Decoder};
+}

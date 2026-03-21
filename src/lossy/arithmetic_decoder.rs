@@ -1,6 +1,6 @@
 use crate::decoder::DecodingError;
 
-use super::vp8::TreeNode;
+use super::TreeNode;
 
 #[must_use]
 #[repr(transparent)]

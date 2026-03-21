@@ -5,7 +5,7 @@ use std::slice::ChunksExact;
 
 use quick_error::quick_error;
 
-use crate::vp8_encoder::encode_frame_lossy;
+use crate::lossy::encoder::encode_frame_lossy;
 
 /// Color type of the image.
 ///

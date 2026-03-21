@@ -9,7 +9,7 @@ use std::ops::Range;
 use crate::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo};
 
 use super::lossless::LosslessDecoder;
-use super::vp8::Vp8Decoder;
+use super::lossy::Vp8Decoder;
 
 quick_error! {
     /// Errors that can occur when attempting to decode a WebP image

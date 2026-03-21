@@ -2,7 +2,7 @@
 //!
 //! Functions for doing prediction and for setting up buffers for prediction
 
-use crate::vp8_common::IntraMode;
+use super::common::IntraMode;
 
 /// Luma prediction block includes the 1 pixel border to the left and on top
 /// as well as 4 pixels to the top right of the block
