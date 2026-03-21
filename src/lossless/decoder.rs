@@ -5,14 +5,12 @@
 use std::io::BufRead;
 use std::mem;
 
-use crate::decoder::DecodingError;
-use crate::lossless_transform::{
-    apply_color_indexing_transform, apply_color_transform, apply_predictor_transform,
-    apply_subtract_green_transform,
-};
-
 use super::huffman::HuffmanTree;
-use super::lossless_transform::TransformType;
+use super::reverse_transform::{
+    apply_color_indexing_transform, apply_color_transform, apply_predictor_transform,
+    apply_subtract_green_transform, TransformType,
+};
+use crate::decoder::DecodingError;
 
 const CODE_LENGTH_CODES: usize = 19;
 const CODE_LENGTH_CODE_ORDER: [usize; CODE_LENGTH_CODES] = [
