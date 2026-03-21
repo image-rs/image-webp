@@ -1,15 +1,3 @@
-//! An implementation of the VP8 Video Codec
-//!
-//! This module contains a partial implementation of the
-//! VP8 video format as defined in RFC-6386.
-//!
-//! It decodes Keyframes only.
-//! VP8 is the underpinning of the WebP image format
-//!
-//! # Related Links
-//! * [rfc-6386](http://tools.ietf.org/html/rfc6386) - The VP8 Data Format and Decoding Guide
-//! * [VP8.pdf](http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/37073.pdf) - An overview of of the VP8 format
-
 use byteorder_lite::{LittleEndian, ReadBytesExt};
 use std::default::Default;
 use std::io::Read;
