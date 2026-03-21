@@ -3,18 +3,19 @@ use std::default::Default;
 use std::io::Read;
 
 use crate::decoder::{DecodingError, UpsamplingMethod};
-use crate::yuv;
 use common::*;
 use prediction::*;
 
-use super::{loop_filter, transform};
 use arithmetic_decoder::ArithmeticDecoder;
 
 mod arithmetic_decoder;
 mod arithmetic_encoder;
 mod common;
 pub(crate) mod encoder;
+mod loop_filter;
 mod prediction;
+mod transform;
+mod yuv;
 
 #[derive(Clone, Copy)]
 pub(crate) struct TreeNode {

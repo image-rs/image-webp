@@ -19,12 +19,9 @@ mod decoder;
 mod encoder;
 mod extended;
 mod huffman;
-mod loop_filter;
 mod lossless;
 mod lossless_transform;
 mod lossy;
-mod transform;
-mod yuv;
 
 /// An implementation of the VP8 Video Codec
 ///
