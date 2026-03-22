@@ -85,3 +85,16 @@ jobs:
         components: rustfmt
     - name: Run rustfmt check
       run: cargo fmt -- --check
+
+  cargo-semver-checks:
+    runs-on: ubuntu-latest
+    needs: ["clippy"]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Cache Cargo Dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+    - uses: obi1kenobi/cargo-semver-checks-action@v2
+      with:
+        feature-group: default-features

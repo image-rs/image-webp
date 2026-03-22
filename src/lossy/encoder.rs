@@ -735,6 +735,7 @@ impl<W: Write> Vp8Encoder<W> {
 
             version: 0,
 
+            keyframe: true,
             for_display: true,
             pixel_type: 0,
 
