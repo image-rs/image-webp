@@ -148,6 +148,10 @@ pub struct Frame {
 
     pub(crate) version: u8,
 
+    /// Indicates whether this frame is a keyframe
+    // TODO: Remove in the next API breaking release
+    pub keyframe: bool,
+
     /// Indicates whether this frame is intended for display
     pub for_display: bool,
 
@@ -512,6 +516,7 @@ impl<R: Read> Vp8Decoder<R> {
                 "Non-keyframe frames".to_owned(),
             ));
         }
+        self.frame.keyframe = true;
 
         self.frame.version = ((tag >> 1) & 7) as u8;
         self.frame.for_display = (tag >> 4) & 1 != 0;
