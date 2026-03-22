@@ -341,11 +341,11 @@ impl CostManager {
 
         // Walk forward past elements with start < new_start
         while let Some(p) = prev {
-            if let Some(nxt) = self.intervals[p].next {
-                if self.intervals[nxt].start < new_start {
-                    prev = Some(nxt);
-                    continue;
-                }
+            if let Some(nxt) = self.intervals[p].next
+                && self.intervals[nxt].start < new_start
+            {
+                prev = Some(nxt);
+                continue;
             }
             break;
         }

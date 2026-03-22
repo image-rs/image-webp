@@ -1689,10 +1689,10 @@ impl<'a> Vp8Decoder<'a> {
                 self.macroblocks.push(mb);
 
                 // Finalize diagnostic capture
-                if let Some(diag) = self.current_mb_diag.take() {
-                    if let Some(ref mut capture) = self.diagnostic_capture {
-                        capture.push(diag);
-                    }
+                if let Some(diag) = self.current_mb_diag.take()
+                    && let Some(ref mut capture) = self.diagnostic_capture
+                {
+                    capture.push(diag);
                 }
             }
 

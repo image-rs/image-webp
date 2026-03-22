@@ -2,6 +2,7 @@
 //!
 //! Contains methods for selecting optimal I16, I4, and UV prediction modes
 //! using rate-distortion cost evaluation.
+#![allow(clippy::too_many_arguments)]
 
 use crate::common::prediction::*;
 use crate::common::transform;
@@ -67,8 +68,8 @@ fn presort_i4_modes_sse2(
 ///
 /// Returns the best mode result, or None if no mode beats `best_block_score_limit`.
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
-#[archmage::arcane]
 #[allow(clippy::too_many_arguments)]
+#[archmage::arcane]
 fn evaluate_i4_modes_sse2(
     _token: archmage::X64V3Token,
     src_block: &[u8; 16],

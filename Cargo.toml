@@ -89,6 +89,10 @@ _wasm_profiling = ["std"]
 # Enable zencodec trait integration
 zencodec = ["dep:zencodec", "dep:zenpixels", "dep:self_cell"]
 
+[[example]]
+name = "hrtb_test"
+required-features = ["zencodec"]
+
 [[bin]]
 name = "zenwebp-encode"
 path = "src/bin/zenwebp_encode.rs"

@@ -53,6 +53,7 @@ fn zen_encode_decode(rgba: &[u8], w: u32, h: u32, config: &LossyConfig) -> (Vec<
 }
 
 /// Encode RGBA pixels with webpx (libwebp) at matched settings, decode with webpx.
+#[allow(clippy::too_many_arguments)]
 fn wpx_encode_decode(
     rgba: &[u8],
     w: u32,
@@ -97,7 +98,7 @@ fn to_wpx_preset(p: Preset) -> webpx::Preset {
 
 /// Pixel data as &[[u8; 4]] for zensim.
 fn as_rgba_pixels(data: &[u8]) -> &[[u8; 4]] {
-    assert!(data.len() % 4 == 0);
+    assert!(data.len().is_multiple_of(4));
     // SAFETY: [u8] with len % 4 == 0 can be reinterpreted as [[u8; 4]].
     // But we avoid unsafe — just use from_raw_parts equivalent via slice methods.
     let (prefix, pixels, suffix) = // use align trick
@@ -120,6 +121,7 @@ struct CompareResult {
 }
 
 /// Encode with both encoders, decode, and compare using zensim.
+#[allow(clippy::too_many_arguments)]
 fn compare_encoders(
     name: &str,
     rgba: &[u8],
@@ -670,19 +672,19 @@ fn quality_vs_source() {
     let mut max_gap = 0.0f64;
 
     for (name, rgba) in &images {
-        let src_px = as_rgba_pixels(&rgba);
+        let src_px = as_rgba_pixels(rgba);
         let src_img = RgbaSlice::new(src_px, W as usize, H as usize);
 
         // zenwebp
         let zen_config = LossyConfig::new().with_quality(75.0).with_method(4);
-        let (_, zen_decoded) = zen_encode_decode(&rgba, W, H, &zen_config);
+        let (_, zen_decoded) = zen_encode_decode(rgba, W, H, &zen_config);
         let zen_px = as_rgba_pixels(&zen_decoded);
         let zen_img = RgbaSlice::new(zen_px, W as usize, H as usize);
         let zen_result = z.compute(&src_img, &zen_img).expect("zensim failed");
 
         // webpx
         let (_, wpx_decoded) = wpx_encode_decode(
-            &rgba,
+            rgba,
             W,
             H,
             75.0,

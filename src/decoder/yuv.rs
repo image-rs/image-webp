@@ -195,13 +195,14 @@ fn fill_row_fancy_with_2_uv_rows<const BPP: usize>(
 ) {
     // Use SIMD intrinsics for RGB (BPP=3) if available and row is wide enough
     #[cfg(all(feature = "simd", target_arch = "x86_64"))]
-    if BPP == 3 && y_row.len() >= 17 {
-        if let Some(token) = simd_token {
-            fill_row_fancy_with_2_uv_rows_simd::<BPP>(
-                row_buffer, y_row, u_row_1, u_row_2, v_row_1, v_row_2, token,
-            );
-            return;
-        }
+    if BPP == 3
+        && y_row.len() >= 17
+        && let Some(token) = simd_token
+    {
+        fill_row_fancy_with_2_uv_rows_simd::<BPP>(
+            row_buffer, y_row, u_row_1, u_row_2, v_row_1, v_row_2, token,
+        );
+        return;
     }
 
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
@@ -781,23 +782,23 @@ fn fill_rgba_row_simple_scalar<const BPP: usize>(
     }
 
     let remainder = rgb_chunks.into_remainder();
-    if remainder.len() >= 3 {
-        if let (Some(&y), Some(&u), Some(&v)) = (
+    if remainder.len() >= 3
+        && let (Some(&y), Some(&u), Some(&v)) = (
             y_chunks.remainder().iter().next(),
             u_iter.next(),
             v_iter.next(),
-        ) {
-            let coeffs = [
-                mulhi(v, 26149),
-                mulhi(u, 6419),
-                mulhi(v, 13320),
-                mulhi(u, 33050),
-            ];
+        )
+    {
+        let coeffs = [
+            mulhi(v, 26149),
+            mulhi(u, 6419),
+            mulhi(v, 13320),
+            mulhi(u, 33050),
+        ];
 
-            remainder[0] = clip(mulhi(y, 19077) + coeffs[0] - 14234);
-            remainder[1] = clip(mulhi(y, 19077) - coeffs[1] - coeffs[2] + 8708);
-            remainder[2] = clip(mulhi(y, 19077) + coeffs[3] - 17685);
-        }
+        remainder[0] = clip(mulhi(y, 19077) + coeffs[0] - 14234);
+        remainder[1] = clip(mulhi(y, 19077) - coeffs[1] - coeffs[2] + 8708);
+        remainder[2] = clip(mulhi(y, 19077) + coeffs[3] - 17685);
     }
 }
 

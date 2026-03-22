@@ -341,10 +341,10 @@ impl<'a> LosslessDecoder<'a> {
             let mut group: HuffmanCodeGroup = Default::default();
             for j in 0..HUFFMAN_CODES_PER_META_CODE {
                 let mut alphabet_size = ALPHABET_SIZE[j];
-                if j == 0 {
-                    if let Some(color_cache) = color_cache.as_ref() {
-                        alphabet_size += 1 << color_cache.color_cache_bits;
-                    }
+                if j == 0
+                    && let Some(color_cache) = color_cache.as_ref()
+                {
+                    alphabet_size += 1 << color_cache.color_cache_bits;
                 }
 
                 let tree = self.read_huffman_code(alphabet_size)?;
@@ -620,15 +620,14 @@ impl<'a> LosslessDecoder<'a> {
                 data[index * 4..][..4].copy_from_slice(&color);
                 index += 1;
 
-                if index < next_block_start {
-                    if let Some((bits, code)) = tree[GREEN].peek_symbol(&self.bit_reader) {
-                        if code >= 280 {
-                            self.bit_reader.consume(bits)?;
-                            data[index * 4..][..4]
-                                .copy_from_slice(&color_cache.lookup((code - 280).into()));
-                            index += 1;
-                        }
-                    }
+                if index < next_block_start
+                    && let Some((bits, code)) = tree[GREEN].peek_symbol(&self.bit_reader)
+                    && code >= 280
+                {
+                    self.bit_reader.consume(bits)?;
+                    data[index * 4..][..4]
+                        .copy_from_slice(&color_cache.lookup((code - 280).into()));
+                    index += 1;
                 }
             }
         }

@@ -2,6 +2,7 @@
 //!
 //! Uses i16 arithmetic like libwebp for maximum throughput (8 values per __m128i).
 //! Runtime detection selects best available: SSE2 / AVX2+FMA / AVX-512
+#![allow(clippy::too_many_arguments)]
 
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::*;
@@ -713,8 +714,8 @@ fn itransform_pass2_sse2(
 /// Also clears the coefficient block to zeros.
 /// Entry shim for idct_add_residue_sse2
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-#[arcane]
 #[allow(clippy::too_many_arguments)]
+#[arcane]
 pub(crate) fn idct_add_residue_entry(
     _token: X64V3Token,
     coeffs: &mut [i32; 16],
@@ -828,8 +829,8 @@ pub(crate) fn idct_add_residue_sse2(
 
 /// Entry shim for idct_add_residue_dc_sse2
 #[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
-#[arcane]
 #[allow(clippy::too_many_arguments)]
+#[arcane]
 pub(crate) fn idct_add_residue_dc_entry(
     _token: X64V3Token,
     coeffs: &mut [i32; 16],
