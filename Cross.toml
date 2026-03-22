@@ -1,24 +1,9 @@
-# Cross configuration for cross-compilation and testing
-# See: https://github.com/cross-rs/cross
-
 [build.env]
-passthrough = [
-    "RUST_BACKTRACE",
-    "RUST_LOG",
-]
+passthrough = ["RUST_BACKTRACE", "RUST_LOG"]
 
-# i686 (32-bit x86 Linux)
-[target.i686-unknown-linux-gnu]
-# Uses QEMU for testing
-
-# aarch64 (64-bit ARM Linux)
 [target.aarch64-unknown-linux-gnu]
-# Uses QEMU for testing
+volumes = ["/home/lilith/work/zen", "/home/lilith/work/archmage"]
 
-# armv7 (32-bit ARM Linux with hardware float)
+[target.i686-unknown-linux-gnu]
+
 [target.armv7-unknown-linux-gnueabihf]
-# Uses QEMU for testing
-
-# PowerPC (big-endian, 32-bit)
-[target.powerpc-unknown-linux-gnu]
-# Uses QEMU for testing

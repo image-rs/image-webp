@@ -20,6 +20,13 @@ use archmage::{SimdToken, X64V3Token, arcane};
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 use core::arch::x86_64::*;
 
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+use archmage::intrinsics::aarch64 as simd_mem;
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+use archmage::{NeonToken, SimdToken, arcane};
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+use core::arch::aarch64::*;
+
 //------------------------------------------------------------------------------
 // Block fill helpers
 
@@ -111,7 +118,14 @@ pub fn pred_luma16_tm(dst: &mut [u8], left_with_corner: Option<&[u8]>, top: Opti
             {
                 pred_luma16_tm_dispatch(dst, left, top);
             }
-            #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+            #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+            {
+                pred_luma16_tm_neon_dispatch(dst, left, top);
+            }
+            #[cfg(not(all(
+                feature = "simd",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )))]
             {
                 pred_luma16_tm_scalar(dst, left, top);
             }
@@ -265,7 +279,14 @@ pub fn pred_chroma8_tm(dst: &mut [u8], left_with_corner: Option<&[u8]>, top: Opt
             {
                 pred_chroma8_tm_dispatch(dst, left, top);
             }
-            #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+            #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+            {
+                pred_chroma8_tm_neon_dispatch(dst, left, top);
+            }
+            #[cfg(not(all(
+                feature = "simd",
+                any(target_arch = "x86_64", target_arch = "aarch64")
+            )))]
             {
                 pred_chroma8_tm_scalar(dst, left, top);
             }
@@ -341,6 +362,90 @@ fn pred_chroma8_tm_sse2(_token: X64V3Token, dst: &mut [u8], left: &[u8], top: &[
         let mut tmp = [0u8; 16];
         simd_mem::_mm_storeu_si128(&mut tmp, packed);
         dst[y * BPS..y * BPS + 8].copy_from_slice(&tmp[..8]);
+    }
+}
+
+// =============================================================================
+// NEON (aarch64) TrueMotion predictions
+// =============================================================================
+
+/// NEON dispatch for TrueMotion 16x16.
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[inline]
+fn pred_luma16_tm_neon_dispatch(dst: &mut [u8], left: &[u8], top: &[u8]) {
+    let token = NeonToken::summon().unwrap();
+    pred_luma16_tm_neon(token, dst, left, top);
+}
+
+/// NEON TrueMotion: Process 16 pixels per row.
+/// Formula: dst[y][x] = clamp(left[y] + top[x] - tl, 0, 255)
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[arcane]
+fn pred_luma16_tm_neon(_token: NeonToken, dst: &mut [u8], left: &[u8], top: &[u8]) {
+    // Load top row (16 bytes) and unpack to i16
+    let top_vec = simd_mem::vld1q_u8(<&[u8; 16]>::try_from(&top[..16]).unwrap());
+    let top_lo = vreinterpretq_s16_u16(vmovl_u8(vget_low_u8(top_vec)));
+    let top_hi = vreinterpretq_s16_u16(vmovl_u8(vget_high_u8(top_vec)));
+
+    // Broadcast top-left corner
+    let tl = vdupq_n_s16(i16::from(left[0]));
+
+    // Precompute (top - tl) for each column
+    let top_minus_tl_lo = vsubq_s16(top_lo, tl);
+    let top_minus_tl_hi = vsubq_s16(top_hi, tl);
+
+    for y in 0..16 {
+        // Broadcast left[y+1]
+        let l = vdupq_n_s16(i16::from(left[1 + y]));
+
+        // Compute left + (top - tl)
+        let sum_lo = vaddq_s16(l, top_minus_tl_lo);
+        let sum_hi = vaddq_s16(l, top_minus_tl_hi);
+
+        // Clamp to [0, 255] and pack to u8 (vqmovun saturates i16 to [0, 255])
+        let packed = vcombine_u8(vqmovun_s16(sum_lo), vqmovun_s16(sum_hi));
+
+        // Store 16 bytes to dst row
+        let dst_arr = <&mut [u8; 16]>::try_from(&mut dst[y * BPS..y * BPS + 16]).unwrap();
+        simd_mem::vst1q_u8(dst_arr, packed);
+    }
+}
+
+/// NEON dispatch for TrueMotion 8x8.
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[inline]
+fn pred_chroma8_tm_neon_dispatch(dst: &mut [u8], left: &[u8], top: &[u8]) {
+    let token = NeonToken::summon().unwrap();
+    pred_chroma8_tm_neon(token, dst, left, top);
+}
+
+/// NEON TrueMotion for 8x8 chroma: Process 8 pixels per row.
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[arcane]
+fn pred_chroma8_tm_neon(_token: NeonToken, dst: &mut [u8], left: &[u8], top: &[u8]) {
+    // Load 8 bytes of top and unpack to i16
+    let top_bytes = simd_mem::vld1_u8(<&[u8; 8]>::try_from(&top[..8]).unwrap());
+    let top_i16 = vreinterpretq_s16_u16(vmovl_u8(top_bytes));
+
+    // Broadcast top-left corner
+    let tl = vdupq_n_s16(i16::from(left[0]));
+
+    // Precompute (top - tl)
+    let top_minus_tl = vsubq_s16(top_i16, tl);
+
+    for y in 0..8 {
+        // Broadcast left[y+1]
+        let l = vdupq_n_s16(i16::from(left[1 + y]));
+
+        // Compute left + (top - tl)
+        let sum = vaddq_s16(l, top_minus_tl);
+
+        // Clamp and pack: vqmovun saturates i16 to [0, 255]
+        let packed = vqmovun_s16(sum);
+
+        // Store 8 bytes
+        let dst_arr = <&mut [u8; 8]>::try_from(&mut dst[y * BPS..y * BPS + 8]).unwrap();
+        simd_mem::vst1_u8(dst_arr, packed);
     }
 }
 

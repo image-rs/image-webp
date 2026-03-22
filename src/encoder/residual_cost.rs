@@ -19,9 +19,19 @@ use archmage::{Wasm128Token, arcane, rite};
 #[cfg(all(target_arch = "wasm32", feature = "simd"))]
 use core::arch::wasm32::*;
 
+#[cfg(all(target_arch = "aarch64", feature = "simd"))]
+use archmage::intrinsics::aarch64 as simd_mem;
+#[cfg(all(target_arch = "aarch64", feature = "simd"))]
+use archmage::{NeonToken, SimdToken, arcane, rite};
+#[cfg(all(target_arch = "aarch64", feature = "simd"))]
+use core::arch::aarch64::*;
+
 use super::cost::{LevelCosts, vp8_bit_cost};
 use super::tables::VP8_ENC_BANDS;
-#[cfg(all(feature = "simd", any(target_arch = "x86_64", target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "simd",
+    any(target_arch = "x86_64", target_arch = "wasm32", target_arch = "aarch64")
+))]
 use super::tables::{MAX_LEVEL, MAX_VARIABLE_LEVEL, VP8_LEVEL_FIXED_COSTS};
 use crate::common::types::TokenProbTables;
 
@@ -102,9 +112,25 @@ pub fn get_residual_cost(
     get_residual_cost_scalar(ctx0, res, costs, probs)
 }
 
+/// NEON dispatch for residual cost calculation.
+#[cfg(all(target_arch = "aarch64", feature = "simd"))]
+#[inline]
+pub fn get_residual_cost(
+    ctx0: usize,
+    res: &Residual,
+    costs: &LevelCosts,
+    probs: &TokenProbTables,
+) -> u32 {
+    let token = NeonToken::summon().unwrap();
+    get_residual_cost_neon_entry(token, ctx0, res, costs, probs)
+}
+
 /// Calculate the cost of encoding a residual block using probability-based costs.
 /// Scalar fallback for non-SIMD platforms.
-#[cfg(not(all(feature = "simd", any(target_arch = "x86_64", target_arch = "wasm32"))))]
+#[cfg(not(all(
+    feature = "simd",
+    any(target_arch = "x86_64", target_arch = "wasm32", target_arch = "aarch64")
+)))]
 #[inline]
 pub fn get_residual_cost(
     ctx0: usize,
@@ -356,6 +382,197 @@ fn find_last_nonzero_simd(_token: X64V3Token, coeffs: &[i32; 16]) -> i32 {
         -1
     } else {
         (31 - mask.leading_zeros()) as i32
+    }
+}
+
+// =============================================================================
+// NEON (aarch64) residual cost implementation
+// =============================================================================
+
+/// Entry shim for get_residual_cost_neon
+#[cfg(all(target_arch = "aarch64", feature = "simd"))]
+#[arcane]
+fn get_residual_cost_neon_entry(
+    _token: NeonToken,
+    ctx0: usize,
+    res: &Residual,
+    costs: &LevelCosts,
+    probs: &TokenProbTables,
+) -> u32 {
+    get_residual_cost_neon(_token, ctx0, res, costs, probs)
+}
+
+/// NEON implementation of residual cost calculation.
+/// Precomputes abs values, contexts, and clamped levels with SIMD.
+#[cfg(all(target_arch = "aarch64", feature = "simd"))]
+#[rite]
+pub(crate) fn get_residual_cost_neon(
+    _token: NeonToken,
+    ctx0: usize,
+    res: &Residual,
+    costs: &LevelCosts,
+    probs: &TokenProbTables,
+) -> u32 {
+    // Storage for precomputed values
+    let mut ctxs: [u8; 16] = [0; 16];
+    let mut levels: [u8; 16] = [0; 16];
+    let mut abs_levels: [u16; 16] = [0; 16];
+
+    let ctype = res.coeff_type;
+    let mut n = res.first;
+
+    // Get probability p0 for the first coefficient
+    let band = VP8_ENC_BANDS[n] as usize;
+    let p0 = probs[ctype][band][ctx0][0];
+
+    // Current context - starts at ctx0
+    let mut ctx = ctx0;
+
+    // bit_cost(1, p0) is already incorporated in the cost tables, but only if ctx != 0.
+    let mut cost = if ctx0 == 0 {
+        vp8_bit_cost(true, p0) as u32
+    } else {
+        0
+    };
+
+    // If no non-zero coefficients, just return EOB cost
+    if res.last < 0 {
+        return vp8_bit_cost(false, p0) as u32;
+    }
+
+    // Precompute clamped levels and contexts using NEON
+    {
+        let k_cst2 = vdupq_n_u8(2);
+        let k_cst67 = vdupq_n_u8(MAX_VARIABLE_LEVEL as u8);
+
+        // Load coefficients as i32 and pack to i16 (signed saturation via vqmovn)
+        let c0 = simd_mem::vld1q_s32(<&[i32; 4]>::try_from(&res.coeffs[0..4]).unwrap());
+        let c1 = simd_mem::vld1q_s32(<&[i32; 4]>::try_from(&res.coeffs[4..8]).unwrap());
+        let c2 = simd_mem::vld1q_s32(<&[i32; 4]>::try_from(&res.coeffs[8..12]).unwrap());
+        let c3 = simd_mem::vld1q_s32(<&[i32; 4]>::try_from(&res.coeffs[12..16]).unwrap());
+
+        // Pack i32 to i16 (signed saturation)
+        let s0 = vcombine_s16(vqmovn_s32(c0), vqmovn_s32(c1)); // 8 x i16
+        let s1 = vcombine_s16(vqmovn_s32(c2), vqmovn_s32(c3)); // 8 x i16
+
+        // Absolute value (i16)
+        let e0 = vabsq_s16(s0);
+        let e1 = vabsq_s16(s1);
+
+        // Pack abs i16 to u8 (unsigned saturation via vqmovun — values are positive)
+        let f = vcombine_u8(vqmovun_s16(e0), vqmovun_s16(e1)); // 16 x u8
+
+        // Context: min(abs, 2)
+        let g = vminq_u8(f, k_cst2);
+
+        // Clamped level: min(abs, 67) for cost table lookup
+        let h = vminq_u8(f, k_cst67);
+
+        // Store results
+        simd_mem::vst1q_u8(&mut ctxs, g);
+        simd_mem::vst1q_u8(&mut levels, h);
+
+        // Store 16-bit absolute values (reinterpret signed abs as unsigned)
+        simd_mem::vst1q_u16(
+            <&mut [u16; 8]>::try_from(&mut abs_levels[0..8]).unwrap(),
+            vreinterpretq_u16_s16(e0),
+        );
+        simd_mem::vst1q_u16(
+            <&mut [u16; 8]>::try_from(&mut abs_levels[8..16]).unwrap(),
+            vreinterpretq_u16_s16(e1),
+        );
+    }
+
+    // Pre-index the cost table by type
+    let costs_for_type = &costs.level_cost[ctype];
+    let mut t = &costs_for_type[VP8_ENC_BANDS[n] as usize][ctx];
+
+    // Process coefficients from first to last-1 using precomputed values
+    while (n as i32) < res.last {
+        let level = levels[n] as usize;
+        let flevel = abs_levels[n] as usize;
+
+        cost += VP8_LEVEL_FIXED_COSTS[flevel.min(MAX_LEVEL)] as u32 + t[level] as u32;
+
+        ctx = ctxs[n] as usize;
+        n += 1;
+        t = &costs_for_type[VP8_ENC_BANDS[n] as usize][ctx];
+    }
+
+    // Last coefficient is always non-zero
+    {
+        let level = levels[n] as usize;
+        let flevel = abs_levels[n] as usize;
+
+        cost += VP8_LEVEL_FIXED_COSTS[flevel.min(MAX_LEVEL)] as u32 + t[level] as u32;
+
+        // Add EOB cost for the position after the last coefficient
+        if n < 15 {
+            let next_band = VP8_ENC_BANDS[n + 1] as usize;
+            let next_ctx = ctxs[n] as usize;
+            let last_p0 = probs[ctype][next_band][next_ctx][0];
+            cost += vp8_bit_cost(false, last_p0) as u32;
+        }
+    }
+
+    cost
+}
+
+/// Entry shim for find_last_nonzero_neon
+#[cfg(all(target_arch = "aarch64", feature = "simd"))]
+#[arcane]
+#[allow(dead_code)]
+fn find_last_nonzero_neon_entry(_token: NeonToken, coeffs: &[i32; 16]) -> i32 {
+    find_last_nonzero_neon(_token, coeffs)
+}
+
+/// Find last non-zero coefficient using NEON.
+/// Returns -1 if all coefficients are zero.
+#[cfg(all(target_arch = "aarch64", feature = "simd"))]
+#[rite]
+#[allow(dead_code)]
+fn find_last_nonzero_neon(_token: NeonToken, coeffs: &[i32; 16]) -> i32 {
+    let zero = vdupq_n_s32(0);
+
+    // Load coefficients as i32
+    let c0 = simd_mem::vld1q_s32(<&[i32; 4]>::try_from(&coeffs[0..4]).unwrap());
+    let c1 = simd_mem::vld1q_s32(<&[i32; 4]>::try_from(&coeffs[4..8]).unwrap());
+    let c2 = simd_mem::vld1q_s32(<&[i32; 4]>::try_from(&coeffs[8..12]).unwrap());
+    let c3 = simd_mem::vld1q_s32(<&[i32; 4]>::try_from(&coeffs[12..16]).unwrap());
+
+    // Pack i32 to i16 (signed saturation)
+    let s0 = vcombine_s16(vqmovn_s32(c0), vqmovn_s32(c1)); // 8 x i16
+    let s1 = vcombine_s16(vqmovn_s32(c2), vqmovn_s32(c3)); // 8 x i16
+
+    // Pack i16 to i8 (signed saturation)
+    let m0 = vcombine_s8(vqmovn_s16(s0), vqmovn_s16(s1)); // 16 x i8
+
+    // Compare with zero: result is 0xFF where equal, 0x00 where not
+    let eq_zero = vceqq_s8(m0, vdupq_n_s8(0));
+
+    // Invert: 0xFF where non-zero
+    let ne_zero = vmvnq_s8(vreinterpretq_s8_u8(eq_zero));
+
+    // Create index vector [0, 1, 2, ..., 15]
+    // For each non-zero position, keep its index; for zero positions, keep 0
+    let indices: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    let idx_vec = simd_mem::vld1q_u8(&indices);
+
+    // Mask: keep index where coefficient is non-zero, 0 otherwise
+    let masked = vandq_u8(idx_vec, vreinterpretq_u8_s8(ne_zero));
+
+    // Find max index among non-zero positions
+    let max_idx = vmaxvq_u8(masked);
+
+    // Check if any coefficient is non-zero
+    // If all are zero, masked is all zeros and max_idx is 0
+    // But index 0 could also be a valid non-zero position, so check separately
+    if max_idx > 0 {
+        max_idx as i32
+    } else {
+        // max_idx == 0: either coeff[0] is the only non-zero, or all are zero
+        let _ = zero; // suppress unused warning
+        if coeffs[0] != 0 { 0 } else { -1 }
     }
 }
 

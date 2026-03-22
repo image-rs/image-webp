@@ -206,13 +206,14 @@ fn fill_row_fancy_with_2_uv_rows<const BPP: usize>(
     }
 
     #[cfg(all(feature = "simd", target_arch = "aarch64"))]
-    if BPP == 3 && y_row.len() >= 17 {
-        if let Some(token) = simd_token {
-            fill_row_fancy_with_2_uv_rows_neon::<BPP>(
-                row_buffer, y_row, u_row_1, u_row_2, v_row_1, v_row_2, token,
-            );
-            return;
-        }
+    if BPP == 3
+        && y_row.len() >= 17
+        && let Some(token) = simd_token
+    {
+        fill_row_fancy_with_2_uv_rows_neon::<BPP>(
+            row_buffer, y_row, u_row_1, u_row_2, v_row_1, v_row_2, token,
+        );
+        return;
     }
 
     #[cfg(all(feature = "simd", target_arch = "wasm32"))]

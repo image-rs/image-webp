@@ -562,6 +562,7 @@ impl<'a> WebpEncoder<'a> {
 /// Returns `(bytes, layout, width, height, stride_pixels)`.
 /// For passthrough formats (RGB8, RGBA8), bytes may be borrowed zero-copy.
 /// For converted formats, bytes are always owned and contiguous (stride = width).
+#[allow(clippy::type_complexity)]
 fn pixels_to_webp_input<'a>(
     pixels: &'a PixelSlice<'a>,
 ) -> Result<(alloc::borrow::Cow<'a, [u8]>, PixelLayout, u32, u32, usize), EncodeError> {
@@ -1202,14 +1203,14 @@ impl<'a> zencodec::decode::DecodeJob<'a> for WebpDecodeJob<'a> {
         data: Cow<'a, [u8]>,
         preferred: &[PixelDescriptor],
     ) -> Result<WebpFullFrameDecoder, At<DecodeError>> {
-        if let Some(max) = self.effective_input_size_limit() {
-            if data.len() as u64 > max {
-                return Err(at!(DecodeError::InvalidParameter(alloc::format!(
-                    "input size {} exceeds limit {}",
-                    data.len(),
-                    max
-                ))));
-            }
+        if let Some(max) = self.effective_input_size_limit()
+            && data.len() as u64 > max
+        {
+            return Err(at!(DecodeError::InvalidParameter(alloc::format!(
+                "input size {} exceeds limit {}",
+                data.len(),
+                max
+            ))));
         }
 
         let cfg = self.build_config();
@@ -1300,14 +1301,14 @@ pub struct WebpDecoder<'a> {
 
 impl WebpDecoder<'_> {
     fn check_input_size(&self, data: &[u8]) -> Result<(), DecodeError> {
-        if let Some(max) = self.input_size_limit {
-            if data.len() as u64 > max {
-                return Err(DecodeError::InvalidParameter(alloc::format!(
-                    "input size {} exceeds limit {}",
-                    data.len(),
-                    max
-                )));
-            }
+        if let Some(max) = self.input_size_limit
+            && data.len() as u64 > max
+        {
+            return Err(DecodeError::InvalidParameter(alloc::format!(
+                "input size {} exceeds limit {}",
+                data.len(),
+                max
+            )));
         }
         Ok(())
     }

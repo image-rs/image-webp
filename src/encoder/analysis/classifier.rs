@@ -16,6 +16,13 @@ use archmage::{SimdToken, X64V3Token, arcane};
 #[cfg(all(feature = "simd", target_arch = "x86_64"))]
 use core::arch::x86_64::*;
 
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+use archmage::intrinsics::aarch64 as simd_mem;
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+use archmage::{NeonToken, SimdToken, arcane};
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+use core::arch::aarch64::*;
+
 /// Detected content type for auto-preset selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -145,7 +152,14 @@ fn compute_edge_density(y_src: &[u8], width: usize, height: usize, y_stride: usi
     {
         compute_edge_density_dispatch(y_src, width, height, y_stride)
     }
-    #[cfg(not(all(feature = "simd", target_arch = "x86_64")))]
+    #[cfg(all(feature = "simd", target_arch = "aarch64"))]
+    {
+        compute_edge_density_neon_dispatch(y_src, width, height, y_stride)
+    }
+    #[cfg(not(all(
+        feature = "simd",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )))]
     {
         compute_edge_density_scalar(y_src, width, height, y_stride)
     }
@@ -244,6 +258,89 @@ fn compute_edge_density_sse2(
             // Count set bytes (each edge pixel has 0xFF)
             let mask_bits = _mm_movemask_epi8(edges) as u32;
             edge_count += mask_bits.count_ones();
+            sample_count += 16;
+
+            x += 16;
+        }
+
+        // Handle remaining pixels with scalar
+        while x < width {
+            let diff = row[x].abs_diff(row[x - 1]);
+            if diff > 32 {
+                edge_count += 1;
+            }
+            sample_count += 1;
+            x += 1;
+        }
+
+        y += 16;
+    }
+
+    if sample_count == 0 {
+        return 0.0;
+    }
+    edge_count as f32 / sample_count as f32
+}
+
+// =============================================================================
+// NEON (aarch64) edge density
+// =============================================================================
+
+/// NEON dispatch for edge density.
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[inline]
+fn compute_edge_density_neon_dispatch(
+    y_src: &[u8],
+    width: usize,
+    height: usize,
+    y_stride: usize,
+) -> f32 {
+    let token = NeonToken::summon().unwrap();
+    compute_edge_density_neon(token, y_src, width, height, y_stride)
+}
+
+/// NEON edge density: Process 16 pixels at a time.
+#[cfg(all(feature = "simd", target_arch = "aarch64"))]
+#[arcane]
+fn compute_edge_density_neon(
+    _token: NeonToken,
+    y_src: &[u8],
+    width: usize,
+    height: usize,
+    y_stride: usize,
+) -> f32 {
+    if width < 2 || height < 16 {
+        return 0.0;
+    }
+
+    let mut edge_count = 0u32;
+    let mut sample_count = 0u32;
+    let threshold_vec = vdupq_n_u8(32);
+
+    let mut y = 0;
+    while y < height {
+        let row = &y_src[y * y_stride..];
+
+        // Process 16 pixels at a time (comparing pixels x and x-1)
+        let mut x = 1usize;
+        while x + 15 < width {
+            // Load pixels at positions [x, x+15] and [x-1, x+14]
+            let curr = simd_mem::vld1q_u8(<&[u8; 16]>::try_from(&row[x..x + 16]).unwrap());
+            let prev = simd_mem::vld1q_u8(<&[u8; 16]>::try_from(&row[x - 1..x + 15]).unwrap());
+
+            // Compute |curr - prev| using absolute difference
+            let abs_diff = vabdq_u8(curr, prev);
+
+            // Compare: abs_diff > threshold
+            // vcgtq_u8 returns 0xFF for lanes where abs_diff > threshold
+            let above_thresh = vcgtq_u8(abs_diff, threshold_vec);
+
+            // Count set bytes: each edge pixel has 0xFF, AND with 1 gives 0 or 1
+            // Use horizontal add after masking with 1
+            let ones = vandq_u8(above_thresh, vdupq_n_u8(1));
+
+            // Sum all the 1s: vaddlvq_u8 sums all u8 lanes into a u16
+            edge_count += vaddlvq_u8(ones) as u32;
             sample_count += 16;
 
             x += 16;

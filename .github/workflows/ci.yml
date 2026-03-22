@@ -51,6 +51,39 @@ jobs:
         run: cargo test
       - name: Run tests (no_std)
         run: cargo test --no-default-features
+      - name: Test (--features imgref)
+        run: cargo test --features imgref
+      - name: Test (--features mode_debug)
+        run: cargo test --features mode_debug
+
+  test-x86-features:
+    name: Test x86 features (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+          - name: macOS x64
+            os: macos-26-intel
+          - name: Windows x64
+            os: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure git for private repos
+        run: git config --global url."https://x-access-token:${{ secrets.GH_PAT }}@github.com/".insteadOf "https://github.com/"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Clone sibling repos for path deps
+        shell: bash
+        run: |
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zencodec ../zencodec
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/zenpixels ../zenpixels
+          git clone --depth 1 https://x-access-token:${{ secrets.GH_PAT }}@github.com/imazen/linear-srgb ../linear-srgb
+          rm -f Cargo.lock
+      - uses: Swatinem/rust-cache@v2
+      - name: Check (--features avx512)
+        run: cargo check --features avx512
 
   i686:
     name: Test (Linux i686)

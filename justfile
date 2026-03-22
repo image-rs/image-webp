@@ -79,6 +79,14 @@ test-armv7:
 test-cross: test-i686 test-armv7
     @echo "All cross tests passed!"
 
+# Check all locally-resolvable feature permutations
+feature-check:
+    cargo test --no-default-features
+    cargo test --features "std,fast-yuv,simd,pixel-types"
+    cargo test --features imgref
+    cargo test --features mode_debug
+    cargo check --features avx512
+
 # Run all quality checks
 check: fmt clippy test
     @echo "All checks passed!"
