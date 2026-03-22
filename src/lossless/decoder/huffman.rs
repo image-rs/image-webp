@@ -1,6 +1,6 @@
 use std::io::BufRead;
 
-use super::decoder::BitReader;
+use super::BitReader;
 use crate::decoder::DecodingError;
 
 const MAX_ALLOWED_CODE_LENGTH: usize = 15;

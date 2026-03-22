@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use crate::decoder::DecodingError;
 
-use super::decoder::subsample_size;
+use super::subsample_size;
 
 #[derive(Debug, Clone)]
 pub(crate) enum TransformType {
