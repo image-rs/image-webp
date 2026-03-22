@@ -177,6 +177,10 @@ pub use codec::{
     WebpFullFrameDecoder, WebpFullFrameEncoder,
 };
 
+// zenode node definitions
+#[cfg(feature = "zenode")]
+pub mod zenode_defs;
+
 /// Standalone metadata convenience functions for already-encoded WebP data.
 ///
 /// For embedding metadata during encoding, use
