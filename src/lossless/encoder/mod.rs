@@ -2,11 +2,53 @@ use std::io::{self, Write};
 use std::slice::ChunksExact;
 
 use crate::{ColorType, EncodingError};
-use bit_writer::BitWriter;
 use huffman::{write_huffman_tree, write_single_entry_huffman_tree};
 
-mod bit_writer;
 mod huffman;
+
+struct BitWriter<W> {
+    writer: W,
+    buffer: u64,
+    nbits: u8,
+}
+
+impl<W: Write> BitWriter<W> {
+    #[inline(always)]
+    fn write_bits(&mut self, bits: u64, nbits: u8) -> io::Result<()> {
+        debug_assert!(nbits <= 64);
+
+        self.buffer |= bits << self.nbits;
+        self.nbits += nbits;
+
+        if self.nbits >= 64 {
+            self.write_bits_cold(bits, nbits)?;
+        }
+        debug_assert!(self.nbits < 64);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn write_bits_cold(&mut self, bits: u64, nbits: u8) -> io::Result<()> {
+        self.writer.write_all(&self.buffer.to_le_bytes())?;
+        self.nbits -= 64;
+        self.buffer = bits.checked_shr(u32::from(nbits - self.nbits)).unwrap_or(0);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.nbits % 8 != 0 {
+            self.write_bits(0, 8 - self.nbits % 8)?;
+        }
+        if self.nbits > 0 {
+            self.writer
+                .write_all(&self.buffer.to_le_bytes()[..self.nbits as usize / 8])
+                .unwrap();
+            self.buffer = 0;
+            self.nbits = 0;
+        }
+        Ok(())
+    }
+}
 
 const fn length_to_symbol(len: u16) -> (u16, u8) {
     let len = len - 1;
@@ -109,7 +151,11 @@ pub(crate) fn encode_frame_lossless<W: Write>(
     params: EncoderParams,
     implicit_dimensions: bool,
 ) -> Result<(), EncodingError> {
-    let w = &mut BitWriter::new(writer);
+    let w = &mut BitWriter {
+        writer,
+        buffer: 0,
+        nbits: 0,
+    };
 
     let (is_color, is_alpha, bytes_per_pixel) = match color {
         ColorType::L8 => (false, false, 1),

@@ -1,7 +1,7 @@
 use std::collections::BinaryHeap;
 use std::io::{self, Write};
 
-use super::bit_writer::BitWriter;
+use super::BitWriter;
 use crate::lossless::CODE_LENGTH_CODE_ORDER;
 
 pub(crate) fn write_single_entry_huffman_tree<W: Write>(
