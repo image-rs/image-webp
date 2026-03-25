@@ -61,42 +61,23 @@ pub(crate) fn composite_frame(
         return;
     }
 
-    // clear rectangle occupied by previous frame
+    // Clear rectangle occupied by previous frame.
+    // The canvas is always RGBA (4 bytes/pixel) regardless of whether the
+    // current frame carries alpha, so we always clear with 4-byte pixels.
     if let Some(clear_color) = clear_color {
-        match (frame_is_full_size, frame_has_alpha) {
-            (true, true) => {
-                for pixel in canvas.chunks_exact_mut(4) {
-                    pixel.copy_from_slice(&clear_color);
-                }
+        if frame_is_full_size {
+            for pixel in canvas.chunks_exact_mut(4) {
+                pixel.copy_from_slice(&clear_color);
             }
-            (true, false) => {
-                for pixel in canvas.chunks_exact_mut(3) {
-                    pixel.copy_from_slice(&clear_color[..3]);
-                }
-            }
-            (false, true) => {
-                for y in 0..previous_frame_height as usize {
-                    for x in 0..previous_frame_width as usize {
-                        let canvas_index = ((x + previous_frame_offset_x as usize)
-                            + (y + previous_frame_offset_y as usize) * canvas_width as usize)
-                            * 4;
+        } else {
+            for y in 0..previous_frame_height as usize {
+                for x in 0..previous_frame_width as usize {
+                    let canvas_index = ((x + previous_frame_offset_x as usize)
+                        + (y + previous_frame_offset_y as usize) * canvas_width as usize)
+                        * 4;
 
-                        let output = &mut canvas[canvas_index..][..4];
-                        output.copy_from_slice(&clear_color);
-                    }
-                }
-            }
-            (false, false) => {
-                for y in 0..previous_frame_height as usize {
-                    for x in 0..previous_frame_width as usize {
-                        // let frame_index = (x + y * frame_width as usize) * 4;
-                        let canvas_index = ((x + previous_frame_offset_x as usize)
-                            + (y + previous_frame_offset_y as usize) * canvas_width as usize)
-                            * 3;
-
-                        let output = &mut canvas[canvas_index..][..3];
-                        output.copy_from_slice(&clear_color[..3]);
-                    }
+                    let output = &mut canvas[canvas_index..][..4];
+                    output.copy_from_slice(&clear_color);
                 }
             }
         }
@@ -324,4 +305,115 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
     };
 
     Ok(chunk)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: clearing the canvas for a non-alpha frame used 3-byte
+    /// stride on the always-RGBA canvas, corrupting pixel alignment.
+    #[test]
+    fn dispose_clear_fullsize_rgb_frame() {
+        let w = 4u32;
+        let h = 4u32;
+        let mut canvas = vec![0xAA_u8; (w * h * 4) as usize];
+        let frame = vec![0xFF_u8; (w * h * 3) as usize];
+
+        composite_frame(
+            &mut canvas,
+            w,
+            h,
+            Some([0, 0, 0, 0]),
+            &frame,
+            0,
+            0,
+            w,
+            h,
+            false, // frame_has_alpha
+            true,  // frame_use_alpha_blending (forces slow path)
+            w,
+            h,
+            0,
+            0,
+        );
+
+        for (i, pixel) in canvas.chunks_exact(4).enumerate() {
+            assert_eq!(
+                pixel,
+                [0xFF, 0xFF, 0xFF, 0xFF],
+                "pixel {i} corrupted: {pixel:?}"
+            );
+        }
+    }
+
+    /// Regression test: sub-frame clear used 3-byte indexing on RGBA canvas.
+    #[test]
+    fn dispose_clear_subframe_rgb_frame() {
+        let canvas_w = 8u32;
+        let canvas_h = 8u32;
+        let mut canvas = vec![0xAA_u8; (canvas_w * canvas_h * 4) as usize];
+
+        let prev_x = 2u32;
+        let prev_y = 2u32;
+        let prev_w = 4u32;
+        let prev_h = 4u32;
+
+        let frame_w = 4u32;
+        let frame_h = 4u32;
+        let frame = vec![0xFF_u8; (frame_w * frame_h * 3) as usize];
+
+        composite_frame(
+            &mut canvas,
+            canvas_w,
+            canvas_h,
+            Some([0, 0, 0, 0]),
+            &frame,
+            0,
+            0,
+            frame_w,
+            frame_h,
+            false,
+            true,
+            prev_w,
+            prev_h,
+            prev_x,
+            prev_y,
+        );
+
+        let stride = canvas_w as usize * 4;
+
+        // Previous-frame rectangle should be cleared to [0,0,0,0].
+        // Only check the region cleared but NOT overwritten by the new frame.
+        for y in prev_y as usize..(prev_y + prev_h) as usize {
+            for x in prev_x as usize..(prev_x + prev_w) as usize {
+                let idx = y * stride + x * 4;
+                let pixel = &canvas[idx..idx + 4];
+                if x >= frame_w as usize || y >= frame_h as usize {
+                    assert_eq!(
+                        pixel,
+                        [0, 0, 0, 0],
+                        "prev-frame pixel ({x},{y}) not cleared: {pixel:?}"
+                    );
+                }
+            }
+        }
+
+        // New frame region should be opaque white from RGB→RGBA.
+        for y in 0..frame_h as usize {
+            for x in 0..frame_w as usize {
+                let idx = y * stride + x * 4;
+                let pixel = &canvas[idx..idx + 4];
+                assert_eq!(
+                    pixel,
+                    [0xFF, 0xFF, 0xFF, 0xFF],
+                    "new-frame pixel ({x},{y}) wrong: {pixel:?}"
+                );
+            }
+        }
+
+        // Pixels outside both rectangles should be untouched.
+        let pixel = &canvas[7 * 4..7 * 4 + 4];
+        assert_eq!(pixel, [0xAA, 0xAA, 0xAA, 0xAA], "untouched pixel modified");
+    }
 }
