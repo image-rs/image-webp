@@ -201,3 +201,50 @@ reftest!(
     lossless_indexed_2bit_palette,
     lossless_indexed_4bit_palette
 );
+
+// Builds a minimal RIFF WebP containing only a VP8L header (no image data).
+// This is enough to test dimension parsing without needing valid pixel data.
+fn vp8l_dimensions_only_webp(width_minus_one: u32, height_minus_one: u32) -> Vec<u8> {
+    let packed = (width_minus_one & 0x3FFF) | ((height_minus_one & 0x3FFF) << 14);
+    let packed_le = packed.to_le_bytes();
+    // VP8L payload: 1-byte signature + 4-byte packed header = 5 bytes
+    let payload: [u8; 5] = [0x2F, packed_le[0], packed_le[1], packed_le[2], packed_le[3]];
+    let chunk_size: u32 = payload.len() as u32;
+    // RIFF file_size = "WEBP"(4) + "VP8L"(4) + size_field(4) + payload(5) + padding(1) = 18
+    let riff_size: u32 = 4 + 4 + 4 + chunk_size + (chunk_size % 2);
+    [
+        b"RIFF".as_slice(),
+        &riff_size.to_le_bytes(),
+        b"WEBP",
+        b"VP8L",
+        &chunk_size.to_le_bytes(),
+        &payload,
+        &[0x00], // padding byte (chunk_size=5 is odd)
+    ]
+    .concat()
+}
+
+#[test]
+fn test_vp8l_max_width_dimensions() {
+    // Regression test: VP8L encodes (width - 1) in bits 0-13 and (height - 1) in bits 14-27.
+    // The buggy formula `(1 + header) & 0x3FFF` returns 0 instead of 16384 when the encoded
+    // value is 0x3FFF, because adding 1 carries into bit 14 before the mask is applied.
+    // The correct formula is `(header & 0x3FFF) + 1`.
+    let data = vp8l_dimensions_only_webp(16383, 0);
+    let decoder = image_webp::WebPDecoder::new(Cursor::new(data)).unwrap();
+    assert_eq!(decoder.dimensions(), (16384, 1));
+}
+
+#[test]
+fn test_vp8l_max_height_dimensions() {
+    let data = vp8l_dimensions_only_webp(0, 16383);
+    let decoder = image_webp::WebPDecoder::new(Cursor::new(data)).unwrap();
+    assert_eq!(decoder.dimensions(), (1, 16384));
+}
+
+#[test]
+fn test_vp8l_max_width_and_height_dimensions() {
+    let data = vp8l_dimensions_only_webp(16383, 16383);
+    let decoder = image_webp::WebPDecoder::new(Cursor::new(data)).unwrap();
+    assert_eq!(decoder.dimensions(), (16384, 16384));
+}
