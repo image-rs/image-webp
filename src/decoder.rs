@@ -418,8 +418,8 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     return Err(DecodingError::VersionNumberInvalid(version as u8));
                 }
 
-                self.width = (1 + header) & 0x3FFF;
-                self.height = (1 + (header >> 14)) & 0x3FFF;
+                self.width = (header & 0x3FFF) + 1;
+                self.height = ((header >> 14) & 0x3FFF) + 1;
                 self.chunks
                     .insert(WebPRiffChunk::VP8L, start..start + chunk_size);
                 self.kind = ImageKind::Lossless;
