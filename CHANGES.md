@@ -1,5 +1,13 @@
 # Release Notes
 
+### Version 0.2.5
+
+Bug fixes:
+ - Fixed disposal of transparent animated frames (#171)
+ - Fixed canvas corruption when disposing non-alpha animated frames to background (#178)
+ - Fixed VP8L dimension parsing for maximum-width or maximum-height images (#179)
+
+
 ### Version 0.2.4
 
 Changes:
