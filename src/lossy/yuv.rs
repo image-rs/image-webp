@@ -82,6 +82,10 @@ pub(crate) fn fill_rgb_buffer_fancy<const BPP: usize>(
     height: usize,
     buffer_width: usize,
 ) {
+    // if either width/height is zero, just return to avoid panic
+    if width == 0 || height == 0 {
+        return;
+    }
     // buffer width is always even so don't need to do div_ceil
     let chroma_buffer_width = buffer_width / 2;
     let chroma_width = width.div_ceil(2);
@@ -521,13 +525,13 @@ mod tests {
         let y_buffer = [
             77, 162, 202, 185,
             28, 13, 199, 182,
-            135, 147, 164, 135, 
+            135, 147, 164, 135,
             66, 27, 171, 130,
         ];
 
         #[rustfmt::skip]
         let u_buffer = [
-            34, 101, 
+            34, 101,
             123, 163
         ];
 
