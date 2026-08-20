@@ -105,10 +105,10 @@ struct Vp8Encoder<W> {
     top_border_u: Vec<u8>,
     top_border_v: Vec<u8>,
 
-    // the mode picked for each macroblock, in encoding order, so that the
-    // tests can check what the chooser selected
+    // what the chooser picked for each macroblock, in encoding order, so that
+    // the tests can check it
     #[cfg(test)]
-    chosen_modes: Vec<(LumaMode, ChromaMode)>,
+    chosen_modes: Vec<MacroblockInfo>,
 }
 
 impl<W: Write> Vp8Encoder<W> {
@@ -675,8 +675,7 @@ impl<W: Write> Vp8Encoder<W> {
             for mbx in 0..self.macroblock_width {
                 let macroblock_info = self.choose_macroblock_info(mbx.into(), mby.into());
                 #[cfg(test)]
-                self.chosen_modes
-                    .push((macroblock_info.luma_mode, macroblock_info.chroma_mode));
+                self.chosen_modes.push(macroblock_info);
 
                 // write macroblock headers
                 self.write_macroblock_header(&macroblock_info, mbx.into());
@@ -726,23 +725,22 @@ impl<W: Write> Vp8Encoder<W> {
         // the borders were written by the reconstruction of the neighbouring
         // macroblocks, so every candidate is scored against the prediction the
         // decoder will produce for it
-        let luma_mode = self.choose_luma_mode(mbx, mby);
+        let (luma_mode, luma_bpred) = self.choose_luma_mode(mbx, mby);
         let chroma_mode = self.choose_chroma_mode(mbx, mby);
 
         MacroblockInfo {
             luma_mode,
-            // B_PRED is never chosen here, so there are no subblock modes to
-            // go with it
-            luma_bpred: None,
+            luma_bpred,
             chroma_mode,
             segment_id: None,
             coeffs_skipped: false,
         }
     }
 
-    /// Picks the whole macroblock luma mode with the lowest rate distortion
-    /// cost, taking each candidate all the way through the residual pipeline.
-    fn choose_luma_mode(&self, mbx: usize, mby: usize) -> LumaMode {
+    /// Picks the luma mode with the lowest rate distortion cost, taking each
+    /// candidate all the way through the residual pipeline. B_PRED comes with
+    /// the subblock modes it was chosen with.
+    fn choose_luma_mode(&self, mbx: usize, mby: usize) -> (LumaMode, Option<[IntraMode; 16]>) {
         let segment = self.segments[0];
         let lambda = lambda_for(segment.yac);
         let source_stride = usize::from(self.macroblock_width) * 16;
@@ -759,7 +757,7 @@ impl<W: Write> Vp8Encoder<W> {
 
             // the 0th coefficient of every luma block travels in the Y2 block,
             // so the luma blocks themselves are coded from the 1st onwards
-            let mut rate = coefficient_rate(&coeffs.y2_coeffs, 0);
+            let mut rate = luma_mode_rate(luma_mode) + coefficient_rate(&coeffs.y2_coeffs, 0);
             for block in coeffs.y_coeffs.chunks_exact(16) {
                 rate += coefficient_rate(block.try_into().unwrap(), 1);
             }
@@ -777,13 +775,186 @@ impl<W: Write> Vp8Encoder<W> {
                 mby * 16,
             );
 
-            let cost = distortion + u64::from(rate) * lambda;
+            let cost = distortion + rate_cost(rate, lambda);
             if cost < best.1 {
                 best = (luma_mode, cost);
             }
         }
 
-        best.0
+        // a whole block mode that already describes the macroblock exactly, and
+        // codes nothing but an end of block token per block, leaves nothing for
+        // a subblock mode to predict better. Nothing but flat colour reaches
+        // here, which on a rendered part is most of the frame, so this is also
+        // where most of the search time is saved.
+        let nothing_to_code = rate_cost(luma_mode_rate(best.0) + (1 + 16) * ONE_BIT, lambda);
+        if best.1 <= nothing_to_code {
+            return (best.0, None);
+        }
+
+        // B_PRED predicts each 4x4 subblock on its own, which describes an edge
+        // running across a macroblock far better than one whole block
+        // prediction can, but it pays sixteen subblock modes for it and cannot
+        // use the Y2 block.
+        //
+        // It has to beat the whole block mode by a whole bit rather than merely
+        // tie with it. `coefficient_rate` charges a bit for every end of block
+        // token where the coder spends a fraction of one on the tokens that end
+        // a block with nothing in it, and the whole block modes pay one such
+        // token more than B_PRED does, for the Y2 block B_PRED has not got.
+        // Without the correction B_PRED wins macroblocks it then spends more
+        // bytes on. Ties, and the correction itself, go to the whole block
+        // mode, which is the lower prediction mode number.
+        let limit = best.1.saturating_sub(rate_cost(ONE_BIT, lambda));
+        match self.choose_bpred_modes(mbx, mby, limit) {
+            Some((bpred_modes, _)) => (LumaMode::B, Some(bpred_modes)),
+            None => (best.0, None),
+        }
+    }
+
+    /// Searches the sixteen 4x4 subblock modes in the raster order the decoder
+    /// reconstructs them in, so that each one is predicted from the pixels its
+    /// neighbours will really have, and returns them with their total cost.
+    ///
+    /// Returns `None` as soon as the running cost can no longer come in under
+    /// `limit`, the cost of the best whole macroblock mode, since the cost only
+    /// ever grows as more subblocks are added to it.
+    fn choose_bpred_modes(
+        &self,
+        mbx: usize,
+        mby: usize,
+        limit: u64,
+    ) -> Option<([IntraMode; 16], u64)> {
+        let lambda = lambda_for(self.segments[0].yac);
+        let source_stride = usize::from(self.macroblock_width) * 16;
+
+        let mut workspace = create_border_luma(
+            mbx,
+            mby,
+            self.macroblock_width.into(),
+            &self.top_border_y,
+            &self.left_border_y,
+        );
+
+        let mut modes = [IntraMode::default(); 16];
+        let mut cost = rate_cost(luma_mode_rate(LumaMode::B), lambda);
+
+        // the subblock modes are coded against the modes of the subblocks above
+        // and to the left of each one, so the search tracks the same context
+        // `write_macroblock_header` will code them with
+        let mut left_modes = self.left_b_pred;
+        let mut top_modes: [IntraMode; 4] = self.top_b_pred[mbx * 4..][..4].try_into().unwrap();
+
+        for sby in 0..4 {
+            let mut left = left_modes[sby];
+            for sbx in 0..4 {
+                let probs = &KEYFRAME_BPRED_MODE_PROBS[top_modes[sbx] as usize][left as usize];
+                let x0 = sbx * 4 + 1;
+                let y0 = sby * 4 + 1;
+                let source = (mby * 16 + sby * 4) * source_stride + mbx * 16 + sbx * 4;
+
+                let mut best = (u64::MAX, IntraMode::default(), [0u8; 16]);
+                for &mode in &BPRED_MODE_CANDIDATES {
+                    if !bpred_predicts_from_reconstructed_pixels(mode, mbx, mby, sbx, sby) {
+                        continue;
+                    }
+
+                    // whatever the mode predicts, it pays for its own mode and
+                    // for ending its block, so a mode that costs more to name
+                    // than the best one costs altogether cannot win
+                    let mode_rate = tree_rate(&KEYFRAME_BPRED_MODE_TREE, probs, mode as i8);
+                    if rate_cost(mode_rate + ONE_BIT, lambda) >= best.0 {
+                        continue;
+                    }
+
+                    let (cost, reconstruction) =
+                        self.score_subblock(&mut workspace, mode, (x0, y0), source, mode_rate);
+                    if cost < best.0 {
+                        best = (cost, mode, reconstruction);
+                    }
+                }
+
+                // B_DC_PRED is offered everywhere, so there is always a winner
+                let (subblock_cost, mode, reconstruction) = best;
+                cost += subblock_cost;
+                if cost >= limit {
+                    return None;
+                }
+
+                // the next subblocks predict from this one, so put the pixels
+                // the decoder will hold there into the workspace
+                for (y, row) in reconstruction.chunks_exact(4).enumerate() {
+                    workspace[(y0 + y) * LUMA_STRIDE + x0..][..4].copy_from_slice(row);
+                }
+
+                modes[sby * 4 + sbx] = mode;
+                left = mode;
+                top_modes[sbx] = mode;
+            }
+            left_modes[sby] = left;
+        }
+
+        Some((modes, cost))
+    }
+
+    /// Takes one candidate subblock mode through the residual pipeline and
+    /// reports its rate distortion cost along with the pixels the decoder will
+    /// reconstruct for it.
+    ///
+    /// The prediction is left in `workspace`. Every subblock mode reads only
+    /// the row above and the column left of the subblock, so overwriting the
+    /// subblock itself with one candidate does not disturb the next.
+    fn score_subblock(
+        &self,
+        workspace: &mut [u8; LUMA_BLOCK_SIZE],
+        mode: IntraMode,
+        (x0, y0): (usize, usize),
+        source: usize,
+        mode_rate: u32,
+    ) -> (u64, [u8; 16]) {
+        let segment = self.segments[0];
+        let lambda = lambda_for(segment.yac);
+        let source_stride = usize::from(self.macroblock_width) * 16;
+
+        predict_bmode(workspace, mode, x0, y0, LUMA_STRIDE);
+
+        let mut block = [0i32; 16];
+        for y in 0..4 {
+            for x in 0..4 {
+                let predicted = workspace[(y0 + y) * LUMA_STRIDE + x0 + x];
+                let actual = self.frame.ybuf[source + y * source_stride + x];
+                block[y * 4 + x] = i32::from(actual) - i32::from(predicted);
+            }
+        }
+        transform::dct4x4(&mut block);
+
+        // a B_PRED macroblock has no Y2 block, so all sixteen coefficients of
+        // every subblock are coded here
+        for (index, coeff) in block.iter_mut().enumerate() {
+            let quant = if index > 0 { segment.yac } else { segment.ydc };
+            *coeff /= i32::from(quant);
+        }
+        let rate = mode_rate + coefficient_rate(&block, 0);
+
+        for (index, coeff) in block.iter_mut().enumerate() {
+            let quant = if index > 0 { segment.yac } else { segment.ydc };
+            *coeff *= i32::from(quant);
+        }
+        transform::idct4x4(&mut block);
+
+        let mut reconstruction = [0u8; 16];
+        let mut distortion = 0;
+        for y in 0..4 {
+            for x in 0..4 {
+                let predicted = i32::from(workspace[(y0 + y) * LUMA_STRIDE + x0 + x]);
+                let value = (block[y * 4 + x] + predicted).clamp(0, 255);
+                reconstruction[y * 4 + x] = value as u8;
+
+                let difference = value - i32::from(self.frame.ybuf[source + y * source_stride + x]);
+                distortion += u64::from((difference * difference) as u32);
+            }
+        }
+
+        (distortion + rate_cost(rate, lambda), reconstruction)
     }
 
     /// Picks the chroma mode, which both chroma planes share, by the summed
@@ -824,7 +995,7 @@ impl<W: Write> Vp8Encoder<W> {
                     source_stride,
                     mbx * 8,
                     mby * 8,
-                ) + u64::from(rate) * lambda;
+                ) + rate_cost(rate, lambda);
             }
             if cost < best.1 {
                 best = (chroma_mode, cost);
@@ -1099,7 +1270,7 @@ impl<W: Write> Vp8Encoder<W> {
         mby: usize,
     ) -> [i32; 16 * 16] {
         let mut luma_blocks = [0i32; 16 * 16];
-        let stride = 1usize + 16 + 4;
+        let stride = LUMA_STRIDE;
         let mbw = self.macroblock_width;
         let width = usize::from(mbw * 16);
 
@@ -1119,18 +1290,7 @@ impl<W: Write> Vp8Encoder<W> {
                 let y0 = sby * 4 + 1;
                 let x0 = sbx * 4 + 1;
 
-                match bpred_modes[i] {
-                    IntraMode::TM => predict_tmpred(&mut y_with_border, 4, x0, y0, stride),
-                    IntraMode::VE => predict_bvepred(&mut y_with_border, x0, y0, stride),
-                    IntraMode::HE => predict_bhepred(&mut y_with_border, x0, y0, stride),
-                    IntraMode::DC => predict_bdcpred(&mut y_with_border, x0, y0, stride),
-                    IntraMode::LD => predict_bldpred(&mut y_with_border, x0, y0, stride),
-                    IntraMode::RD => predict_brdpred(&mut y_with_border, x0, y0, stride),
-                    IntraMode::VR => predict_bvrpred(&mut y_with_border, x0, y0, stride),
-                    IntraMode::VL => predict_bvlpred(&mut y_with_border, x0, y0, stride),
-                    IntraMode::HD => predict_bhdpred(&mut y_with_border, x0, y0, stride),
-                    IntraMode::HU => predict_bhupred(&mut y_with_border, x0, y0, stride),
-                }
+                predict_bmode(&mut y_with_border, bpred_modes[i], x0, y0, stride);
 
                 let block_index = sby * 16 * 4 + sbx * 16;
                 let mut current_subblock = [0i32; 16];
@@ -1428,7 +1588,132 @@ fn coefficient_rate(block: &[i32; 16], first_coeff: usize) -> u32 {
         }
     }
 
-    rate
+    rate * ONE_BIT
+}
+
+/// Rates are counted in eighths of a bit, since the mode syntax costs a
+/// fraction of a bit per macroblock and the choice between one prediction mode
+/// and another often comes down to nothing else.
+const ONE_BIT: u32 = 8;
+
+/// What a rate weighs against squared pixel error, for the given lambda.
+fn rate_cost(rate: u32, lambda: u64) -> u64 {
+    (u64::from(rate) * lambda) / u64::from(ONE_BIT)
+}
+
+/// Rate of the macroblock luma mode itself, which is what B_PRED has to pay
+/// sixteen subblock modes out of: the keyframe tree codes it in 0.8 bits
+/// against the 2.6 to 3.6 bits it spends on a whole macroblock mode.
+fn luma_mode_rate(luma_mode: LumaMode) -> u32 {
+    tree_rate(&KEYFRAME_YMODE_TREE, &KEYFRAME_YMODE_PROBS, luma_mode as i8)
+}
+
+/// Rate of coding `value` with a tree and its probabilities, by walking from
+/// the leaf back to the root the way `write_with_tree` does.
+fn tree_rate(tree: &[i8], probs: &[Prob], value: i8) -> u32 {
+    let mut rate = 0;
+    // the values are encoded as negative or zero in the tree, positive values
+    // are indexes
+    let mut index = tree.iter().position(|&node| node == -value).unwrap();
+
+    loop {
+        // an odd index is the right hand child of its parent, so the bit that
+        // reaches it is a one
+        let bit = index % 2 == 1;
+        index -= usize::from(bit);
+        rate += bool_rate(probs[index / 2], bit);
+
+        if index == 0 {
+            return rate;
+        }
+        index = tree
+            .iter()
+            .position(|&node| node == index as i8)
+            .expect("every node of a tree but the root has a parent");
+    }
+}
+
+/// Rate of coding one bool the coder gives probability `prob / 256` of being
+/// false.
+fn bool_rate(prob: Prob, bit: bool) -> u32 {
+    let odds = if bit {
+        256 - u16::from(prob)
+    } else {
+        u16::from(prob)
+    };
+    u32::from(BOOL_RATE[usize::from(odds)])
+}
+
+/// Rate of a bool of probability `p / 256`, in eighths of a bit, which is
+/// `round(-log2(p / 256) * 8)`. A probability of 0 would mean the bool can
+/// never be coded and appears in none of the spec's tables, so entry 0 only
+/// stands in for entry 1.
+#[rustfmt::skip]
+const BOOL_RATE: [u8; 256] = [
+    64, 64, 56, 51, 48, 45, 43, 42, 40, 39, 37, 36, 35, 34, 34, 33,
+    32, 31, 31, 30, 29, 29, 28, 28, 27, 27, 26, 26, 26, 25, 25, 24,
+    24, 24, 23, 23, 23, 22, 22, 22, 21, 21, 21, 21, 20, 20, 20, 20,
+    19, 19, 19, 19, 18, 18, 18, 18, 18, 17, 17, 17, 17, 17, 16, 16,
+    16, 16, 16, 15, 15, 15, 15, 15, 15, 14, 14, 14, 14, 14, 14, 14,
+    13, 13, 13, 13, 13, 13, 13, 12, 12, 12, 12, 12, 12, 12, 12, 11,
+    11, 11, 11, 11, 11, 11, 11, 11, 10, 10, 10, 10, 10, 10, 10, 10,
+    10, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 8, 8, 8, 8,
+    8, 8, 8, 8, 8, 8, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+    7, 7, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 5,
+    5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 4,
+    4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3,
+    3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+/// The 4x4 subblock modes, in the order section 11.2 numbers them. Ties are
+/// broken towards the front of the list, which keeps the output deterministic.
+const BPRED_MODE_CANDIDATES: [IntraMode; 10] = [
+    IntraMode::DC,
+    IntraMode::TM,
+    IntraMode::VE,
+    IntraMode::HE,
+    IntraMode::LD,
+    IntraMode::RD,
+    IntraMode::VR,
+    IntraMode::VL,
+    IntraMode::HD,
+    IntraMode::HU,
+];
+
+/// Whether a subblock mode predicts from pixels something really reconstructed,
+/// the same restriction `predicts_from_reconstructed_pixels` puts on the whole
+/// macroblock modes, applied a subblock at a time.
+///
+/// A subblock past the first row of its macroblock has the subblock above it to
+/// predict from whatever the macroblock's own position, and likewise to the
+/// left. The four pixels above and to the right are the exception: for the
+/// right hand column of subblocks `create_border_luma` copies the macroblock
+/// above's row down the workspace rather than taking pixels from a macroblock
+/// that has not been coded yet, so they come from above the macroblock however
+/// far down the subblock sits.
+///
+/// B_DC_PRED is offered everywhere. It averages both edges whatever they hold,
+/// so there is always a candidate to fall back on.
+fn bpred_predicts_from_reconstructed_pixels(
+    mode: IntraMode,
+    mbx: usize,
+    mby: usize,
+    sbx: usize,
+    sby: usize,
+) -> bool {
+    let above = mby != 0 || sby != 0;
+    let left = mbx != 0 || sbx != 0;
+    let above_right = if sbx == 3 { mby != 0 } else { above };
+
+    match mode {
+        IntraMode::DC => true,
+        IntraMode::VE | IntraMode::LD | IntraMode::VL => above && above_right,
+        IntraMode::HE | IntraMode::HU => left,
+        IntraMode::TM | IntraMode::RD | IntraMode::VR | IntraMode::HD => above && left,
+    }
 }
 
 /// Adds the dequantized residual of each 4x4 subblock back into a prediction
@@ -1563,9 +1848,50 @@ mod tests {
         })
     }
 
-    /// Runs the lossy encoder over an image and reports the mode picked per
-    /// macroblock, in encoding order.
-    fn chosen_modes(rgb: &[u8], width: u16, height: u16) -> Vec<(LumaMode, ChromaMode)> {
+    /// Thin strokes at an angle on white, the wireframe case: an edge crosses
+    /// some 4x4 subblocks and misses the rest of the macroblock entirely, which
+    /// is what one whole macroblock prediction cannot describe.
+    fn line_art_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |x, y| {
+            if (x + y) % 37 < 2 || (x + height - y) % 53 < 2 {
+                [40, 44, 52]
+            } else {
+                [250, 250, 250]
+            }
+        })
+    }
+
+    /// Blocky glyphs on a flat page: two colours and hard edges, the wordmark
+    /// case.
+    fn glyph_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |x, y| {
+            let (gx, gy) = (x % 24, y % 32);
+            let stroke = (4..20).contains(&gx)
+                && (4..28).contains(&gy)
+                && (!(8..16).contains(&gx) || (12..16).contains(&gy));
+            if stroke {
+                [20, 20, 24]
+            } else {
+                [252, 252, 250]
+            }
+        })
+    }
+
+    /// A checker on the 8 pixel grid, which is all hard edges but lines every
+    /// 4x4 subblock up with one flat colour.
+    fn checker_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |x, y| {
+            if (x / 8 + y / 8) % 2 == 0 {
+                [235, 235, 240]
+            } else {
+                [45, 50, 60]
+            }
+        })
+    }
+
+    /// Runs the lossy encoder over an image and reports what the chooser picked
+    /// for each macroblock, in encoding order.
+    fn chosen_modes(rgb: &[u8], width: u16, height: u16) -> Vec<MacroblockInfo> {
         let mut encoder = Vp8Encoder::new(Vec::new());
         encoder
             .encode_image(rgb, ColorType::Rgb8, width, height, QUALITY)
@@ -1578,22 +1904,34 @@ mod tests {
     /// predict from the 127/129 border fill instead of real pixels, so the
     /// directional modes have nothing meaningful to copy there.
     fn assert_interior_modes(
-        modes: &[(LumaMode, ChromaMode)],
+        macroblocks: &[MacroblockInfo],
         width: usize,
         expected: (LumaMode, ChromaMode),
     ) {
         let macroblock_width = width.div_ceil(16);
-        assert_eq!(modes.len() % macroblock_width, 0);
+        assert_eq!(macroblocks.len() % macroblock_width, 0);
         let mut interior = 0;
-        for (index, &modes) in modes.iter().enumerate() {
+        for (index, macroblock) in macroblocks.iter().enumerate() {
             let (mbx, mby) = (index % macroblock_width, index / macroblock_width);
             if mbx == 0 || mby == 0 {
                 continue;
             }
-            assert_eq!(modes, expected, "macroblock ({mbx}, {mby})");
+            assert_eq!(
+                (macroblock.luma_mode, macroblock.chroma_mode),
+                expected,
+                "macroblock ({mbx}, {mby})"
+            );
             interior += 1;
         }
         assert!(interior > 0, "the image has no interior macroblocks");
+    }
+
+    /// How many of the macroblocks were coded with per subblock modes.
+    fn bpred_macroblocks(macroblocks: &[MacroblockInfo]) -> usize {
+        macroblocks
+            .iter()
+            .filter(|macroblock| macroblock.luma_mode == LumaMode::B)
+            .count()
     }
 
     /// Encodes into a WebP container so that libwebp can read the result too.
@@ -1711,27 +2049,149 @@ mod tests {
 
     #[test]
     fn edge_macroblocks_never_predict_from_the_border_fill() {
-        // A diagonal ramp is the case that wants TM in every macroblock, so if
-        // anything reaches for a neighbour that does not exist it is this.
+        // A diagonal ramp is the case that wants TM in every macroblock, and
+        // line art the one that wants a subblock mode in most of them, so
+        // between them anything reaching for a neighbour that does not exist
+        // shows up here.
         const WIDTH: usize = 64;
         const HEIGHT: usize = 64;
-        let rgb = diagonal_ramp_image(WIDTH, HEIGHT);
 
-        let macroblock_width = WIDTH.div_ceil(16);
-        for (index, (luma_mode, chroma_mode)) in chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16)
-            .into_iter()
-            .enumerate()
-        {
-            let (mbx, mby) = (index % macroblock_width, index / macroblock_width);
+        for rgb in [
+            diagonal_ramp_image(WIDTH, HEIGHT),
+            line_art_image(WIDTH, HEIGHT),
+        ] {
+            let macroblock_width = WIDTH.div_ceil(16);
+            for (index, macroblock) in chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16)
+                .into_iter()
+                .enumerate()
+            {
+                let (mbx, mby) = (index % macroblock_width, index / macroblock_width);
+                let (luma_mode, chroma_mode) = (macroblock.luma_mode, macroblock.chroma_mode);
+
+                assert!(
+                    predicts_from_reconstructed_pixels(luma_mode as i8, mbx, mby),
+                    "{luma_mode:?} at macroblock ({mbx}, {mby})"
+                );
+                assert!(
+                    predicts_from_reconstructed_pixels(chroma_mode as i8, mbx, mby),
+                    "{chroma_mode:?} at macroblock ({mbx}, {mby})"
+                );
+
+                for (subblock, mode) in macroblock.luma_bpred.iter().flatten().enumerate() {
+                    let (sbx, sby) = (subblock % 4, subblock / 4);
+                    assert!(
+                        bpred_predicts_from_reconstructed_pixels(*mode, mbx, mby, sbx, sby),
+                        "{mode:?} at subblock ({sbx}, {sby}) of macroblock ({mbx}, {mby})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn line_art_picks_subblock_modes() {
+        // Strokes thinner than a macroblock: a subblock the stroke misses is
+        // flat, and one it crosses needs a direction of its own.
+        const WIDTH: usize = 128;
+        const HEIGHT: usize = 96;
+        let rgb = line_art_image(WIDTH, HEIGHT);
+
+        let macroblocks = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert!(
+            bpred_macroblocks(&macroblocks) * 2 > macroblocks.len(),
+            "{} of {} macroblocks",
+            bpred_macroblocks(&macroblocks),
+            macroblocks.len()
+        );
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes < 7250, "{bytes} bytes");
+        assert!(psnr >= 37.27, "{psnr} dB");
+    }
+
+    #[test]
+    fn glyphs_pick_subblock_modes() {
+        // Flat colour with hard edges, the case the whole macroblock modes
+        // leave a step in the residual of.
+        const WIDTH: usize = 240;
+        const HEIGHT: usize = 128;
+        let rgb = glyph_image(WIDTH, HEIGHT);
+
+        let macroblocks = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert!(
+            bpred_macroblocks(&macroblocks) * 2 > macroblocks.len(),
+            "{} of {} macroblocks",
+            bpred_macroblocks(&macroblocks),
+            macroblocks.len()
+        );
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes < 4810, "{bytes} bytes");
+        assert!(psnr >= 43.21, "{psnr} dB");
+    }
+
+    #[test]
+    fn odd_dimensions_go_through_the_subblock_search() {
+        // The last macroblock of each row and column is mostly padding, which
+        // replicates the edge pixels, and the subblocks over it still have to
+        // predict from the same workspace as the rest.
+        const WIDTH: usize = 61;
+        const HEIGHT: usize = 45;
+        let rgb = line_art_image(WIDTH, HEIGHT);
+
+        let macroblocks = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert!(bpred_macroblocks(&macroblocks) > 0);
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes < 1694, "{bytes} bytes");
+        assert!(psnr >= 37.24, "{psnr} dB");
+    }
+
+    #[test]
+    fn a_checker_on_the_subblock_grid_keeps_the_whole_macroblock_mode() {
+        // Every 4x4 subblock of this one is flat, so the whole macroblock
+        // residual is one value per subblock, which is exactly what the Y2
+        // block carries and what B_PRED has to give up to get subblock modes.
+        // The chooser only picks B_PRED where it pays for itself.
+        const WIDTH: usize = 128;
+        const HEIGHT: usize = 128;
+        let rgb = checker_image(WIDTH, HEIGHT);
+
+        let macroblocks = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_eq!(bpred_macroblocks(&macroblocks), 0);
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes <= 592, "{bytes} bytes");
+        assert!(psnr >= 41.26, "{psnr} dB");
+    }
+
+    #[test]
+    fn the_subblock_modes_cost_less_than_a_whole_macroblock_mode() {
+        // The keyframe tree spends the fewest bits of all on B_PRED, which is
+        // most of what pays for the sixteen subblock modes it then codes.
+        for luma_mode in LUMA_MODE_CANDIDATES {
             assert!(
-                predicts_from_reconstructed_pixels(luma_mode as i8, mbx, mby),
-                "{luma_mode:?} at macroblock ({mbx}, {mby})"
-            );
-            assert!(
-                predicts_from_reconstructed_pixels(chroma_mode as i8, mbx, mby),
-                "{chroma_mode:?} at macroblock ({mbx}, {mby})"
+                luma_mode_rate(LumaMode::B) < luma_mode_rate(luma_mode),
+                "{luma_mode:?}"
             );
         }
+
+        // An even bool costs a bit, one that always comes up the same way costs
+        // nothing, and one that never does costs the eight bits the coder's
+        // probabilities bottom out at.
+        assert_eq!(bool_rate(128, false), ONE_BIT);
+        assert_eq!(bool_rate(255, false), 0);
+        assert_eq!(bool_rate(255, true), 8 * ONE_BIT);
+
+        // B_DC_PRED is the first branch of the subblock tree, so it costs that
+        // one bool where every other mode costs it and more.
+        let probs = &KEYFRAME_BPRED_MODE_PROBS[IntraMode::DC as usize][IntraMode::DC as usize];
+        let rates: Vec<u32> = BPRED_MODE_CANDIDATES
+            .iter()
+            .map(|&mode| tree_rate(&KEYFRAME_BPRED_MODE_TREE, probs, mode as i8))
+            .collect();
+        assert_eq!(rates[0], bool_rate(probs[0], false));
+        assert!(rates[1..].iter().all(|&rate| rate > rates[0]), "{rates:?}");
     }
 
     #[test]

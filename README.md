@@ -21,9 +21,10 @@ decoding.
   relatively basic which makes it very fast, but it doesn't get as good
   compression ratios as libwebp can. Nonetheless, it often produces smaller
   files than PNG, even when compared against the slowest/highest compression
-  options of PNG encoders. The lossy encoder is more basic still: it predicts
-  every macroblock from the DC value alone, so the files it writes are
-  considerably larger than libwebp's at the same quality.
+  options of PNG encoders. The lossy encoder chooses every macroblock's intra
+  prediction mode (16×16 and 4×4) by rate-distortion cost; libwebp still
+  writes smaller files at the same quality, but the gap is far narrower than
+  it was.
 
 ## Future possibilities
 
@@ -33,9 +34,9 @@ decoding.
 * Another potential area is **animation encoding**. Much of the groundwork is in
   place for this, but it will require some additional work to implement.
 
-* The **lossy encoder** needs intra mode selection, skip flags, and a better
-  quality-to-quantizer mapping before its compression ratio is competitive. If
-  you are interested in helping with this, please get in touch!
+* The **lossy encoder** needs skip flags and a better quality-to-quantizer
+  mapping before its compression ratio is competitive. If you are interested
+  in helping with this, please get in touch!
 
 ## Unsafe code
 
