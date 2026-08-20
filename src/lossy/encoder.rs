@@ -105,10 +105,8 @@ struct Vp8Encoder<W> {
     top_border_u: Vec<u8>,
     top_border_v: Vec<u8>,
 
-    // what the chooser picked for each macroblock, in encoding order, so that
-    // the tests can check it
-    #[cfg(test)]
-    chosen_modes: Vec<MacroblockInfo>,
+    // what the first pass decided for each macroblock, in encoding order
+    macroblocks: Vec<MacroblockInfo>,
 }
 
 impl<W: Write> Vp8Encoder<W> {
@@ -146,8 +144,7 @@ impl<W: Write> Vp8Encoder<W> {
             top_border_u: Vec::new(),
             top_border_v: Vec::new(),
 
-            #[cfg(test)]
-            chosen_modes: Vec::new(),
+            macroblocks: Vec::new(),
         }
     }
 
@@ -303,41 +300,31 @@ impl<W: Write> Vp8Encoder<W> {
             macroblock_info.luma_mode as i8,
         );
 
-        match macroblock_info.luma_mode.into_intra() {
-            None => {
-                // 11.3 code each of the subblocks
-                if let Some(bpred) = macroblock_info.luma_bpred {
-                    for y in 0usize..4 {
-                        let mut left = self.left_b_pred[y];
-                        for x in 0usize..4 {
-                            let top = self.top_b_pred[mbx * 4 + x];
-                            let probs = &KEYFRAME_BPRED_MODE_PROBS[top as usize][left as usize];
-                            let intra_mode = bpred[y * 4 + x];
-                            self.encoder.write_with_tree(
-                                &KEYFRAME_BPRED_MODE_TREE,
-                                probs,
-                                intra_mode as i8,
-                            );
-                            left = intra_mode;
-                            self.top_b_pred[mbx * 4 + x] = intra_mode;
-                        }
-                        self.left_b_pred[y] = left;
+        if macroblock_info.luma_mode.into_intra().is_none() {
+            // 11.3 code each of the subblocks. The running context each mode
+            // is coded against stays local; `advance_bpred_context` below is
+            // the only writer of the context the next macroblocks read.
+            if let Some(bpred) = macroblock_info.luma_bpred {
+                let mut top: [IntraMode; 4] = self.top_b_pred[mbx * 4..][..4].try_into().unwrap();
+                for y in 0usize..4 {
+                    let mut left = self.left_b_pred[y];
+                    for x in 0usize..4 {
+                        let probs = &KEYFRAME_BPRED_MODE_PROBS[top[x] as usize][left as usize];
+                        let intra_mode = bpred[y * 4 + x];
+                        self.encoder.write_with_tree(
+                            &KEYFRAME_BPRED_MODE_TREE,
+                            probs,
+                            intra_mode as i8,
+                        );
+                        left = intra_mode;
+                        top[x] = intra_mode;
                     }
-                } else {
-                    panic!("Invalid, can't set luma mode to B without setting preds");
                 }
-            }
-            Some(intra_mode) => {
-                for (left, top) in self
-                    .left_b_pred
-                    .iter_mut()
-                    .zip(self.top_b_pred[4 * mbx..][..4].iter_mut())
-                {
-                    *left = intra_mode;
-                    *top = intra_mode;
-                }
+            } else {
+                panic!("Invalid, can't set luma mode to B without setting preds");
             }
         }
+        self.advance_bpred_context(macroblock_info, mbx);
 
         // encode macroblock info chroma mode
         self.encoder.write_with_tree(
@@ -345,6 +332,132 @@ impl<W: Write> Vp8Encoder<W> {
             &KEYFRAME_UV_MODE_PROBS,
             macroblock_info.chroma_mode as i8,
         );
+    }
+
+    /// Commits the subblock mode context a macroblock leaves behind: the
+    /// bottom row and right-hand column of its (effective) subblock modes.
+    /// `write_macroblock_header` ends by calling this, and the first pass
+    /// calls it directly, so the search context and the coded context cannot
+    /// drift apart.
+    fn advance_bpred_context(&mut self, macroblock_info: &MacroblockInfo, mbx: usize) {
+        match macroblock_info.luma_mode.into_intra() {
+            None => {
+                let bpred = macroblock_info
+                    .luma_bpred
+                    .expect("Invalid, can't set luma mode to B without setting preds");
+                for index in 0usize..4 {
+                    // the bottom row of subblocks is what the macroblock below
+                    // predicts against, the right hand column what the one to
+                    // the right does
+                    self.top_b_pred[mbx * 4 + index] = bpred[3 * 4 + index];
+                    self.left_b_pred[index] = bpred[index * 4 + 3];
+                }
+            }
+            Some(intra_mode) => {
+                for index in 0usize..4 {
+                    self.top_b_pred[mbx * 4 + index] = intra_mode;
+                    self.left_b_pred[index] = intra_mode;
+                }
+            }
+        }
+    }
+
+    /// What `encode_residual_data` would have spent on a macroblock whose
+    /// coefficients are all zero, which is what skipping it saves: one end of
+    /// block token per block, coded against the complexities its neighbours
+    /// left behind, which are the very complexities a skipped macroblock leaves
+    /// behind in turn.
+    ///
+    /// Reads the complexities the macroblock inherited, so it has to run before
+    /// they are cleared.
+    fn skipped_macroblock_cost(&self, macroblock_info: &MacroblockInfo, mbx: usize) -> u32 {
+        let left = self.left_complexity;
+        let top = self.top_complexity[mbx];
+
+        let (luma_plane, first_luma_coeff, mut cost) = if macroblock_info.luma_mode == LumaMode::B {
+            (Plane::YCoeff0, 0, 0)
+        } else {
+            (
+                Plane::YCoeff1,
+                1,
+                self.end_of_block_cost(Plane::Y2, 0, left.y2 + top.y2),
+            )
+        };
+
+        // every block but those along the top and left edges of the macroblock
+        // follows an empty block of the macroblock's own, which leaves the
+        // complexity it is coded against at zero
+        for (plane, first_coeff, left_complexity, top_complexity) in [
+            (luma_plane, first_luma_coeff, &left.y[..], &top.y[..]),
+            (Plane::Chroma, 0, &left.u[..], &top.u[..]),
+            (Plane::Chroma, 0, &left.v[..], &top.v[..]),
+        ] {
+            for (y, &left_complexity) in left_complexity.iter().enumerate() {
+                for (x, &top_complexity) in top_complexity.iter().enumerate() {
+                    let complexity = if x == 0 { left_complexity } else { 0 }
+                        + if y == 0 { top_complexity } else { 0 };
+                    cost += self.end_of_block_cost(plane, first_coeff, complexity);
+                }
+            }
+        }
+
+        cost
+    }
+
+    /// Cost of the end of block token a block with nothing in it is coded with,
+    /// in the band the first coefficient it could have carried falls in.
+    ///
+    /// The token is the first leaf of `DCT_TOKEN_TREE`, so it costs the one
+    /// bool at the root of that tree and nothing else.
+    fn end_of_block_cost(&self, plane: Plane, first_coeff: usize, complexity: u8) -> u32 {
+        let band = usize::from(COEFF_BANDS[first_coeff]);
+        let probs = &self.token_probs[plane as usize][band][usize::from(complexity)];
+        bit_cost(u32::from(probs[0]))
+    }
+
+    /// Whether every coefficient this macroblock would code quantizes to zero,
+    /// which is what the skip flag stands for.
+    ///
+    /// A whole macroblock mode sends the 0th coefficient of each luma block
+    /// through the Y2 block and codes the luma blocks from the 1st onwards;
+    /// B_PRED has no Y2 block and codes all sixteen coefficients of each luma
+    /// block. Both code all eight chroma blocks whole.
+    fn macroblock_is_empty(
+        &self,
+        macroblock_info: &MacroblockInfo,
+        y_block_data: &LumaYCoeffs,
+        u_block_data: &ChromaCoeffs,
+        v_block_data: &ChromaCoeffs,
+    ) -> bool {
+        let segment = self.segments[macroblock_info.segment_id.unwrap_or(0)];
+
+        let first_luma_coeff = if macroblock_info.luma_mode == LumaMode::B {
+            0
+        } else {
+            let mut y2_coeffs = get_coeffs0_from_block(y_block_data);
+            transform::wht4x4(&mut y2_coeffs);
+            if !block_is_empty(&y2_coeffs, 0, segment.y2dc, segment.y2ac) {
+                return false;
+            }
+            1
+        };
+
+        let luma_empty = y_block_data.chunks_exact(16).all(|block| {
+            block_is_empty(
+                block.try_into().unwrap(),
+                first_luma_coeff,
+                segment.ydc,
+                segment.yac,
+            )
+        });
+
+        luma_empty
+            && u_block_data
+                .chunks_exact(16)
+                .chain(v_block_data.chunks_exact(16))
+                .all(|block| {
+                    block_is_empty(block.try_into().unwrap(), 0, segment.uvdc, segment.uvac)
+                })
     }
 
     // 13 in specification, matches read_residual_data in the decoder
@@ -659,9 +772,15 @@ impl<W: Write> Vp8Encoder<W> {
 
         self.setup_encoding(lossy_quality, width, height, y_bytes, u_bytes, v_bytes);
 
-        self.encode_compressed_frame_header();
-
-        // encode residual partitions first
+        // The coefficient partitions depend on nothing but each macroblock's
+        // own decisions, so they are written as the frame is analysed. The
+        // macroblock headers cannot be, because they share a partition with the
+        // frame header and follow it, and the frame header carries the skip
+        // probability the whole frame decides. So the first pass chooses,
+        // reconstructs and writes the coefficients, and the second writes the
+        // frame header and then the macroblock headers.
+        let mut skipped_macroblocks = 0;
+        let mut saved_cost = 0u64;
         for mby in 0..self.macroblock_height {
             let partition_index = usize::from(mby) % self.partitions.len();
             // reset left complexity / bpreds for left of image
@@ -673,23 +792,40 @@ impl<W: Write> Vp8Encoder<W> {
             self.left_border_v = [129u8; 8 + 1];
 
             for mbx in 0..self.macroblock_width {
-                let macroblock_info = self.choose_macroblock_info(mbx.into(), mby.into());
-                #[cfg(test)]
-                self.chosen_modes.push(macroblock_info);
+                let mut macroblock_info = self.choose_macroblock_info(mbx.into(), mby.into());
 
-                // write macroblock headers
-                self.write_macroblock_header(&macroblock_info, mbx.into());
+                let y_block_data =
+                    self.transform_luma_block(mbx.into(), mby.into(), &macroblock_info);
 
-                if !macroblock_info.coeffs_skipped {
-                    let y_block_data =
-                        self.transform_luma_block(mbx.into(), mby.into(), &macroblock_info);
+                let (u_block_data, v_block_data) = self.transform_chroma_blocks(
+                    mbx.into(),
+                    mby.into(),
+                    macroblock_info.chroma_mode,
+                );
 
-                    let (u_block_data, v_block_data) = self.transform_chroma_blocks(
-                        mbx.into(),
-                        mby.into(),
-                        macroblock_info.chroma_mode,
-                    );
+                // a macroblock every coefficient of which quantizes to zero
+                // reconstructs to its prediction alone, so the skip flag can
+                // code it in one bool instead of an end of block token per
+                // block. The reconstruction above is already that prediction,
+                // the residual it added being zero.
+                macroblock_info.coeffs_skipped = self.macroblock_is_empty(
+                    &macroblock_info,
+                    &y_block_data,
+                    &u_block_data,
+                    &v_block_data,
+                );
 
+                if macroblock_info.coeffs_skipped {
+                    skipped_macroblocks += 1;
+                    saved_cost +=
+                        u64::from(self.skipped_macroblock_cost(&macroblock_info, mbx.into()));
+                    // since coeffs are all zero, need to set all complexities to 0
+                    // except if the luma mode is B then won't set Y2
+                    self.left_complexity
+                        .clear(macroblock_info.luma_mode != LumaMode::B);
+                    self.top_complexity[usize::from(mbx)]
+                        .clear(macroblock_info.luma_mode != LumaMode::B);
+                } else {
                     self.encode_residual_data(
                         &macroblock_info,
                         partition_index,
@@ -698,14 +834,35 @@ impl<W: Write> Vp8Encoder<W> {
                         &u_block_data,
                         &v_block_data,
                     );
-                } else {
-                    // since coeffs are all zero, need to set all complexities to 0
-                    // except if the luma mode is B then won't set Y2
-                    self.left_complexity
-                        .clear(macroblock_info.luma_mode != LumaMode::B);
-                    self.top_complexity[usize::from(mbx)]
-                        .clear(macroblock_info.luma_mode != LumaMode::B);
                 }
+
+                self.advance_bpred_context(&macroblock_info, mbx.into());
+                self.macroblocks.push(macroblock_info);
+            }
+        }
+
+        self.macroblock_no_skip_coeff =
+            skip_probability(skipped_macroblocks, self.macroblocks.len(), saved_cost);
+
+        // the flag turned out not to pay for itself, so the macroblocks the
+        // first pass left out have to be coded after all
+        if self.macroblock_no_skip_coeff.is_none() && skipped_macroblocks > 0 {
+            self.rewrite_coefficient_partitions();
+        }
+
+        self.encode_compressed_frame_header();
+
+        // the subblock modes are coded against those of the neighbouring
+        // subblocks, which the first pass walked through as it searched, so the
+        // context starts over for the second pass
+        self.top_b_pred.fill(IntraMode::default());
+        for mby in 0..usize::from(self.macroblock_height) {
+            self.left_b_pred = [IntraMode::default(); 4];
+
+            for mbx in 0..usize::from(self.macroblock_width) {
+                let macroblock_info =
+                    self.macroblocks[mby * usize::from(self.macroblock_width) + mbx];
+                self.write_macroblock_header(&macroblock_info, mbx);
             }
         }
 
@@ -719,6 +876,49 @@ impl<W: Write> Vp8Encoder<W> {
         self.write_partitions()?;
 
         Ok(())
+    }
+
+    /// Codes the coefficients of every macroblock again with nothing skipped,
+    /// for the frame that turned out not to want the skip flag.
+    ///
+    /// The modes are already chosen, so this walks the reconstruction and the
+    /// coder again but not the search, from the state `setup_encoding` left.
+    fn rewrite_coefficient_partitions(&mut self) {
+        for partition in self.partitions.iter_mut() {
+            *partition = ArithmeticEncoder::new();
+        }
+        self.top_complexity = vec![Complexity::default(); usize::from(self.macroblock_width)];
+        self.top_border_y = vec![127u8; usize::from(self.macroblock_width) * 16 + 4];
+        self.top_border_u = vec![127u8; usize::from(self.macroblock_width) * 8];
+        self.top_border_v = vec![127u8; usize::from(self.macroblock_width) * 8];
+
+        for mby in 0..usize::from(self.macroblock_height) {
+            let partition_index = mby % self.partitions.len();
+            self.left_complexity = Complexity::default();
+
+            self.left_border_y = [129u8; 16 + 1];
+            self.left_border_u = [129u8; 8 + 1];
+            self.left_border_v = [129u8; 8 + 1];
+
+            for mbx in 0..usize::from(self.macroblock_width) {
+                let index = mby * usize::from(self.macroblock_width) + mbx;
+                self.macroblocks[index].coeffs_skipped = false;
+                let macroblock_info = self.macroblocks[index];
+
+                let y_block_data = self.transform_luma_block(mbx, mby, &macroblock_info);
+                let (u_block_data, v_block_data) =
+                    self.transform_chroma_blocks(mbx, mby, macroblock_info.chroma_mode);
+
+                self.encode_residual_data(
+                    &macroblock_info,
+                    partition_index,
+                    mbx,
+                    &y_block_data,
+                    &u_block_data,
+                    &v_block_data,
+                );
+            }
+        }
     }
 
     fn choose_macroblock_info(&self, mbx: usize, mby: usize) -> MacroblockInfo {
@@ -1041,6 +1241,7 @@ impl<W: Write> Vp8Encoder<W> {
         self.top_complexity = vec![Complexity::default(); usize::from(mb_width)];
         self.top_b_pred = vec![IntraMode::default(); 4 * usize::from(mb_width)];
         self.left_b_pred = [IntraMode::default(); 4];
+        self.macroblocks.clear();
 
         self.token_probs = COEFF_PROBS;
 
@@ -1758,6 +1959,75 @@ fn squared_error(
     error
 }
 
+/// Whether every coefficient `encode_coefficients` would write for this block
+/// quantizes to zero, decided by the same truncating division it quantizes
+/// with.
+fn block_is_empty(block: &[i32; 16], first_coeff: usize, dc_quant: i16, ac_quant: i16) -> bool {
+    (first_coeff..16).all(|index| {
+        let zigzag_index = usize::from(ZIGZAG[index]);
+        let quant = if zigzag_index > 0 { ac_quant } else { dc_quant };
+        block[zigzag_index] / i32::from(quant) == 0
+    })
+}
+
+/// The probability the frame header gives a macroblock's skip flag of being
+/// false, that is of the macroblock having coefficients, out of 256 as section
+/// 9.11 codes it. `None` leaves the flag out of the frame altogether.
+///
+/// The flag is worth carrying when the end of block tokens the skipped
+/// macroblocks no longer code, `saved`, come to more than the skip flags of the
+/// whole frame plus the probability itself. A frame where almost nothing skips
+/// pays a flag per macroblock for savings only a few of them collect, and is
+/// better off coding the empty macroblocks the long way.
+fn skip_probability(skipped: usize, macroblocks: usize, saved: u64) -> Option<u8> {
+    if skipped == 0 {
+        return None;
+    }
+
+    // the same probability libwebp derives, which is the proportion of
+    // macroblocks that are not skipped, and 0 when they all are
+    let probability = (255 * (macroblocks - skipped) / macroblocks) as u8;
+
+    let cost = 8 * u64::from(BIT_COST_ONE_BIT)
+        + skipped as u64 * u64::from(bit_cost(256 - u32::from(probability)))
+        + (macroblocks - skipped) as u64 * u64::from(bit_cost(u32::from(probability)));
+
+    (saved > cost).then_some(probability)
+}
+
+/// The skip flag is weighed in 256ths of a bit rather than the eighths the mode
+/// chooser trades against pixel error in, because a frame pays one flag for
+/// every macroblock in it against savings of a fraction of a bit each, and a
+/// fraction rounded down to nothing would make the flag look free.
+const BIT_COST_ONE_BIT: u32 = 256;
+
+/// What the coder spends on a bool it gives probability `probability / 256` of
+/// coming up, in 256ths of a bit, which is `-log2(probability / 256)`.
+///
+/// A probability of 0 stands for the smallest chance the coder can represent,
+/// the one part in 256 that costs eight bits.
+fn bit_cost(probability: u32) -> u32 {
+    let probability = probability.clamp(1, 256);
+    let exponent = probability.ilog2();
+
+    // the mantissa of the probability, in [1, 2), as a multiple of 2^-30. Its
+    // logarithm comes out a bit at a time: squaring a number in [1, 2) either
+    // leaves it there, and that bit of the logarithm is a zero, or takes it
+    // past 2, and the bit is a one and halving brings it back into range.
+    let mut mantissa = u64::from(probability) << (30 - exponent);
+    let mut fraction = 0;
+    for bit in (0..8).rev() {
+        mantissa = (mantissa * mantissa) >> 30;
+        if mantissa >= 2 << 30 {
+            fraction |= 1 << bit;
+            mantissa >>= 1;
+        }
+    }
+
+    // -log2(probability / 256) = 8 - log2(probability)
+    (8 - exponent) * BIT_COST_ONE_BIT - fraction
+}
+
 fn get_coeffs0_from_block(blocks: &[i32; 16 * 16]) -> [i32; 16] {
     let mut coeffs0 = [0i32; 16];
     for (coeff, first_coeff_value) in coeffs0.iter_mut().zip(blocks.iter().step_by(16)) {
@@ -1877,6 +2147,39 @@ mod tests {
         })
     }
 
+    /// A flat part with dark outlines and a hatched face: most macroblocks are
+    /// a copy of their neighbours and have nothing to code, the few over a
+    /// stroke want subblock modes and do.
+    fn hatched_part_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |x, y| {
+            let inside = (24..width - 24).contains(&x) && (20..height - 20).contains(&y);
+            let outline = inside
+                && ((24..27).contains(&x)
+                    || (width - 27..width - 24).contains(&x)
+                    || (20..23).contains(&y)
+                    || (height - 23..height - 20).contains(&y));
+            let hatch = inside && (x + y) % 61 < 2;
+            match (inside, outline || hatch) {
+                (_, true) => [30, 30, 34],
+                (true, false) => [180, 176, 168],
+                (false, _) => [245, 245, 245],
+            }
+        })
+    }
+
+    /// Value noise, the case where every macroblock has coefficients and a skip
+    /// flag would be nothing but overhead.
+    fn noise_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |x, y| {
+            let mut state = (x as u32).wrapping_mul(2_654_435_761)
+                ^ (y as u32).wrapping_mul(2_246_822_519).rotate_left(13);
+            state ^= state >> 15;
+            state = state.wrapping_mul(2_654_435_761);
+            state ^= state >> 13;
+            [state as u8, (state >> 8) as u8, (state >> 16) as u8]
+        })
+    }
+
     /// A checker on the 8 pixel grid, which is all hard edges but lines every
     /// 4x4 subblock up with one flat colour.
     fn checker_image(width: usize, height: usize) -> Vec<u8> {
@@ -1889,14 +2192,19 @@ mod tests {
         })
     }
 
-    /// Runs the lossy encoder over an image and reports what the chooser picked
-    /// for each macroblock, in encoding order.
-    fn chosen_modes(rgb: &[u8], width: u16, height: u16) -> Vec<MacroblockInfo> {
+    /// Runs the lossy encoder over an image and hands back the encoder, so that
+    /// the tests can look at what it decided.
+    fn encode_for_inspection(rgb: &[u8], width: u16, height: u16) -> Vp8Encoder<Vec<u8>> {
         let mut encoder = Vp8Encoder::new(Vec::new());
         encoder
             .encode_image(rgb, ColorType::Rgb8, width, height, QUALITY)
             .unwrap();
-        encoder.chosen_modes
+        encoder
+    }
+
+    /// What the chooser picked for each macroblock, in encoding order.
+    fn chosen_modes(rgb: &[u8], width: u16, height: u16) -> Vec<MacroblockInfo> {
+        encode_for_inspection(rgb, width, height).macroblocks
     }
 
     /// Asserts the expected modes were picked for every macroblock that has
@@ -1931,6 +2239,14 @@ mod tests {
         macroblocks
             .iter()
             .filter(|macroblock| macroblock.luma_mode == LumaMode::B)
+            .count()
+    }
+
+    /// How many of the macroblocks had no coefficients coded for them at all.
+    fn skipped_macroblocks(macroblocks: &[MacroblockInfo]) -> usize {
+        macroblocks
+            .iter()
+            .filter(|macroblock| macroblock.coeffs_skipped)
             .count()
     }
 
@@ -2222,6 +2538,167 @@ mod tests {
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
         assert!(bytes < 2514, "{bytes} bytes");
         assert!(psnr >= 41.85, "{psnr} dB");
+    }
+
+    // The size bounds below are what the encoder produced for the same image at
+    // the same quality before the skip flag existed.
+
+    #[test]
+    fn a_flat_part_skips_most_of_its_macroblocks() {
+        // Away from the outline every macroblock is a copy of its neighbours,
+        // so its prediction is exact and there is nothing left to code.
+        const WIDTH: usize = 256;
+        const HEIGHT: usize = 192;
+        let rgb = outlined_part_image(WIDTH, HEIGHT);
+
+        let encoder = encode_for_inspection(&rgb, WIDTH as u16, HEIGHT as u16);
+        let skipped = skipped_macroblocks(&encoder.macroblocks);
+        assert!(
+            skipped * 4 > encoder.macroblocks.len() * 3,
+            "{skipped} of {} macroblocks",
+            encoder.macroblocks.len()
+        );
+        assert!(encoder.macroblock_no_skip_coeff.is_some());
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes <= 244, "{bytes} bytes");
+        assert!(psnr >= 43.78, "{psnr} dB");
+    }
+
+    #[test]
+    fn a_hatched_part_skips_only_the_macroblocks_between_the_strokes() {
+        // The macroblocks a stroke crosses have coefficients and are coded with
+        // subblock modes; the ones between the strokes are flat and skip. A
+        // subblock coded macroblock has no Y2 block, so skipping it leaves the
+        // Y2 complexity of its neighbours alone where skipping a whole block
+        // coded one clears it, which is what section 13.3 asks for and what the
+        // decoder does.
+        const WIDTH: usize = 256;
+        const HEIGHT: usize = 192;
+        let rgb = hatched_part_image(WIDTH, HEIGHT);
+
+        let macroblocks = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        let skipped = skipped_macroblocks(&macroblocks);
+        assert!(skipped > 0 && skipped < macroblocks.len(), "{skipped}");
+        assert!(macroblocks
+            .iter()
+            .any(|macroblock| macroblock.coeffs_skipped && macroblock.luma_mode == LumaMode::B));
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes <= 3382, "{bytes} bytes");
+        assert!(psnr >= 41.33, "{psnr} dB");
+    }
+
+    #[test]
+    fn odd_dimensions_skip_the_padded_macroblocks() {
+        // The last macroblock of each row and column is mostly padding, which
+        // replicates the edge pixels, so out at the flat border of the image
+        // they are as empty as the macroblocks beside them and skip too.
+        const WIDTH: usize = 245;
+        const HEIGHT: usize = 179;
+        let rgb = hatched_part_image(WIDTH, HEIGHT);
+
+        let macroblocks = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        let macroblock_width = WIDTH.div_ceil(16);
+        let macroblock_height = HEIGHT.div_ceil(16);
+        assert_eq!(macroblocks.len(), macroblock_width * macroblock_height);
+        assert!(macroblocks[macroblock_width - 1].coeffs_skipped);
+        assert!(macroblocks[(macroblock_height - 1) * macroblock_width].coeffs_skipped);
+        assert!(macroblocks[macroblocks.len() - 1].coeffs_skipped);
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes <= 2968, "{bytes} bytes");
+        assert!(psnr >= 41.35, "{psnr} dB");
+    }
+
+    #[test]
+    fn noise_leaves_the_skip_flag_out_of_the_frame() {
+        // Every macroblock of this one has coefficients, so a skip flag per
+        // macroblock would buy the frame nothing at all.
+        const WIDTH: usize = 128;
+        const HEIGHT: usize = 128;
+        let rgb = noise_image(WIDTH, HEIGHT);
+
+        let encoder = encode_for_inspection(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_eq!(skipped_macroblocks(&encoder.macroblocks), 0);
+        assert_eq!(encoder.macroblock_no_skip_coeff, None);
+
+        let (bytes, _) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes <= 22070, "{bytes} bytes");
+    }
+
+    #[test]
+    fn a_frame_the_flag_would_cost_more_than_it_saves_codes_every_macroblock() {
+        // Six of the sixteen macroblocks of this ramp are empty, but their end
+        // of block tokens come to less than sixteen skip flags and the
+        // probability that codes them, so the frame leaves the flag out and
+        // codes the empty macroblocks the long way after all.
+        const WIDTH: usize = 64;
+        const HEIGHT: usize = 64;
+        let rgb = row_ramp_image(WIDTH, HEIGHT);
+
+        let encoder = encode_for_inspection(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_eq!(encoder.macroblock_no_skip_coeff, None);
+        assert_eq!(skipped_macroblocks(&encoder.macroblocks), 0);
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes <= 138, "{bytes} bytes");
+        assert!(psnr >= 42.35, "{psnr} dB");
+    }
+
+    #[test]
+    fn a_frame_that_skips_all_but_one_macroblock_still_codes_a_probability() {
+        // The first macroblock of the frame has nothing but the 127 and 129
+        // border fill to predict from, so it always has something to code, and
+        // over a large enough frame the proportion that has rounds down to
+        // zero. The coder can be given that probability, it only means the
+        // macroblock that does have coefficients pays eight bits to say so.
+        const WIDTH: usize = 512;
+        const HEIGHT: usize = 512;
+        let rgb = flat_image(WIDTH, HEIGHT);
+
+        let encoder = encode_for_inspection(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_eq!(encoder.macroblock_no_skip_coeff, Some(0));
+        assert_eq!(
+            skipped_macroblocks(&encoder.macroblocks),
+            encoder.macroblocks.len() - 1
+        );
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes <= 608, "{bytes} bytes");
+        assert!(psnr >= 49.89, "{psnr} dB");
+    }
+
+    #[test]
+    fn an_empty_block_costs_the_bool_at_the_root_of_the_token_tree() {
+        // What `end_of_block_cost` charges a skipped block relies on the end of
+        // block token being the first leaf of the token tree, so that it costs
+        // one bool and no more.
+        for probs in COEFF_PROBS.iter().flatten().flatten() {
+            assert_eq!(
+                tree_rate(&DCT_TOKEN_TREE, probs, DCT_EOB),
+                bool_rate(probs[0], false)
+            );
+        }
+    }
+
+    #[test]
+    fn a_bool_costs_the_logarithm_of_its_probability() {
+        // A bool that always comes up costs nothing, an even one costs a bit,
+        // and the least likely one the coder can represent costs eight.
+        assert_eq!(bit_cost(256), 0);
+        assert_eq!(bit_cost(128), BIT_COST_ONE_BIT);
+        assert_eq!(bit_cost(64), 2 * BIT_COST_ONE_BIT);
+        assert_eq!(bit_cost(1), 8 * BIT_COST_ONE_BIT);
+        assert_eq!(bit_cost(0), bit_cost(1));
+
+        // and in between it is the logarithm to within the 256th of a bit it
+        // counts in, never under it, since the fraction is truncated
+        for probability in 1u32..=256 {
+            let exact = (8.0 - f64::from(probability).log2()) * f64::from(BIT_COST_ONE_BIT);
+            let cost = f64::from(bit_cost(probability));
+            assert!(cost >= exact && cost < exact + 1.0, "{probability}: {cost}");
+        }
     }
 
     #[test]
