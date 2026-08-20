@@ -23,11 +23,15 @@ impl ArithmeticEncoder {
 
     // we need to go back and add one to existing values
     fn add_one_to_output(&mut self) {
-        while let Some(value) = self.writer.pop() {
-            if value < 255 {
-                self.writer.push(value + 1);
+        // RFC 6386's reference carry (`while (*--q == 255) *q = 0; ++*q;`)
+        // zeroes trailing 0xff bytes and keeps them; removing them would shift
+        // every later byte and corrupt the partition.
+        for value in self.writer.iter_mut().rev() {
+            if *value < 255 {
+                *value += 1;
                 break;
             }
+            *value = 0;
         }
     }
 
@@ -172,6 +176,14 @@ mod tests {
         let mut new_buf = vec![[0u8; 4]; (buffer.len() + 3) / 4];
         new_buf.as_mut_slice().as_flattened_mut()[..buffer.len()].copy_from_slice(buffer);
         new_buf
+    }
+
+    #[test]
+    fn carry_zeroes_and_keeps_ff_bytes() {
+        let mut encoder = ArithmeticEncoder::new();
+        encoder.writer = vec![0x12, 0xff, 0xff];
+        encoder.add_one_to_output();
+        assert_eq!(encoder.writer, vec![0x13, 0x00, 0x00]);
     }
 
     #[test]
