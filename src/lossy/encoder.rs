@@ -1993,22 +1993,32 @@ fn loop_filter_level(quant_index: u8) -> u8 {
 /// the two are about a cube apart; mapping one straight onto the other, which
 /// is what this used to do, spends the whole bottom half of the range on
 /// quantizers so coarse that little is left of the image. libwebp's cube root
-/// is what undoes that, and below quality 75 this table is exactly its curve:
+/// is what undoes that, and it is the shape of the whole lower branch here:
 ///
 /// ```text
-/// index(q) = 127 * (1 - cbrt(2 * (q / 100) / 3))
+/// index(q) = 127 - 104 * cbrt(4 * (q / 100) / 3)
 /// ```
+///
+/// which is libwebp's own `127 * (1 - cbrt(2q / 300))` with its far end moved
+/// from the 26 it reaches at quality 75 to 23, the two agreeing at quality 0
+/// where the quantizer runs out either way.
+///
+/// The joint is at 23 because that is where fine detail survives. On a shaded
+/// render of a gear, whose teeth are a pixel or two wide against a dark
+/// background, index 26 measures 40.56 dB and index 23 measures 45.54: five
+/// decibels over three indices, with quality 75 sitting on the wrong side of
+/// the cliff. Coarser than 23 the teeth quantize away wholesale.
 ///
 /// Above 75 libwebp's own curve steepens into `cbrt(2 * q / 100 - 1)`, which
 /// asks for index 9 at quality 90 where this encoder codes 13. That is 16% more
-/// bytes on rendered content, and both ends cannot be had at once: holding
-/// quality 90 near where it is caps the ratio between the two operating points
-/// at about 2.6, and libwebp's curve wants 2.9. So the top quarter is fitted to
-/// this encoder instead, running from the 26 the curve below reaches at 75 down
-/// to 0 at 100, with the exponent picked to land quality 90 on index 12:
+/// bytes on rendered content, and both ends cannot be had at once. So the top
+/// quarter is fitted to this encoder instead, running from the 23 of the joint
+/// down to 0 at 100, with the exponent picked to land quality 90 on index 12,
+/// the finest quantizer that keeps every render of the corpus inside its own
+/// lossless size:
 ///
 /// ```text
-/// index(q) = 26 * ((100 - q) / 25).powf(27. / 32.)
+/// index(q) = 23 * ((100 - q) / 25).powf(5. / 7.)
 /// ```
 ///
 /// Both are rounded to the nearest index and clamped to the 0..=127 the field
@@ -2017,16 +2027,16 @@ fn loop_filter_level(quant_index: u8) -> u8 {
 /// coder instead.
 #[rustfmt::skip]
 const QUALITY_TO_QUANTIZER_INDEX: [u8; 101] = [
-    127, 103,  97,  93,  89,  86,  84,  81,  79,  77,
-     76,  74,  72,  71,  69,  68,  67,  66,  64,  63,
-     62,  61,  60,  59,  58,  57,  56,  55,  54,  54,
-     53,  52,  51,  50,  50,  49,  48,  47,  47,  46,
-     45,  45,  44,  43,  43,  42,  41,  41,  40,  40,
-     39,  38,  38,  37,  37,  36,  36,  35,  34,  34,
-     33,  33,  32,  32,  31,  31,  30,  30,  29,  29,
-     28,  28,  28,  27,  27,  26,  25,  24,  23,  22,
-     22,  21,  20,  19,  18,  17,  16,  15,  14,  13,
-     12,  11,  10,   9,   8,   7,   6,   4,   3,   2,
+    127, 102,  96,  91,  88,  85,  82,  80,  78,  76,
+     74,  72,  71,  69,  68,  66,  65,  64,  62,  61,
+     60,  59,  58,  57,  56,  55,  54,  53,  52,  51,
+     50,  50,  49,  48,  47,  46,  46,  45,  44,  43,
+     43,  42,  41,  41,  40,  39,  39,  38,  37,  37,
+     36,  36,  35,  34,  34,  33,  33,  32,  32,  31,
+     30,  30,  29,  29,  28,  28,  27,  27,  26,  26,
+     25,  25,  24,  24,  23,  23,  22,  22,  21,  20,
+     20,  19,  18,  17,  17,  16,  15,  14,  14,  13,
+     12,  11,  10,   9,   8,   7,   6,   5,   4,   2,
       0,
 ];
 
@@ -2894,8 +2904,8 @@ mod tests {
         // and the three qualities the derivation was swept at land on the
         // levels that swept out best, to within a level
         assert_eq!(loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[90]), 9);
-        assert_eq!(loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[75]), 15);
-        assert_eq!(loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[50]), 19);
+        assert_eq!(loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[75]), 14);
+        assert_eq!(loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[50]), 18);
     }
 
     #[test]
@@ -2918,14 +2928,14 @@ mod tests {
         // the two points the curve was fitted through: 75 is where libwebp's
         // own curve hands over to the segment fitted to this encoder, and 90
         // is the operating point that segment was fitted to hold
-        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[75], 26);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[75], 23);
         assert_eq!(QUALITY_TO_QUANTIZER_INDEX[90], 12);
 
         // and the cube root spends far less of the range on coarse quantizers
         // than the straight line it replaced, which read 96, 64 and 32 here
-        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[25], 57);
-        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[50], 39);
-        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[75], 26);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[25], 55);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[50], 36);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[75], 23);
     }
 
     #[test]
