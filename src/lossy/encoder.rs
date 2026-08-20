@@ -621,6 +621,13 @@ impl<W: Write> Vp8Encoder<W> {
         height: u16,
         lossy_quality: u8,
     ) -> Result<(), EncodingError> {
+        // `EncoderParams::lossy_quality` is public and nothing narrows it on
+        // the way here, so an out-of-range value is a caller error, not a
+        // broken invariant.
+        if lossy_quality > 100 {
+            return Err(EncodingError::InvalidQuality);
+        }
+
         let (y_bytes, u_bytes, v_bytes) = match color {
             ColorType::Rgb8 => convert_image_yuv::<3>(data, width, height),
             ColorType::Rgba8 => convert_image_yuv::<4>(data, width, height),
@@ -756,11 +763,9 @@ impl<W: Write> Vp8Encoder<W> {
 
         self.token_probs = COEFF_PROBS;
 
-        // choosing the quantization quality based on the quality passed in
-        if lossy_quality > 100 {
-            panic!("lossy quality must be between 0 and 100");
-        }
-
+        // choosing the quantization quality based on the quality passed in;
+        // `encode_image`, the sole caller, has already rejected qualities
+        // above 100.
         let quant_index: u8 = (127 - u16::from(lossy_quality) * 127 / 100) as u8;
         let quant_index_usize: usize = quant_index as usize;
 
@@ -1302,6 +1307,21 @@ pub(crate) fn encode_frame_lossy<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_above_100_is_an_error_not_a_panic() {
+        let rgb = vec![128u8; 16 * 16 * 3];
+        let mut encoder = crate::WebPEncoder::new(Vec::new());
+        encoder.set_params(crate::EncoderParams {
+            use_lossy: true,
+            lossy_quality: 101,
+            ..Default::default()
+        });
+        assert!(matches!(
+            encoder.encode(&rgb, 16, 16, ColorType::Rgb8),
+            Err(EncodingError::InvalidQuality)
+        ));
+    }
 
     #[test]
     fn oversized_first_partition_is_rejected() {

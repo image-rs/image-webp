@@ -47,6 +47,11 @@ quick_error! {
         InvalidDimensions {
             display("Invalid dimensions")
         }
+
+        /// The requested lossy quality is above 100.
+        InvalidQuality {
+            display("Lossy quality must be between 0 and 100")
+        }
     }
 }
 
