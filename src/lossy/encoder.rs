@@ -151,6 +151,12 @@ impl<W: Write> Vp8Encoder<W> {
         let version = u32::from(self.frame.version);
         let for_display = if self.frame.for_display { 1 } else { 0 };
 
+        // the first partition size occupies 19 bits of the 24 bit tag, so a
+        // larger partition cannot be described by the header at all
+        if partition_size >= 1 << 19 {
+            return Err(EncodingError::InvalidDimensions);
+        }
+
         let keyframe_bit = 0;
         let tag = (partition_size << 5) | (for_display << 4) | (version << 1) | (keyframe_bit);
         self.writer.write_u24::<LittleEndian>(tag)?;
@@ -1291,4 +1297,21 @@ pub(crate) fn encode_frame_lossy<W: Write>(
     vp8_encoder.encode_image(data, color, width, height, lossy_quality)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_first_partition_is_rejected() {
+        let mut encoder = Vp8Encoder::new(Vec::new());
+        assert!(encoder
+            .write_uncompressed_frame_header((1 << 19) - 1)
+            .is_ok());
+        assert!(matches!(
+            encoder.write_uncompressed_frame_header(1 << 19),
+            Err(EncodingError::InvalidDimensions)
+        ));
+    }
 }
