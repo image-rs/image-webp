@@ -30,7 +30,7 @@ mod lossy;
 ///
 /// # Related Links
 /// * [rfc-6386](http://tools.ietf.org/html/rfc6386) - The VP8 Data Format and Decoding Guide
-/// * [VP8.pdf](http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/37073.pdf) - An overview of of the VP8 format
+/// * [VP8.pdf](http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/37073.pdf) - An overview of the VP8 format
 pub mod vp8 {
     pub use crate::lossy::{Frame, Vp8Decoder};
 }
