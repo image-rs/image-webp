@@ -858,12 +858,13 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc())),
         };
 
+        // The canvas is always RGBA, so whether the incoming frame carries alpha
+        // says nothing about how the previous frame should be disposed of.
+        // Like libwebp, clear to transparent black unless the caller set a
+        // background color; the color from the ANIM chunk is only a hint and is
+        // exposed through `background_color_hint` instead of being applied.
         let clear_color = if self.animation.dispose_next_frame {
-            match (info.background_color, frame_has_alpha) {
-                (color @ Some(_), _) => color,
-                (_, true) => Some([0, 0, 0, 0]),
-                _ => None,
-            }
+            Some(info.background_color.unwrap_or([0, 0, 0, 0]))
         } else {
             None
         };
@@ -1030,5 +1031,100 @@ mod tests {
         // All pixels are the same value
         let first_pixel = &data[..RGB_BPP];
         assert!(data.chunks_exact(3).all(|ch| ch.iter().eq(first_pixel)));
+    }
+
+    /// Encodes a solid color image and returns just the payload of its VP8
+    /// chunk, so that it can be embedded in an ANMF chunk.
+    fn solid_lossy_frame(color: [u8; 3], width: u32, height: u32) -> Vec<u8> {
+        let pixels: Vec<u8> = color
+            .iter()
+            .copied()
+            .cycle()
+            .take((width * height) as usize * RGB_BPP)
+            .collect();
+
+        let mut container = Vec::new();
+        let mut encoder = crate::WebPEncoder::new(&mut container);
+        encoder.set_params(crate::EncoderParams {
+            use_lossy: true,
+            lossy_quality: 100,
+            ..Default::default()
+        });
+        encoder
+            .encode(&pixels, width, height, crate::ColorType::Rgb8)
+            .unwrap();
+
+        // RIFF header, then the "VP8 " chunk header, then the payload
+        let size = u32::from_le_bytes(container[16..20].try_into().unwrap()) as usize;
+        container[20..20 + size].to_vec()
+    }
+
+    fn push_chunk(out: &mut Vec<u8>, name: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(name);
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(data);
+        if data.len() % 2 == 1 {
+            out.push(0);
+        }
+    }
+
+    fn push_anmf(
+        out: &mut Vec<u8>,
+        color: [u8; 3],
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        dispose: bool,
+    ) {
+        let mut anmf = Vec::new();
+        for value in [x / 2, y / 2, width - 1, height - 1, 0] {
+            anmf.extend_from_slice(&value.to_le_bytes()[..3]);
+        }
+        // bit 1 disables alpha blending, bit 0 is the disposal method
+        anmf.push(0b10 | u8::from(dispose));
+        push_chunk(&mut anmf, b"VP8 ", &solid_lossy_frame(color, width, height));
+        push_chunk(out, b"ANMF", &anmf);
+    }
+
+    /// An animation whose first frame covers the canvas and is disposed to the
+    /// background, followed by a smaller frame that leaves most of the disposed
+    /// area uncovered.
+    #[test]
+    fn dispose_clears_the_area_an_opaque_frame_does_not_cover() {
+        const SIZE: u32 = 32;
+
+        let mut body = Vec::new();
+        let mut vp8x = vec![0b10, 0, 0, 0];
+        vp8x.extend_from_slice(&(SIZE - 1).to_le_bytes()[..3]);
+        vp8x.extend_from_slice(&(SIZE - 1).to_le_bytes()[..3]);
+        push_chunk(&mut body, b"VP8X", &vp8x);
+        push_chunk(&mut body, b"ANIM", &[0xff, 0xff, 0xff, 0xff, 0, 0]);
+        push_anmf(&mut body, [255, 0, 0], 0, 0, SIZE, SIZE, true);
+        push_anmf(&mut body, [0, 0, 255], 0, 0, SIZE / 2, SIZE / 2, false);
+
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&(body.len() as u32 + 4).to_le_bytes());
+        bytes.extend_from_slice(b"WEBP");
+        bytes.extend_from_slice(&body);
+
+        let mut decoder = WebPDecoder::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(decoder.num_frames(), 2);
+        assert!(!decoder.has_alpha());
+
+        let mut canvas = vec![0; (SIZE * SIZE) as usize * RGB_BPP];
+        decoder.read_frame(&mut canvas).unwrap();
+        decoder.read_frame(&mut canvas).unwrap();
+
+        let pixel = |x: u32, y: u32| {
+            let index = (y * SIZE + x) as usize * RGB_BPP;
+            &canvas[index..index + RGB_BPP]
+        };
+        assert_ne!(pixel(4, 4), [0, 0, 0], "the second frame was not drawn");
+        assert_eq!(
+            pixel(SIZE - 4, SIZE - 4),
+            [0, 0, 0],
+            "the disposed area still shows the first frame"
+        );
     }
 }
