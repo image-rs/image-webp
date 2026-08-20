@@ -162,8 +162,11 @@ impl HuffmanTree {
             }
         }
 
-        // Ensure indexes into the secondary table fit in 12 bits.
-        assert!(secondary_table.len() <= 4096);
+        // Indexes into the secondary table are stored in 12 bits of the primary
+        // table entry, so a larger secondary table cannot be addressed.
+        if secondary_table.len() > 4096 {
+            return Err(DecodingError::HuffmanError);
+        }
 
         Ok(Self(HuffmanTreeInner::Tree {
             table_mask,
