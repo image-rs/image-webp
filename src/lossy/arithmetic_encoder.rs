@@ -1,5 +1,4 @@
 // currently just a direct translation of the encoder given in the vp8 specification
-#[derive(Default)]
 pub(crate) struct ArithmeticEncoder {
     /// the entropy values that have been encoded so far
     writer: Vec<u8>,
@@ -9,6 +8,15 @@ pub(crate) struct ArithmeticEncoder {
     range: u32,
     /// number of bits that have been encoded in the current byte
     bit_num: i32,
+}
+
+/// `Default` matches `new` so that the encoder left behind by
+/// `std::mem::take` is usable (the derived default's `range: 0` state
+/// underflows `write_bool`).
+impl Default for ArithmeticEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ArithmeticEncoder {
@@ -176,6 +184,18 @@ mod tests {
         let mut new_buf = vec![[0u8; 4]; (buffer.len() + 3) / 4];
         new_buf.as_mut_slice().as_flattened_mut()[..buffer.len()].copy_from_slice(buffer);
         new_buf
+    }
+
+    #[test]
+    fn default_encoder_encodes_like_a_new_one() {
+        let mut default_encoder = ArithmeticEncoder::default();
+        default_encoder.write_flag(true);
+        let mut new_encoder = ArithmeticEncoder::new();
+        new_encoder.write_flag(true);
+        assert_eq!(
+            default_encoder.flush_and_get_buffer(),
+            new_encoder.flush_and_get_buffer()
+        );
     }
 
     #[test]
