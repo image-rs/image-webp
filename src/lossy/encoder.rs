@@ -1215,6 +1215,11 @@ impl<W: Write> Vp8Encoder<W> {
         u_buf: Vec<u8>,
         v_buf: Vec<u8>,
     ) {
+        // `encode_image`, the sole caller, has already rejected qualities
+        // above 100; the table lookup would panic on one anyway.
+        let quant_index: u8 = QUALITY_TO_QUANTIZER_INDEX[usize::from(lossy_quality)];
+        let quant_index_usize: usize = quant_index as usize;
+
         let mb_width = width.div_ceil(16);
         let mb_height = height.div_ceil(16);
         self.macroblock_width = mb_width;
@@ -1234,8 +1239,8 @@ impl<W: Write> Vp8Encoder<W> {
             pixel_type: 0,
 
             filter_type: false,
-            filter_level: 63,
-            sharpness_level: 7,
+            filter_level: loop_filter_level(quant_index),
+            sharpness_level: 0,
         };
 
         self.top_complexity = vec![Complexity::default(); usize::from(mb_width)];
@@ -1244,12 +1249,6 @@ impl<W: Write> Vp8Encoder<W> {
         self.macroblocks.clear();
 
         self.token_probs = COEFF_PROBS;
-
-        // choosing the quantization quality based on the quality passed in;
-        // `encode_image`, the sole caller, has already rejected qualities
-        // above 100; the table lookup would panic on one anyway.
-        let quant_index: u8 = QUALITY_TO_QUANTIZER_INDEX[usize::from(lossy_quality)];
-        let quant_index_usize: usize = quant_index as usize;
 
         self.segments_enabled = false;
         let quantization_indices = QuantizationIndices {
@@ -1957,6 +1956,33 @@ fn squared_error(
     }
 
     error
+}
+
+/// The strength section 9.4 asks the decoder to loop filter the frame with,
+/// from the quantizer index the frame is coded at.
+///
+/// The loop filter smooths the edges between blocks, which is worth doing in
+/// proportion to how visible those edges are, and that is what the quantizer
+/// sets. The encoder used to ask for 63, the most the syntax can express, at
+/// every quality; over the rendered corpus that costs 0.15 to 0.22 dB against
+/// the level swept out as best, at every quality from 10 to 99.
+///
+/// Those best levels are 1 at index 2, 10 at 12, 14 at 22, 16 at 26, 20 at 39
+/// and 24 at 57: rising with the quantizer, as libwebp's own filter strength
+/// does, but flattening as it goes, because this encoder predicts from the
+/// unfiltered reconstruction and the filter is only ever a blur over the
+/// finished image. Past a point it takes more detail than it takes blocking.
+///
+/// ```text
+/// level(index) = 40 * index / (index + 40)
+/// ```
+///
+/// fits all six to within a level and a hundredth of a dB, gives 0 at the
+/// minimal quantizer, where there is nothing to smooth, and approaches 40
+/// rather than the 63 that measured worst everywhere.
+fn loop_filter_level(quant_index: u8) -> u8 {
+    let index = u16::from(quant_index);
+    (40 * index / (index + 40)) as u8
 }
 
 /// The quantizer index section 9.6 codes the frame with, for each of the 101
@@ -2842,6 +2868,34 @@ mod tests {
             let cost = f64::from(bit_cost(probability));
             assert!(cost >= exact && cost < exact + 1.0, "{probability}: {cost}");
         }
+    }
+
+    #[test]
+    fn the_loop_filter_follows_the_quantizer() {
+        // Nothing to smooth at the minimal quantizer, and never more than the
+        // six bits section 9.4 codes the level in.
+        assert_eq!(loop_filter_level(0), 0);
+        assert_eq!(loop_filter_level(127), 30);
+        for index in 0..=127 {
+            assert!(loop_filter_level(index) <= 63);
+        }
+
+        // A coarser quantizer never asks for less filtering, and asking for
+        // more quality never asks for more.
+        for index in 0..127 {
+            assert!(loop_filter_level(index) <= loop_filter_level(index + 1));
+        }
+        for quality in 0..100 {
+            let coarser = loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[quality]);
+            let finer = loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[quality + 1]);
+            assert!(coarser >= finer, "quality {quality}");
+        }
+
+        // and the three qualities the derivation was swept at land on the
+        // levels that swept out best, to within a level
+        assert_eq!(loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[90]), 9);
+        assert_eq!(loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[75]), 15);
+        assert_eq!(loop_filter_level(QUALITY_TO_QUANTIZER_INDEX[50]), 19);
     }
 
     #[test]
