@@ -330,6 +330,51 @@ mod tests {
     }
 
     #[test]
+    fn lossy_odd_dimensions() {
+        // The last row and column of an odd-sized image, and the macroblock
+        // padding beyond it, must be converted rather than left as zero YUV,
+        // which decodes to dark green.
+        const WIDTH: usize = 17;
+        const HEIGHT: usize = 17;
+        let pixel = [200u8, 40, 90, 255];
+        let img: Vec<u8> = pixel
+            .iter()
+            .copied()
+            .cycle()
+            .take(WIDTH * HEIGHT * 4)
+            .collect();
+
+        let mut output = Vec::new();
+        let mut encoder = WebPEncoder::new(&mut output);
+        encoder.set_params(EncoderParams {
+            use_lossy: true,
+            lossy_quality: 90,
+            ..Default::default()
+        });
+        encoder
+            .encode(&img, WIDTH as u32, HEIGHT as u32, crate::ColorType::Rgba8)
+            .unwrap();
+
+        let mut decoder = crate::WebPDecoder::new(std::io::Cursor::new(output)).unwrap();
+        let mut decoded = vec![0; WIDTH * HEIGHT * 4];
+        decoder.read_image(&mut decoded).unwrap();
+
+        for (i, chunk) in decoded.chunks_exact(4).enumerate() {
+            for channel in 0..3 {
+                let difference = i16::from(chunk[channel]) - i16::from(pixel[channel]);
+                assert!(
+                    difference.abs() <= 8,
+                    "pixel ({}, {}) channel {channel} decoded as {}, expected {}",
+                    i % WIDTH,
+                    i / WIDTH,
+                    chunk[channel],
+                    pixel[channel],
+                );
+            }
+        }
+    }
+
+    #[test]
     fn roundtrip_libwebp() {
         roundtrip_libwebp_params(EncoderParams::default());
         roundtrip_libwebp_params(EncoderParams {
