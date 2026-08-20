@@ -104,6 +104,11 @@ struct Vp8Encoder<W> {
     top_border_y: Vec<u8>,
     top_border_u: Vec<u8>,
     top_border_v: Vec<u8>,
+
+    // the mode picked for each macroblock, in encoding order, so that the
+    // tests can check what the chooser selected
+    #[cfg(test)]
+    chosen_modes: Vec<(LumaMode, ChromaMode)>,
 }
 
 impl<W: Write> Vp8Encoder<W> {
@@ -140,6 +145,9 @@ impl<W: Write> Vp8Encoder<W> {
             top_border_y: Vec::new(),
             top_border_u: Vec::new(),
             top_border_v: Vec::new(),
+
+            #[cfg(test)]
+            chosen_modes: Vec::new(),
         }
     }
 
@@ -666,6 +674,9 @@ impl<W: Write> Vp8Encoder<W> {
 
             for mbx in 0..self.macroblock_width {
                 let macroblock_info = self.choose_macroblock_info(mbx.into(), mby.into());
+                #[cfg(test)]
+                self.chosen_modes
+                    .push((macroblock_info.luma_mode, macroblock_info.chroma_mode));
 
                 // write macroblock headers
                 self.write_macroblock_header(&macroblock_info, mbx.into());
@@ -711,17 +722,116 @@ impl<W: Write> Vp8Encoder<W> {
         Ok(())
     }
 
-    fn choose_macroblock_info(&self, _mbx: usize, _mby: usize) -> MacroblockInfo {
-        let (luma_mode, luma_bpred) = (LumaMode::DC, None);
-        let chroma_mode = ChromaMode::DC;
+    fn choose_macroblock_info(&self, mbx: usize, mby: usize) -> MacroblockInfo {
+        // the borders were written by the reconstruction of the neighbouring
+        // macroblocks, so every candidate is scored against the prediction the
+        // decoder will produce for it
+        let luma_mode = self.choose_luma_mode(mbx, mby);
+        let chroma_mode = self.choose_chroma_mode(mbx, mby);
 
         MacroblockInfo {
             luma_mode,
-            luma_bpred,
+            // B_PRED is never chosen here, so there are no subblock modes to
+            // go with it
+            luma_bpred: None,
             chroma_mode,
             segment_id: None,
             coeffs_skipped: false,
         }
+    }
+
+    /// Picks the whole macroblock luma mode with the lowest rate distortion
+    /// cost, taking each candidate all the way through the residual pipeline.
+    fn choose_luma_mode(&self, mbx: usize, mby: usize) -> LumaMode {
+        let segment = self.segments[0];
+        let lambda = lambda_for(segment.yac);
+        let source_stride = usize::from(self.macroblock_width) * 16;
+
+        let mut best = (LumaMode::DC, u64::MAX);
+        for &luma_mode in &LUMA_MODE_CANDIDATES {
+            if !predicts_from_reconstructed_pixels(luma_mode as i8, mbx, mby) {
+                continue;
+            }
+
+            let mut predicted = self.get_predicted_luma_block_16x16(luma_mode, mbx, mby);
+            let residual = self.get_luma_blocks_from_predicted_16x16(&predicted, mbx, mby);
+            let mut coeffs = self.get_luma_block_coeffs_16x16(residual, &segment);
+
+            // the 0th coefficient of every luma block travels in the Y2 block,
+            // so the luma blocks themselves are coded from the 1st onwards
+            let mut rate = coefficient_rate(&coeffs.y2_coeffs, 0);
+            for block in coeffs.y_coeffs.chunks_exact(16) {
+                rate += coefficient_rate(block.try_into().unwrap(), 1);
+            }
+
+            let dequantized = self.get_dequantized_blocks_from_coeffs_luma_16x16(&mut coeffs);
+            add_residue_blocks(&mut predicted, &dequantized, LUMA_STRIDE, 4);
+
+            let distortion = squared_error(
+                &predicted,
+                LUMA_STRIDE,
+                16,
+                &self.frame.ybuf,
+                source_stride,
+                mbx * 16,
+                mby * 16,
+            );
+
+            let cost = distortion + u64::from(rate) * lambda;
+            if cost < best.1 {
+                best = (luma_mode, cost);
+            }
+        }
+
+        best.0
+    }
+
+    /// Picks the chroma mode, which both chroma planes share, by the summed
+    /// rate distortion cost of the two planes.
+    fn choose_chroma_mode(&self, mbx: usize, mby: usize) -> ChromaMode {
+        let lambda = lambda_for(self.segments[0].uvac);
+        let source_stride = usize::from(self.macroblock_width) * 8;
+
+        let mut best = (ChromaMode::DC, u64::MAX);
+        for &chroma_mode in &CHROMA_MODE_CANDIDATES {
+            if !predicts_from_reconstructed_pixels(chroma_mode as i8, mbx, mby) {
+                continue;
+            }
+
+            let mut cost = 0;
+            for (top_border, left_border, source) in [
+                (&self.top_border_u, &self.left_border_u, &self.frame.ubuf),
+                (&self.top_border_v, &self.left_border_v, &self.frame.vbuf),
+            ] {
+                let mut predicted =
+                    self.get_predicted_chroma_block(chroma_mode, mbx, mby, top_border, left_border);
+                let residual = self.get_chroma_blocks_from_predicted(&predicted, source, mbx, mby);
+                let coeffs = self.get_chroma_block_coeffs(residual);
+
+                let mut rate = 0;
+                for block in coeffs.chunks_exact(16) {
+                    rate += coefficient_rate(block.try_into().unwrap(), 0);
+                }
+
+                let dequantized = self.get_dequantized_blocks_from_coeffs_chroma(&coeffs);
+                add_residue_blocks(&mut predicted, &dequantized, CHROMA_STRIDE, 2);
+
+                cost += squared_error(
+                    &predicted,
+                    CHROMA_STRIDE,
+                    8,
+                    source,
+                    source_stride,
+                    mbx * 8,
+                    mby * 8,
+                ) + u64::from(rate) * lambda;
+            }
+            if cost < best.1 {
+                best = (chroma_mode, cost);
+            }
+        }
+
+        best.0
     }
 
     // sets up the encoding of the encoder by setting all the encoder params based on the width and height
@@ -966,17 +1076,7 @@ impl<W: Write> Vp8Encoder<W> {
 
         // re-use the y_with_border from earlier since the prediction is still valid
         // applies the same thing as the decoder so that the border will line up
-        for y in 0usize..4 {
-            for x in 0usize..4 {
-                let i = x + y * 4;
-                // Create a reference to a [i32; 16] array for add_residue (slices of size 16 do not work).
-                let rb: &[i32; 16] = dequantized_blocks[i * 16..][..16].try_into().unwrap();
-                let y0 = 1 + y * 4;
-                let x0 = 1 + x * 4;
-
-                add_residue(&mut y_with_border, rb, y0, x0, LUMA_STRIDE);
-            }
-        }
+        add_residue_blocks(&mut y_with_border, &dequantized_blocks, LUMA_STRIDE, 4);
 
         // set borders from values
         for (y, border_value) in self.left_border_y.iter_mut().enumerate() {
@@ -1235,20 +1335,8 @@ impl<W: Write> Vp8Encoder<W> {
         let quantized_u_residue = self.get_dequantized_blocks_from_coeffs_chroma(&u_coeffs);
         let quantized_v_residue = self.get_dequantized_blocks_from_coeffs_chroma(&v_coeffs);
 
-        for y in 0usize..2 {
-            for x in 0usize..2 {
-                let i = x + y * 2;
-                let urb: &[i32; 16] = quantized_u_residue[i * 16..][..16].try_into().unwrap();
-
-                let y0 = 1 + y * 4;
-                let x0 = 1 + x * 4;
-                add_residue(&mut predicted_u, urb, y0, x0, stride);
-
-                let vrb: &[i32; 16] = quantized_v_residue[i * 16..][..16].try_into().unwrap();
-
-                add_residue(&mut predicted_v, vrb, y0, x0, stride);
-            }
-        }
+        add_residue_blocks(&mut predicted_u, &quantized_u_residue, stride, 2);
+        add_residue_blocks(&mut predicted_v, &quantized_v_residue, stride, 2);
 
         // set borders
         for ((y, u_border_value), v_border_value) in self
@@ -1272,6 +1360,117 @@ impl<W: Write> Vp8Encoder<W> {
 
         (u_blocks, v_blocks)
     }
+}
+
+/// The whole macroblock luma modes, in the order section 11.2 codes them.
+/// Ties are broken towards the front of the list, which keeps the output
+/// deterministic and prefers the mode the keyframe tree codes most cheaply.
+const LUMA_MODE_CANDIDATES: [LumaMode; 4] = [LumaMode::DC, LumaMode::V, LumaMode::H, LumaMode::TM];
+
+/// The chroma modes, in the order section 11.2 codes them. VP8 has no per
+/// subblock chroma mode, so this is the whole choice for both chroma planes.
+const CHROMA_MODE_CANDIDATES: [ChromaMode; 4] =
+    [ChromaMode::DC, ChromaMode::V, ChromaMode::H, ChromaMode::TM];
+
+/// Whether a candidate mode predicts from pixels a neighbouring macroblock
+/// actually reconstructed.
+///
+/// Above the first macroblock row and left of the first column the border is
+/// filled with the fixed 127 and 129 values of section 12.2. A directional mode
+/// that copies those is predicting from nothing, and because the quantizer
+/// truncates towards zero the resulting error is small enough to quantize away
+/// and so is never corrected, after which every macroblock that predicts from
+/// this one inherits it. DC is safe either way: it averages whichever real
+/// borders exist and falls back to 128 when there are none.
+fn predicts_from_reconstructed_pixels(mode: i8, mbx: usize, mby: usize) -> bool {
+    match mode {
+        V_PRED => mby != 0,
+        H_PRED => mbx != 0,
+        TM_PRED => mbx != 0 && mby != 0,
+        _ => true,
+    }
+}
+
+/// Weight of one bit against one unit of squared pixel error, so that the mode
+/// chooser can trade the two off.
+///
+/// Rate distortion theory puts the multiplier at the slope of the distortion
+/// curve, which for a uniform quantizer of step `quantizer` grows with the
+/// square of that step: halving the step costs about a bit per sample and cuts
+/// the squared error to a quarter. The constant is the one free parameter. It
+/// was calibrated on rendered CAD images, where three eighths is the smallest
+/// weight at which no image grew against a DC only encode and the choices stop
+/// changing above it. libwebp reaches a similar magnitude from the other
+/// direction, weighting with three times the square of the quantizer index
+/// rather than of the step.
+fn lambda_for(quantizer: i16) -> u64 {
+    let quantizer = u64::from(quantizer.unsigned_abs());
+    (3 * quantizer * quantizer) >> 3
+}
+
+/// Rough number of bits the coefficient coder spends on one quantized block.
+///
+/// The coefficients are walked in the zigzag order `encode_coefficients` writes
+/// them in. Everything up to the last non zero level is coded, so the zeros
+/// before it are charged too, a level costs a token that grows with its
+/// magnitude plus a sign bit, and the block ends with an end of block token.
+fn coefficient_rate(block: &[i32; 16], first_coeff: usize) -> u32 {
+    let mut rate = 1;
+    let mut pending_zeros = 0;
+
+    for index in first_coeff..16 {
+        let level = block[usize::from(ZIGZAG[index])].unsigned_abs();
+        if level == 0 {
+            pending_zeros += 1;
+        } else {
+            rate += pending_zeros + 3 + 2 * level.ilog2();
+            pending_zeros = 0;
+        }
+    }
+
+    rate
+}
+
+/// Adds the dequantized residual of each 4x4 subblock back into a prediction
+/// block, turning it into the reconstruction the decoder will produce.
+fn add_residue_blocks(plane: &mut [u8], residual: &[i32], stride: usize, blocks_per_side: usize) {
+    for y in 0..blocks_per_side {
+        for x in 0..blocks_per_side {
+            let index = y * blocks_per_side + x;
+            // add_residue only takes a fixed size block, slices do not work
+            let block: &[i32; 16] = residual[index * 16..][..16].try_into().unwrap();
+            add_residue(plane, block, 1 + y * 4, 1 + x * 4, stride);
+        }
+    }
+}
+
+/// Sum of squared error between a reconstructed block and the source pixels.
+///
+/// `block` is laid out by `create_border_luma` and `create_border_chroma`, so
+/// the block itself starts one row down and one column right of the origin. The
+/// source planes are padded out to whole macroblocks, so the full `size` by
+/// `size` block is always in bounds.
+fn squared_error(
+    block: &[u8],
+    stride: usize,
+    size: usize,
+    source: &[u8],
+    source_stride: usize,
+    x0: usize,
+    y0: usize,
+) -> u64 {
+    let mut error = 0u64;
+
+    for y in 0..size {
+        let block_row = &block[(y + 1) * stride + 1..][..size];
+        let source_row = &source[(y0 + y) * source_stride + x0..][..size];
+        for (&block, &source) in block_row.iter().zip(source_row) {
+            let difference = i32::from(block) - i32::from(source);
+            error += u64::from((difference * difference) as u32);
+        }
+    }
+
+    error
 }
 
 fn get_coeffs0_from_block(blocks: &[i32; 16 * 16]) -> [i32; 16] {
@@ -1307,6 +1506,263 @@ pub(crate) fn encode_frame_lossy<W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const QUALITY: u8 = 90;
+
+    /// Builds an RGB image from a function of the pixel coordinates.
+    fn image(width: usize, height: usize, pixel: impl Fn(usize, usize) -> [u8; 3]) -> Vec<u8> {
+        let mut data = Vec::with_capacity(width * height * 3);
+        for y in 0..height {
+            for x in 0..width {
+                data.extend_from_slice(&pixel(x, y));
+            }
+        }
+        data
+    }
+
+    /// Flat colour: every candidate predicts the macroblock exactly, so the
+    /// tie break has to pick DC, the mode listed first.
+    fn flat_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |_, _| [96, 140, 60])
+    }
+
+    /// Ramp along the columns: the row above a macroblock is what the block
+    /// itself looks like, which is exactly what V copies down.
+    fn column_ramp_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |x, _| [(20 + 3 * x) as u8, 70, 130])
+    }
+
+    /// Ramp along the rows, predicted exactly by H copying the left column.
+    fn row_ramp_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |_, y| [(20 + 3 * y) as u8, 70, 130])
+    }
+
+    /// Separable ramp along both axes. TM reproduces `left + above - corner`
+    /// exactly for such a surface, while V and H each keep one axis' error.
+    fn diagonal_ramp_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |x, y| {
+            [(20 + x + y) as u8, 70, (230 - x - y) as u8]
+        })
+    }
+
+    /// A flat rendered part with dark outlines, the content the chooser exists
+    /// for: away from an edge every macroblock is a copy of its neighbours.
+    fn outlined_part_image(width: usize, height: usize) -> Vec<u8> {
+        image(width, height, |x, y| {
+            let inside = (24..232).contains(&x) && (20..172).contains(&y);
+            let edge = inside
+                && ((24..27).contains(&x)
+                    || (229..232).contains(&x)
+                    || (20..23).contains(&y)
+                    || (169..172).contains(&y));
+            match (inside, edge) {
+                (_, true) => [30, 30, 34],
+                (true, false) => [180, 176, 168],
+                (false, _) => [245, 245, 245],
+            }
+        })
+    }
+
+    /// Runs the lossy encoder over an image and reports the mode picked per
+    /// macroblock, in encoding order.
+    fn chosen_modes(rgb: &[u8], width: u16, height: u16) -> Vec<(LumaMode, ChromaMode)> {
+        let mut encoder = Vp8Encoder::new(Vec::new());
+        encoder
+            .encode_image(rgb, ColorType::Rgb8, width, height, QUALITY)
+            .unwrap();
+        encoder.chosen_modes
+    }
+
+    /// Asserts the expected modes were picked for every macroblock that has
+    /// both a top and a left neighbour. The first macroblock row and column
+    /// predict from the 127/129 border fill instead of real pixels, so the
+    /// directional modes have nothing meaningful to copy there.
+    fn assert_interior_modes(
+        modes: &[(LumaMode, ChromaMode)],
+        width: usize,
+        expected: (LumaMode, ChromaMode),
+    ) {
+        let macroblock_width = width.div_ceil(16);
+        assert_eq!(modes.len() % macroblock_width, 0);
+        let mut interior = 0;
+        for (index, &modes) in modes.iter().enumerate() {
+            let (mbx, mby) = (index % macroblock_width, index / macroblock_width);
+            if mbx == 0 || mby == 0 {
+                continue;
+            }
+            assert_eq!(modes, expected, "macroblock ({mbx}, {mby})");
+            interior += 1;
+        }
+        assert!(interior > 0, "the image has no interior macroblocks");
+    }
+
+    /// Encodes into a WebP container so that libwebp can read the result too.
+    fn encode_container(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let mut output = Vec::new();
+        let mut encoder = crate::WebPEncoder::new(&mut output);
+        encoder.set_params(crate::EncoderParams {
+            use_lossy: true,
+            lossy_quality: QUALITY,
+            ..Default::default()
+        });
+        encoder.encode(rgb, width, height, ColorType::Rgb8).unwrap();
+        output
+    }
+
+    /// Decodes with this crate and with libwebp, asserts the two agree, and
+    /// returns the decoded RGB pixels.
+    fn decode_with_both(webp: &[u8], width: usize, height: usize) -> Vec<u8> {
+        let mut decoder = crate::WebPDecoder::new(std::io::Cursor::new(webp)).unwrap();
+        let mut decoded = vec![0u8; width * height * 3];
+        decoder.read_image(&mut decoded).unwrap();
+
+        let libwebp = webp::Decoder::new(webp).decode().unwrap();
+        assert!(!libwebp.is_alpha());
+        assert_eq!(decoded, *libwebp, "image-webp and libwebp disagree");
+
+        decoded
+    }
+
+    /// Peak signal to noise ratio in dB over all channels. Only used to check
+    /// decoded quality in tests, never in the encoder itself.
+    fn psnr(original: &[u8], decoded: &[u8]) -> f64 {
+        assert_eq!(original.len(), decoded.len());
+        let squared_error: u64 = original
+            .iter()
+            .zip(decoded)
+            .map(|(&a, &b)| {
+                let difference = i32::from(a) - i32::from(b);
+                (difference * difference) as u64
+            })
+            .sum();
+        if squared_error == 0 {
+            return f64::INFINITY;
+        }
+        let mean = squared_error as f64 / original.len() as f64;
+        10.0 * (255.0f64 * 255.0 / mean).log10()
+    }
+
+    /// Encodes, checks both decoders agree, and reports the size and quality.
+    fn round_trip(rgb: &[u8], width: usize, height: usize) -> (usize, f64) {
+        let webp = encode_container(rgb, width as u32, height as u32);
+        let decoded = decode_with_both(&webp, width, height);
+        (webp.len(), psnr(rgb, &decoded))
+    }
+
+    // Each size bound below is what the encoder produced for the same image at
+    // the same quality when every macroblock was forced to DC, so a
+    // directional mode really has to win for the bound to hold.
+
+    #[test]
+    fn flat_colour_picks_dc() {
+        const WIDTH: usize = 64;
+        const HEIGHT: usize = 64;
+        let rgb = flat_image(WIDTH, HEIGHT);
+
+        let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_interior_modes(&modes, WIDTH, (LumaMode::DC, ChromaMode::DC));
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes <= 68, "{bytes} bytes");
+        assert!(psnr >= 40.0, "{psnr} dB");
+    }
+
+    #[test]
+    fn column_ramp_picks_v() {
+        const WIDTH: usize = 64;
+        const HEIGHT: usize = 64;
+        let rgb = column_ramp_image(WIDTH, HEIGHT);
+
+        let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_interior_modes(&modes, WIDTH, (LumaMode::V, ChromaMode::V));
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes < 254, "{bytes} bytes");
+        assert!(psnr >= 40.0, "{psnr} dB");
+    }
+
+    #[test]
+    fn row_ramp_picks_h() {
+        const WIDTH: usize = 64;
+        const HEIGHT: usize = 64;
+        let rgb = row_ramp_image(WIDTH, HEIGHT);
+
+        let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_interior_modes(&modes, WIDTH, (LumaMode::H, ChromaMode::H));
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes < 268, "{bytes} bytes");
+        assert!(psnr >= 40.0, "{psnr} dB");
+    }
+
+    #[test]
+    fn diagonal_ramp_picks_tm() {
+        const WIDTH: usize = 64;
+        const HEIGHT: usize = 64;
+        let rgb = diagonal_ramp_image(WIDTH, HEIGHT);
+
+        let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_interior_modes(&modes, WIDTH, (LumaMode::TM, ChromaMode::TM));
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes < 194, "{bytes} bytes");
+        assert!(psnr >= 40.0, "{psnr} dB");
+    }
+
+    #[test]
+    fn edge_macroblocks_never_predict_from_the_border_fill() {
+        // A diagonal ramp is the case that wants TM in every macroblock, so if
+        // anything reaches for a neighbour that does not exist it is this.
+        const WIDTH: usize = 64;
+        const HEIGHT: usize = 64;
+        let rgb = diagonal_ramp_image(WIDTH, HEIGHT);
+
+        let macroblock_width = WIDTH.div_ceil(16);
+        for (index, (luma_mode, chroma_mode)) in chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16)
+            .into_iter()
+            .enumerate()
+        {
+            let (mbx, mby) = (index % macroblock_width, index / macroblock_width);
+            assert!(
+                predicts_from_reconstructed_pixels(luma_mode as i8, mbx, mby),
+                "{luma_mode:?} at macroblock ({mbx}, {mby})"
+            );
+            assert!(
+                predicts_from_reconstructed_pixels(chroma_mode as i8, mbx, mby),
+                "{chroma_mode:?} at macroblock ({mbx}, {mby})"
+            );
+        }
+    }
+
+    #[test]
+    fn odd_dimensions_go_through_the_chooser() {
+        // The macroblock padding replicates the edge pixels, so the ramp
+        // continues into it and the directional modes still win there.
+        const WIDTH: usize = 37;
+        const HEIGHT: usize = 23;
+        let rgb = diagonal_ramp_image(WIDTH, HEIGHT);
+
+        let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
+        assert_interior_modes(&modes, WIDTH, (LumaMode::TM, ChromaMode::TM));
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes < 102, "{bytes} bytes");
+        assert!(psnr >= 40.0, "{psnr} dB");
+    }
+
+    #[test]
+    fn outlined_part_beats_dc_only() {
+        // The content the mode chooser exists for: a flat rendered part with
+        // dark outlines, where every macroblock away from an edge is a copy of
+        // its neighbours. Both DC and the directional modes get picked here.
+        const WIDTH: usize = 256;
+        const HEIGHT: usize = 192;
+        let rgb = outlined_part_image(WIDTH, HEIGHT);
+
+        let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
+        assert!(bytes < 2514, "{bytes} bytes");
+        assert!(psnr >= 41.85, "{psnr} dB");
+    }
 
     #[test]
     fn quality_above_100_is_an_error_not_a_panic() {
