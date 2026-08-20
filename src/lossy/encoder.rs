@@ -615,7 +615,7 @@ impl<W: Write> Vp8Encoder<W> {
         for i in first_coeff..16 {
             let zigzag_index = usize::from(ZIGZAG[i]);
             let quant = if zigzag_index > 0 { ac_quant } else { dc_quant };
-            zigzag_block[i] = block[zigzag_index] / i32::from(quant);
+            zigzag_block[i] = quantize(block[zigzag_index], quant, zigzag_index);
         }
 
         // get index of last coefficient that isn't 0
@@ -1131,7 +1131,7 @@ impl<W: Write> Vp8Encoder<W> {
         // every subblock are coded here
         for (index, coeff) in block.iter_mut().enumerate() {
             let quant = if index > 0 { segment.yac } else { segment.ydc };
-            *coeff /= i32::from(quant);
+            *coeff = quantize(*coeff, quant, index);
         }
         let rate = mode_rate + coefficient_rate(&block, 0);
 
@@ -1363,7 +1363,7 @@ impl<W: Write> Vp8Encoder<W> {
             } else {
                 segment.y2dc
             };
-            *value /= i32::from(quant);
+            *value = quantize(*value, quant, index);
         }
 
         // quantize the y blocks
@@ -1372,7 +1372,7 @@ impl<W: Write> Vp8Encoder<W> {
                 if index == 0 {
                     *y_value = 0;
                 } else {
-                    *y_value /= i32::from(segment.yac);
+                    *y_value = quantize(*y_value, segment.yac, index);
                 }
             }
         }
@@ -1517,7 +1517,7 @@ impl<W: Write> Vp8Encoder<W> {
                 // quantize and de-quantize the subblock
                 for (index, y_value) in current_subblock.iter_mut().enumerate() {
                     let quant = if index > 0 { segment.yac } else { segment.ydc };
-                    *y_value = (*y_value / i32::from(quant)) * i32::from(quant);
+                    *y_value = quantize(*y_value, quant, index) * i32::from(quant);
                 }
                 transform::idct4x4(&mut current_subblock);
                 add_residue(&mut y_with_border, &current_subblock, y0, x0, stride);
@@ -1625,7 +1625,7 @@ impl<W: Write> Vp8Encoder<W> {
                 } else {
                     segment.uvdc
                 };
-                *coeff = value / i32::from(quant);
+                *coeff = quantize(value, quant, index);
             }
         }
 
@@ -1959,14 +1959,76 @@ fn squared_error(
     error
 }
 
+/// How far into a quantizer step an AC coefficient has to reach before it
+/// rounds up to the next one, in 256ths of a step. Truncation is 256 and the
+/// half step is 128.
+///
+/// Truncating, which is what the encoder used to do, drops everything short of
+/// a whole step and reconstructs every level nearly a step low. Rounding at the
+/// exact half step is the other extreme and is worse than either on flat
+/// colour, for the reason [`DC_ROUND_UP_AT`] describes. A threshold a little
+/// past the half step is what libwebp does, the biases in its own quantization
+/// matrices putting it between 141 and 160 of these 256ths. This is where its
+/// chroma coefficients round, and it measured best of the seven thresholds
+/// swept over the rendered corpus and the fixtures below.
+const AC_ROUND_UP_AT: i32 = 146;
+
+/// The same for the DC coefficient of a block, which has to hold out longer.
+///
+/// The decoder reconstructs a block by dequantizing and then inverse
+/// transforming, and the inverse transform rounds a second time, dividing the
+/// DC term by eight. A flat surface reconstructed one pixel level out gives its
+/// next macroblock a residual of one, which the forward transform scales to a
+/// DC coefficient of eight. Round that up to one level of a quantizer of twelve
+/// or more and the decoder divides the twelve back by eight and rounds it to
+/// two, so the correction overshoots by exactly as much as the error it was
+/// meant to remove and the surface lands one level out the other way. It never
+/// settles: the macroblock never empties, the skip flag never fires, and a flat
+/// image comes out both larger and noisier than it does under plain truncation.
+///
+/// Twelve is the finest DC quantizer the quality curve reaches where the
+/// inverse transform still rounds a level up to two, so eight twelfths is the
+/// largest share of a step such a correction has to be refused at, and this is
+/// the first threshold past it. Refusing it costs nothing: zero and one are the
+/// same distance from the surface, and zero is the one the block can skip.
+/// libwebp likewise rounds its DC coefficients later than its AC ones in all
+/// three of its matrices.
+const DC_ROUND_UP_AT: i32 = 171;
+
+/// Quantizes coefficient `coefficient` of a block, rounding up from its
+/// threshold onwards and keeping the sign.
+///
+/// This is the only place the encoder quantizes. The mode chooser, the
+/// reconstruction the borders are taken from, the skip decision and the
+/// coefficient coder all have to agree on it exactly, or the encoder predicts
+/// from pixels the decoder will not produce.
+fn quantize(value: i32, quant: i16, coefficient: usize) -> i32 {
+    let round_up_at = if coefficient > 0 {
+        AC_ROUND_UP_AT
+    } else {
+        DC_ROUND_UP_AT
+    };
+    // `unsigned_abs` and the widening keep the arithmetic total: `abs` alone
+    // would panic on `i32::MIN` in debug builds, unreachable as that is for
+    // residuals of 8-bit pixels.
+    let quant = u64::from(quant.unsigned_abs());
+    let magnitude = (u64::from(value.unsigned_abs()) * 256 + (256 - round_up_at) as u64 * quant)
+        / (256 * quant);
+    let magnitude = magnitude as i32;
+    if value < 0 {
+        -magnitude
+    } else {
+        magnitude
+    }
+}
+
 /// Whether every coefficient `encode_coefficients` would write for this block
-/// quantizes to zero, decided by the same truncating division it quantizes
-/// with.
+/// quantizes to zero, decided by the same rounding division it quantizes with.
 fn block_is_empty(block: &[i32; 16], first_coeff: usize, dc_quant: i16, ac_quant: i16) -> bool {
     (first_coeff..16).all(|index| {
         let zigzag_index = usize::from(ZIGZAG[index]);
         let quant = if zigzag_index > 0 { ac_quant } else { dc_quant };
-        block[zigzag_index] / i32::from(quant) == 0
+        quantize(block[zigzag_index], quant, zigzag_index) == 0
     })
 }
 
@@ -2211,10 +2273,15 @@ mod tests {
     /// both a top and a left neighbour. The first macroblock row and column
     /// predict from the 127/129 border fill instead of real pixels, so the
     /// directional modes have nothing meaningful to copy there.
+    ///
+    /// A luma mode of `None` asks only that the macroblock predicted from a
+    /// neighbour at all rather than falling back to DC, which is all that can
+    /// be pinned where the plane is so nearly flat that several modes describe
+    /// it and the choice between them comes down to their rate.
     fn assert_interior_modes(
         macroblocks: &[MacroblockInfo],
         width: usize,
-        expected: (LumaMode, ChromaMode),
+        expected: (Option<LumaMode>, ChromaMode),
     ) {
         let macroblock_width = width.div_ceil(16);
         assert_eq!(macroblocks.len() % macroblock_width, 0);
@@ -2224,9 +2291,18 @@ mod tests {
             if mbx == 0 || mby == 0 {
                 continue;
             }
+            match expected.0 {
+                Some(luma_mode) => {
+                    assert_eq!(macroblock.luma_mode, luma_mode, "macroblock ({mbx}, {mby})")
+                }
+                None => assert_ne!(
+                    macroblock.luma_mode,
+                    LumaMode::DC,
+                    "macroblock ({mbx}, {mby})"
+                ),
+            }
             assert_eq!(
-                (macroblock.luma_mode, macroblock.chroma_mode),
-                expected,
+                macroblock.chroma_mode, expected.1,
                 "macroblock ({mbx}, {mby})"
             );
             interior += 1;
@@ -2314,7 +2390,7 @@ mod tests {
         let rgb = flat_image(WIDTH, HEIGHT);
 
         let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
-        assert_interior_modes(&modes, WIDTH, (LumaMode::DC, ChromaMode::DC));
+        assert_interior_modes(&modes, WIDTH, (Some(LumaMode::DC), ChromaMode::DC));
 
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
         assert!(bytes <= 68, "{bytes} bytes");
@@ -2328,7 +2404,7 @@ mod tests {
         let rgb = column_ramp_image(WIDTH, HEIGHT);
 
         let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
-        assert_interior_modes(&modes, WIDTH, (LumaMode::V, ChromaMode::V));
+        assert_interior_modes(&modes, WIDTH, (Some(LumaMode::V), ChromaMode::V));
 
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
         assert!(bytes < 254, "{bytes} bytes");
@@ -2342,7 +2418,7 @@ mod tests {
         let rgb = row_ramp_image(WIDTH, HEIGHT);
 
         let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
-        assert_interior_modes(&modes, WIDTH, (LumaMode::H, ChromaMode::H));
+        assert_interior_modes(&modes, WIDTH, (Some(LumaMode::H), ChromaMode::H));
 
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
         assert!(bytes < 268, "{bytes} bytes");
@@ -2351,15 +2427,22 @@ mod tests {
 
     #[test]
     fn diagonal_ramp_picks_tm() {
+        // The ramp runs in opposite directions on two of the three channels,
+        // which very nearly cancels in the luma and leaves the whole of it in
+        // the chroma, so TM is pinned there. The luma of the interior is flat
+        // enough that the rounding quantizer leaves several modes with nothing
+        // to code and the pick falls to their rate; what stays true is that it
+        // is never the DC fallback.
         const WIDTH: usize = 64;
         const HEIGHT: usize = 64;
         let rgb = diagonal_ramp_image(WIDTH, HEIGHT);
 
         let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
-        assert_interior_modes(&modes, WIDTH, (LumaMode::TM, ChromaMode::TM));
+        assert_interior_modes(&modes, WIDTH, (None, ChromaMode::TM));
 
+        // re-measured for the rounding quantizer
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes < 194, "{bytes} bytes");
+        assert!(bytes <= 204, "{bytes} bytes");
         assert!(psnr >= 40.0, "{psnr} dB");
     }
 
@@ -2519,10 +2602,11 @@ mod tests {
         let rgb = diagonal_ramp_image(WIDTH, HEIGHT);
 
         let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
-        assert_interior_modes(&modes, WIDTH, (LumaMode::TM, ChromaMode::TM));
+        assert_interior_modes(&modes, WIDTH, (None, ChromaMode::TM));
 
+        // re-measured for the rounding quantizer
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes < 102, "{bytes} bytes");
+        assert!(bytes <= 102, "{bytes} bytes");
         assert!(psnr >= 40.0, "{psnr} dB");
     }
 
@@ -2584,8 +2668,9 @@ mod tests {
             .iter()
             .any(|macroblock| macroblock.coeffs_skipped && macroblock.luma_mode == LumaMode::B));
 
+        // re-measured for the rounding quantizer
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 3382, "{bytes} bytes");
+        assert!(bytes <= 3650, "{bytes} bytes");
         assert!(psnr >= 41.33, "{psnr} dB");
     }
 
@@ -2606,8 +2691,9 @@ mod tests {
         assert!(macroblocks[(macroblock_height - 1) * macroblock_width].coeffs_skipped);
         assert!(macroblocks[macroblocks.len() - 1].coeffs_skipped);
 
+        // re-measured for the rounding quantizer
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 2968, "{bytes} bytes");
+        assert!(bytes <= 3210, "{bytes} bytes");
         assert!(psnr >= 41.35, "{psnr} dB");
     }
 
@@ -2623,8 +2709,9 @@ mod tests {
         assert_eq!(skipped_macroblocks(&encoder.macroblocks), 0);
         assert_eq!(encoder.macroblock_no_skip_coeff, None);
 
+        // re-measured for the rounding quantizer
         let (bytes, _) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 22070, "{bytes} bytes");
+        assert!(bytes <= 24666, "{bytes} bytes");
     }
 
     #[test]
@@ -2641,8 +2728,9 @@ mod tests {
         assert_eq!(encoder.macroblock_no_skip_coeff, None);
         assert_eq!(skipped_macroblocks(&encoder.macroblocks), 0);
 
+        // re-measured for the rounding quantizer
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 138, "{bytes} bytes");
+        assert!(bytes <= 144, "{bytes} bytes");
         assert!(psnr >= 42.35, "{psnr} dB");
     }
 
@@ -2699,6 +2787,52 @@ mod tests {
             let cost = f64::from(bit_cost(probability));
             assert!(cost >= exact && cost < exact + 1.0, "{probability}: {cost}");
         }
+    }
+
+    #[test]
+    fn the_quantizer_rounds_up_from_its_threshold_onwards() {
+        for (coefficient, round_up_at) in [(1usize, AC_ROUND_UP_AT), (0, DC_ROUND_UP_AT)] {
+            // A step of 256 puts the threshold exactly on a coefficient, so
+            // this is the first level that rounds up and what truncation
+            // would have dropped.
+            assert_eq!(quantize(round_up_at, 256, coefficient), 1);
+            assert_eq!(quantize(-round_up_at, 256, coefficient), -1);
+            assert_eq!(quantize(256 + round_up_at, 256, coefficient), 2);
+
+            // one short of it there is nothing to round to and the
+            // coefficient truncates, and so does everything below it
+            assert_eq!(quantize(round_up_at - 1, 256, coefficient), 0);
+            assert_eq!(quantize(-(round_up_at - 1), 256, coefficient), 0);
+            assert_eq!(quantize(128, 256, coefficient), 0);
+
+            // over every step the quantizer tables can hand it and every
+            // coefficient a residual can reach it is that same threshold,
+            // never more than a step out, and negatives mirror positives
+            for quant in 1i16..=512 {
+                for value in 0i32..=4096 {
+                    let step = i32::from(quant);
+                    let steps = (value * 256 + (256 - round_up_at) * step) / (256 * step);
+                    assert_eq!(
+                        quantize(value, quant, coefficient),
+                        steps,
+                        "{value}/{quant}"
+                    );
+                    assert_eq!(
+                        quantize(-value, quant, coefficient),
+                        -steps,
+                        "-{value}/{quant}"
+                    );
+                    assert!((steps * step - value).abs() <= step);
+                }
+            }
+        }
+
+        // Both thresholds sit past the half step, which is what keeps a flat
+        // surface from correcting itself back and forth forever, and the DC
+        // one holds out past the two thirds of a step that a flat surface one
+        // pixel level out asks the finest DC quantizer of the curve for.
+        const _: () = assert!(AC_ROUND_UP_AT > 128);
+        const _: () = assert!(DC_ROUND_UP_AT * 12 > 256 * 8);
     }
 
     #[test]
