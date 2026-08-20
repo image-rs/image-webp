@@ -41,8 +41,7 @@ impl<W: Write> BitWriter<W> {
         }
         if self.nbits > 0 {
             self.writer
-                .write_all(&self.buffer.to_le_bytes()[..self.nbits as usize / 8])
-                .unwrap();
+                .write_all(&self.buffer.to_le_bytes()[..self.nbits as usize / 8])?;
             self.buffer = 0;
             self.nbits = 0;
         }
