@@ -1247,8 +1247,8 @@ impl<W: Write> Vp8Encoder<W> {
 
         // choosing the quantization quality based on the quality passed in;
         // `encode_image`, the sole caller, has already rejected qualities
-        // above 100.
-        let quant_index: u8 = (127 - u16::from(lossy_quality) * 127 / 100) as u8;
+        // above 100; the table lookup would panic on one anyway.
+        let quant_index: u8 = QUALITY_TO_QUANTIZER_INDEX[usize::from(lossy_quality)];
         let quant_index_usize: usize = quant_index as usize;
 
         self.segments_enabled = false;
@@ -1959,6 +1959,51 @@ fn squared_error(
     error
 }
 
+/// The quantizer index section 9.6 codes the frame with, for each of the 101
+/// qualities the encoder takes. More quality, finer quantizer, lower index.
+///
+/// A quality is not a quantizer. The quantizer tables step in even amounts of
+/// error, while what a quality buys is roughly even amounts of file size, and
+/// the two are about a cube apart; mapping one straight onto the other, which
+/// is what this used to do, spends the whole bottom half of the range on
+/// quantizers so coarse that little is left of the image. libwebp's cube root
+/// is what undoes that, and below quality 75 this table is exactly its curve:
+///
+/// ```text
+/// index(q) = 127 * (1 - cbrt(2 * (q / 100) / 3))
+/// ```
+///
+/// Above 75 libwebp's own curve steepens into `cbrt(2 * q / 100 - 1)`, which
+/// asks for index 9 at quality 90 where this encoder codes 13. That is 16% more
+/// bytes on rendered content, and both ends cannot be had at once: holding
+/// quality 90 near where it is caps the ratio between the two operating points
+/// at about 2.6, and libwebp's curve wants 2.9. So the top quarter is fitted to
+/// this encoder instead, running from the 26 the curve below reaches at 75 down
+/// to 0 at 100, with the exponent picked to land quality 90 on index 12:
+///
+/// ```text
+/// index(q) = 26 * ((100 - q) / 25).powf(27. / 32.)
+/// ```
+///
+/// Both are rounded to the nearest index and clamped to the 0..=127 the field
+/// holds, and the two agree at 75. Quality 100 is the minimal quantizer rather
+/// than lossless; the public encoder answers that quality with the lossless
+/// coder instead.
+#[rustfmt::skip]
+const QUALITY_TO_QUANTIZER_INDEX: [u8; 101] = [
+    127, 103,  97,  93,  89,  86,  84,  81,  79,  77,
+     76,  74,  72,  71,  69,  68,  67,  66,  64,  63,
+     62,  61,  60,  59,  58,  57,  56,  55,  54,  54,
+     53,  52,  51,  50,  50,  49,  48,  47,  47,  46,
+     45,  45,  44,  43,  43,  42,  41,  41,  40,  40,
+     39,  38,  38,  37,  37,  36,  36,  35,  34,  34,
+     33,  33,  32,  32,  31,  31,  30,  30,  29,  29,
+     28,  28,  28,  27,  27,  26,  25,  24,  23,  22,
+     22,  21,  20,  19,  18,  17,  16,  15,  14,  13,
+     12,  11,  10,   9,   8,   7,   6,   4,   3,   2,
+      0,
+];
+
 /// How far into a quantizer step an AC coefficient has to reach before it
 /// rounds up to the next one, in 256ths of a step. Truncation is 256 and the
 /// half step is 128.
@@ -2328,11 +2373,16 @@ mod tests {
 
     /// Encodes into a WebP container so that libwebp can read the result too.
     fn encode_container(rgb: &[u8], width: u32, height: u32) -> Vec<u8> {
+        encode_container_at(rgb, width, height, QUALITY)
+    }
+
+    /// The same at a quality of the caller's choosing.
+    fn encode_container_at(rgb: &[u8], width: u32, height: u32, quality: u8) -> Vec<u8> {
         let mut output = Vec::new();
         let mut encoder = crate::WebPEncoder::new(&mut output);
         encoder.set_params(crate::EncoderParams {
             use_lossy: true,
-            lossy_quality: QUALITY,
+            lossy_quality: quality,
             ..Default::default()
         });
         encoder.encode(rgb, width, height, ColorType::Rgb8).unwrap();
@@ -2440,9 +2490,9 @@ mod tests {
         let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
         assert_interior_modes(&modes, WIDTH, (None, ChromaMode::TM));
 
-        // re-measured for the rounding quantizer
+        // re-measured for the quality curve
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 204, "{bytes} bytes");
+        assert!(bytes <= 188, "{bytes} bytes");
         assert!(psnr >= 40.0, "{psnr} dB");
     }
 
@@ -2560,7 +2610,7 @@ mod tests {
         assert_eq!(bpred_macroblocks(&macroblocks), 0);
 
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 592, "{bytes} bytes");
+        assert!(bytes <= 596, "{bytes} bytes");
         assert!(psnr >= 41.26, "{psnr} dB");
     }
 
@@ -2604,9 +2654,9 @@ mod tests {
         let modes = chosen_modes(&rgb, WIDTH as u16, HEIGHT as u16);
         assert_interior_modes(&modes, WIDTH, (None, ChromaMode::TM));
 
-        // re-measured for the rounding quantizer
+        // re-measured for the quality curve
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 102, "{bytes} bytes");
+        assert!(bytes <= 104, "{bytes} bytes");
         assert!(psnr >= 40.0, "{psnr} dB");
     }
 
@@ -2644,8 +2694,9 @@ mod tests {
         );
         assert!(encoder.macroblock_no_skip_coeff.is_some());
 
+        // re-measured for the quality curve
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 244, "{bytes} bytes");
+        assert!(bytes <= 236, "{bytes} bytes");
         assert!(psnr >= 43.78, "{psnr} dB");
     }
 
@@ -2668,9 +2719,9 @@ mod tests {
             .iter()
             .any(|macroblock| macroblock.coeffs_skipped && macroblock.luma_mode == LumaMode::B));
 
-        // re-measured for the rounding quantizer
+        // re-measured for the quality curve
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 3650, "{bytes} bytes");
+        assert!(bytes <= 3700, "{bytes} bytes");
         assert!(psnr >= 41.33, "{psnr} dB");
     }
 
@@ -2691,9 +2742,9 @@ mod tests {
         assert!(macroblocks[(macroblock_height - 1) * macroblock_width].coeffs_skipped);
         assert!(macroblocks[macroblocks.len() - 1].coeffs_skipped);
 
-        // re-measured for the rounding quantizer
+        // re-measured for the quality curve
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 3210, "{bytes} bytes");
+        assert!(bytes <= 3252, "{bytes} bytes");
         assert!(psnr >= 41.35, "{psnr} dB");
     }
 
@@ -2709,9 +2760,9 @@ mod tests {
         assert_eq!(skipped_macroblocks(&encoder.macroblocks), 0);
         assert_eq!(encoder.macroblock_no_skip_coeff, None);
 
-        // re-measured for the rounding quantizer
+        // re-measured for the quality curve
         let (bytes, _) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 24666, "{bytes} bytes");
+        assert!(bytes <= 25442, "{bytes} bytes");
     }
 
     #[test]
@@ -2728,9 +2779,9 @@ mod tests {
         assert_eq!(encoder.macroblock_no_skip_coeff, None);
         assert_eq!(skipped_macroblocks(&encoder.macroblocks), 0);
 
-        // re-measured for the rounding quantizer
+        // re-measured for the quality curve
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
-        assert!(bytes <= 144, "{bytes} bytes");
+        assert!(bytes <= 142, "{bytes} bytes");
         assert!(psnr >= 42.35, "{psnr} dB");
     }
 
@@ -2752,9 +2803,13 @@ mod tests {
             encoder.macroblocks.len() - 1
         );
 
+        // The surface settles one chroma level short of the source and stays
+        // there: coding the level would overshoot by as much as it corrects,
+        // so the encoder leaves it and the whole frame skips, which is what
+        // this is here to pin. Re-measured for the quality curve.
         let (bytes, psnr) = round_trip(&rgb, WIDTH, HEIGHT);
         assert!(bytes <= 608, "{bytes} bytes");
-        assert!(psnr >= 49.89, "{psnr} dB");
+        assert!(psnr >= 48.13, "{psnr} dB");
     }
 
     #[test]
@@ -2786,6 +2841,67 @@ mod tests {
             let exact = (8.0 - f64::from(probability).log2()) * f64::from(BIT_COST_ONE_BIT);
             let cost = f64::from(bit_cost(probability));
             assert!(cost >= exact && cost < exact + 1.0, "{probability}: {cost}");
+        }
+    }
+
+    #[test]
+    fn the_quality_curve_never_coarsens_with_quality() {
+        // The whole range is covered, from the coarsest quantizer the frame
+        // header can carry to the finest.
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX.len(), 101);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[0], 127);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[100], 0);
+
+        // and asking for more quality never asks for a coarser quantizer
+        for quality in 0..100 {
+            assert!(
+                QUALITY_TO_QUANTIZER_INDEX[quality] >= QUALITY_TO_QUANTIZER_INDEX[quality + 1],
+                "quality {quality}"
+            );
+            assert!(QUALITY_TO_QUANTIZER_INDEX[quality] <= 127);
+        }
+
+        // the two points the curve was fitted through: 75 is where libwebp's
+        // own curve hands over to the segment fitted to this encoder, and 90
+        // is the operating point that segment was fitted to hold
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[75], 26);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[90], 12);
+
+        // and the cube root spends far less of the range on coarse quantizers
+        // than the straight line it replaced, which read 96, 64 and 32 here
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[25], 57);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[50], 39);
+        assert_eq!(QUALITY_TO_QUANTIZER_INDEX[75], 26);
+    }
+
+    #[test]
+    fn every_quality_decodes_in_both_decoders() {
+        // One image across the whole range, ends included: quality 0 is the
+        // coarsest quantizer the header can carry and quality 100 the finest,
+        // which the lossy coder still has to be able to write even though the
+        // public encoder answers that quality with the lossless one.
+        const WIDTH: usize = 128;
+        const HEIGHT: usize = 96;
+        const QUALITIES: [u8; 8] = [0, 10, 25, 50, 75, 90, 99, 100];
+        let rgb = hatched_part_image(WIDTH, HEIGHT);
+
+        let mut previous_index = u8::MAX;
+        let mut previous_bytes = 0;
+        for quality in QUALITIES {
+            let index = QUALITY_TO_QUANTIZER_INDEX[usize::from(quality)];
+            assert!(index < previous_index, "quality {quality}");
+            previous_index = index;
+
+            let webp = encode_container_at(&rgb, WIDTH as u32, HEIGHT as u32, quality);
+            decode_with_both(&webp, WIDTH, HEIGHT);
+
+            // and a finer quantizer never buys fewer bytes
+            assert!(
+                webp.len() >= previous_bytes,
+                "quality {quality}: {} bytes after {previous_bytes}",
+                webp.len()
+            );
+            previous_bytes = webp.len();
         }
     }
 
