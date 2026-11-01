@@ -12,8 +12,8 @@ use super::{CODE_LENGTH_CODES, CODE_LENGTH_CODE_ORDER, DISTANCE_MAP};
 use crate::decoder::DecodingError;
 use huffman::HuffmanTree;
 use reverse_transform::{
-    apply_color_indexing_transform, apply_color_transform, apply_predictor_transform,
-    apply_subtract_green_transform, TransformType,
+    apply_color_indexing_transform, apply_color_indexing_transform_green, apply_color_transform,
+    apply_predictor_transform, apply_subtract_green_transform, TransformType,
 };
 
 const GREEN: usize = 0;
@@ -60,37 +60,27 @@ impl<R: BufRead> LosslessDecoder<R> {
     }
 
     /// Decodes a frame.
-    ///
-    /// In an alpha chunk the width and height are not included in the header, so they should be
-    /// provided by setting the `implicit_dimensions` argument. Otherwise that argument should be
-    /// `None` and the frame dimensions will be determined by reading the VP8L header.
     pub(crate) fn decode_frame(
         &mut self,
         width: u32,
         height: u32,
-        implicit_dimensions: bool,
         buf: &mut [u8],
     ) -> Result<(), DecodingError> {
-        if implicit_dimensions {
-            self.width = width as u16;
-            self.height = height as u16;
-        } else {
-            let signature = self.bit_reader.read_bits::<u8>(8)?;
-            if signature != 0x2f {
-                return Err(DecodingError::LosslessSignatureInvalid(signature));
-            }
+        let signature = self.bit_reader.read_bits::<u8>(8)?;
+        if signature != 0x2f {
+            return Err(DecodingError::LosslessSignatureInvalid(signature));
+        }
 
-            self.width = self.bit_reader.read_bits::<u16>(14)? + 1;
-            self.height = self.bit_reader.read_bits::<u16>(14)? + 1;
-            if u32::from(self.width) != width || u32::from(self.height) != height {
-                return Err(DecodingError::InconsistentImageSizes);
-            }
+        self.width = self.bit_reader.read_bits::<u16>(14)? + 1;
+        self.height = self.bit_reader.read_bits::<u16>(14)? + 1;
+        if u32::from(self.width) != width || u32::from(self.height) != height {
+            return Err(DecodingError::InconsistentImageSizes);
+        }
 
-            let _alpha_used = self.bit_reader.read_bits::<u8>(1)?;
-            let version_num = self.bit_reader.read_bits::<u8>(3)?;
-            if version_num != 0 {
-                return Err(DecodingError::VersionNumberInvalid(version_num));
-            }
+        let _alpha_used = self.bit_reader.read_bits::<u8>(1)?;
+        let version_num = self.bit_reader.read_bits::<u8>(3)?;
+        if version_num != 0 {
+            return Err(DecodingError::VersionNumberInvalid(version_num));
         }
 
         let transformed_width = self.read_transforms()?;
@@ -102,7 +92,76 @@ impl<R: BufRead> LosslessDecoder<R> {
             &mut buf[..transformed_size],
         )?;
 
-        let mut image_size = transformed_size;
+        self.apply_transforms(transformed_width, buf)
+    }
+
+    /// Decodes the alpha plane of a lossy image, which is stored as the green channel of a
+    /// lossless image with no header of its own.
+    ///
+    /// Without a color cache or a predictor transform, nothing the green channel decodes to
+    /// depends on the other channels, so they are read and dropped instead of being stored.
+    pub(crate) fn decode_alpha(
+        &mut self,
+        width: u16,
+        height: u16,
+    ) -> Result<Vec<u8>, DecodingError> {
+        self.width = width;
+        self.height = height;
+
+        let num_pixels = usize::from(width) * usize::from(height);
+        let transformed_width = self.read_transforms()?;
+        let huffman_info = self.read_entropy_coding(transformed_width, height, true)?;
+
+        if huffman_info.color_cache.is_none() && self.transforms[0].is_none() {
+            let mut alpha = vec![0; num_pixels];
+            let transformed_size = usize::from(transformed_width) * usize::from(height);
+            self.decode_green_data(
+                transformed_width,
+                height,
+                &huffman_info,
+                &mut alpha[..transformed_size],
+            )?;
+            if let Some(TransformType::ColorIndexingTransform {
+                table_size,
+                table_data,
+            }) = &self.transforms[3]
+            {
+                apply_color_indexing_transform_green(
+                    &mut alpha,
+                    width,
+                    height,
+                    *table_size,
+                    table_data,
+                );
+            }
+            Ok(alpha)
+        } else {
+            let mut data = vec![0; num_pixels * 4];
+            let transformed_size = usize::from(transformed_width) * usize::from(height) * 4;
+            self.decode_image_data(
+                transformed_width,
+                height,
+                huffman_info,
+                &mut data[..transformed_size],
+            )?;
+            self.apply_transforms(transformed_width, &mut data)?;
+
+            for i in 0..num_pixels {
+                data[i] = data[i * 4 + 1];
+            }
+            data.truncate(num_pixels);
+            data.shrink_to_fit();
+            Ok(data)
+        }
+    }
+
+    /// Undoes the transforms on an image of the size they left it, in `buf`
+    fn apply_transforms(
+        &self,
+        transformed_width: u16,
+        buf: &mut [u8],
+    ) -> Result<(), DecodingError> {
+        let mut image_size = usize::from(transformed_width) * usize::from(self.height) * 4;
         let mut width = transformed_width;
         for &trans_index in self.transform_order.iter().rev() {
             let transform = self.transforms[usize::from(trans_index)].as_ref().unwrap();
@@ -163,14 +222,24 @@ impl<R: BufRead> LosslessDecoder<R> {
         is_argb_img: bool,
         data: &mut [u8],
     ) -> Result<(), DecodingError> {
+        let huffman_info = self.read_entropy_coding(xsize, ysize, is_argb_img)?;
+        self.decode_image_data(xsize, ysize, huffman_info, data)
+    }
+
+    /// Reads the color cache size and the huffman codes that start an image stream
+    fn read_entropy_coding(
+        &mut self,
+        xsize: u16,
+        ysize: u16,
+        is_argb_img: bool,
+    ) -> Result<HuffmanInfo, DecodingError> {
         let color_cache_bits = self.read_color_cache()?;
         let color_cache = color_cache_bits.map(|bits| ColorCache {
             color_cache_bits: bits,
             color_cache: vec![[0; 4]; 1 << bits],
         });
 
-        let huffman_info = self.read_huffman_codes(is_argb_img, xsize, ysize, color_cache)?;
-        self.decode_image_data(xsize, ysize, huffman_info, data)
+        self.read_huffman_codes(is_argb_img, xsize, ysize, color_cache)
     }
 
     /// Reads transforms and their data from the bitstream
@@ -594,6 +663,93 @@ impl<R: BufRead> LosslessDecoder<R> {
                         }
                     }
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Decodes image data as `decode_image_data` does, keeping only the green channel.
+    ///
+    /// The image must not have a color cache.
+    fn decode_green_data(
+        &mut self,
+        width: u16,
+        height: u16,
+        huffman_info: &HuffmanInfo,
+        data: &mut [u8],
+    ) -> Result<(), DecodingError> {
+        let num_values = usize::from(width) * usize::from(height);
+
+        let huff_index = huffman_info.get_huff_index(0, 0);
+        let mut tree = &huffman_info.huffman_code_groups[huff_index];
+        let mut index = 0;
+
+        let mut next_block_start = 0;
+        while index < num_values {
+            self.bit_reader.fill()?;
+
+            if index >= next_block_start {
+                let x = index % usize::from(width);
+                let y = index / usize::from(width);
+                next_block_start = (x | usize::from(huffman_info.mask)).min(usize::from(width - 1))
+                    + y * usize::from(width)
+                    + 1;
+
+                let huff_index = huffman_info.get_huff_index(x as u16, y as u16);
+                tree = &huffman_info.huffman_code_groups[huff_index];
+
+                // See the fast path in `decode_image_data`.
+                if tree[..4].iter().all(|t| t.is_single_node()) {
+                    let code = tree[GREEN].read_symbol(&mut self.bit_reader)?;
+                    if code < 256 {
+                        let n = if huffman_info.bits == 0 {
+                            num_values
+                        } else {
+                            next_block_start - index
+                        };
+                        data[index..][..n].fill(code as u8);
+                        index += n;
+                        continue;
+                    }
+                }
+            }
+
+            let code = tree[GREEN].read_symbol(&mut self.bit_reader)?;
+
+            if code < 256 {
+                tree[RED].read_symbol(&mut self.bit_reader)?;
+                tree[BLUE].read_symbol(&mut self.bit_reader)?;
+                if self.bit_reader.nbits < 15 {
+                    self.bit_reader.fill()?;
+                }
+                tree[ALPHA].read_symbol(&mut self.bit_reader)?;
+
+                data[index] = code as u8;
+                index += 1;
+            } else if code < 256 + 24 {
+                let length_symbol = code - 256;
+                let length = Self::get_copy_distance(&mut self.bit_reader, length_symbol)?;
+
+                let dist_symbol = tree[DIST].read_symbol(&mut self.bit_reader)?;
+                let dist_code = Self::get_copy_distance(&mut self.bit_reader, dist_symbol)?;
+                let dist = Self::plane_code_to_distance(width, dist_code);
+
+                if index < dist || num_values - index < length {
+                    return Err(DecodingError::BitStreamError);
+                }
+
+                if dist == 1 {
+                    let value = data[index - 1];
+                    data[index..][..length].fill(value);
+                } else {
+                    for i in index..index + length {
+                        data[i] = data[i - dist];
+                    }
+                }
+                index += length;
+            } else {
+                return Err(DecodingError::BitStreamError);
             }
         }
 

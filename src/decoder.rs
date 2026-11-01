@@ -682,10 +682,10 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             let mut decoder = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
 
             if self.has_alpha {
-                decoder.decode_frame(self.width, self.height, false, buf)?;
+                decoder.decode_frame(self.width, self.height, buf)?;
             } else {
                 let mut data = vec![0; self.width as usize * self.height as usize * 4];
-                decoder.decode_frame(self.width, self.height, false, &mut data)?;
+                decoder.decode_frame(self.width, self.height, &mut data)?;
                 for (rgba_val, chunk) in data.chunks_exact(4).zip(buf.chunks_exact_mut(3)) {
                     chunk.copy_from_slice(&rgba_val[..3]);
                 }
@@ -808,7 +808,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 let reader = (&mut self.r).take(chunk_size);
                 let mut lossless_decoder = LosslessDecoder::new(reader);
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
-                lossless_decoder.decode_frame(frame_width, frame_height, false, &mut rgba_frame)?;
+                lossless_decoder.decode_frame(frame_width, frame_height, &mut rgba_frame)?;
                 (rgba_frame, true)
             }
             WebPRiffChunk::ALPH => {
