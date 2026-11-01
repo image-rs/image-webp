@@ -4,6 +4,7 @@ use std::io::Read;
 
 use crate::decoder::{DecodingError, UpsamplingMethod};
 use common::*;
+use loop_filter::*;
 use prediction::*;
 
 use arithmetic_decoder::ArithmeticDecoder;
@@ -977,211 +978,68 @@ impl<R: Read> Vp8Decoder<R> {
             let do_subblock_filtering =
                 mb.luma_mode == LumaMode::B || (!mb.coeffs_skipped && mb.non_zero_dct);
 
-            //filter across left of macroblock
-            if mbx > 0 {
+            let ybuf = &mut self.frame.ybuf[..];
+            let ubuf = &mut self.frame.ubuf[..];
+            let vbuf = &mut self.frame.vbuf[..];
+            let y0 = mby * 16 * luma_w + mbx * 16;
+            let uv0 = mby * 8 * chroma_w + mbx * 8;
+
+            let mb_filter = |edge: &mut Edge| {
+                macroblock_filter(hev_threshold, interior_limit, mbedge_limit, edge)
+            };
+            let sub_filter = |edge: &mut Edge| {
+                subblock_filter(hev_threshold, interior_limit, sub_bedge_limit, edge)
+            };
+
+            if self.frame.filter_type {
                 //simple loop filtering
-                if self.frame.filter_type {
-                    for y in 0usize..16 {
-                        let y0 = mby * 16 + y;
-                        let x0 = mbx * 16;
-
-                        loop_filter::simple_segment_horizontal(
-                            mbedge_limit,
-                            &mut self.frame.ybuf[y0 * luma_w + x0 - 4..][..8],
-                        );
-                    }
-                } else {
-                    for y in 0usize..16 {
-                        let y0 = mby * 16 + y;
-                        let x0 = mbx * 16;
-
-                        loop_filter::macroblock_filter_horizontal(
-                            hev_threshold,
-                            interior_limit,
-                            mbedge_limit,
-                            &mut self.frame.ybuf[y0 * luma_w + x0 - 4..][..8],
-                        );
-                    }
-
-                    for y in 0usize..8 {
-                        let y0 = mby * 8 + y;
-                        let x0 = mbx * 8;
-
-                        loop_filter::macroblock_filter_horizontal(
-                            hev_threshold,
-                            interior_limit,
-                            mbedge_limit,
-                            &mut self.frame.ubuf[y0 * chroma_w + x0 - 4..][..8],
-                        );
-                        loop_filter::macroblock_filter_horizontal(
-                            hev_threshold,
-                            interior_limit,
-                            mbedge_limit,
-                            &mut self.frame.vbuf[y0 * chroma_w + x0 - 4..][..8],
-                        );
+                if mbx > 0 {
+                    filter_across_columns(ybuf, y0, luma_w, |e| simple_filter(mbedge_limit, e));
+                }
+                if do_subblock_filtering {
+                    for x in [4, 8, 12] {
+                        filter_across_columns(ybuf, y0 + x, luma_w, |e| {
+                            simple_filter(sub_bedge_limit, e)
+                        });
                     }
                 }
-            }
-
-            //filter across vertical subblocks in macroblock
-            if do_subblock_filtering {
-                if self.frame.filter_type {
-                    for x in (4usize..16 - 1).step_by(4) {
-                        for y in 0..16 {
-                            let y0 = mby * 16 + y;
-                            let x0 = mbx * 16 + x;
-
-                            loop_filter::simple_segment_horizontal(
-                                sub_bedge_limit,
-                                &mut self.frame.ybuf[y0 * luma_w + x0 - 4..][..8],
-                            );
-                        }
-                    }
-                } else {
-                    for x in (4usize..16 - 3).step_by(4) {
-                        for y in 0..16 {
-                            let y0 = mby * 16 + y;
-                            let x0 = mbx * 16 + x;
-
-                            loop_filter::subblock_filter_horizontal(
-                                hev_threshold,
-                                interior_limit,
-                                sub_bedge_limit,
-                                &mut self.frame.ybuf[y0 * luma_w + x0 - 4..][..8],
-                            );
-                        }
-                    }
-
-                    for y in 0usize..8 {
-                        let y0 = mby * 8 + y;
-                        let x0 = mbx * 8 + 4;
-
-                        loop_filter::subblock_filter_horizontal(
-                            hev_threshold,
-                            interior_limit,
-                            sub_bedge_limit,
-                            &mut self.frame.ubuf[y0 * chroma_w + x0 - 4..][..8],
-                        );
-
-                        loop_filter::subblock_filter_horizontal(
-                            hev_threshold,
-                            interior_limit,
-                            sub_bedge_limit,
-                            &mut self.frame.vbuf[y0 * chroma_w + x0 - 4..][..8],
-                        );
+                if mby > 0 {
+                    filter_across_rows(ybuf, y0, luma_w, |e| simple_filter(mbedge_limit, e));
+                }
+                if do_subblock_filtering {
+                    for y in [4, 8, 12] {
+                        filter_across_rows(ybuf, y0 + y * luma_w, luma_w, |e| {
+                            simple_filter(sub_bedge_limit, e)
+                        });
                     }
                 }
-            }
-
-            //filter across top of macroblock
-            if mby > 0 {
-                if self.frame.filter_type {
-                    for x in 0usize..16 {
-                        let y0 = mby * 16;
-                        let x0 = mbx * 16 + x;
-
-                        loop_filter::simple_segment_vertical(
-                            mbedge_limit,
-                            &mut self.frame.ybuf[..],
-                            y0 * luma_w + x0,
-                            luma_w,
-                        );
-                    }
-                } else {
-                    //if bottom macroblock, can only filter if there is 3 pixels below
-                    for x in 0usize..16 {
-                        let y0 = mby * 16;
-                        let x0 = mbx * 16 + x;
-
-                        loop_filter::macroblock_filter_vertical(
-                            hev_threshold,
-                            interior_limit,
-                            mbedge_limit,
-                            &mut self.frame.ybuf[..],
-                            y0 * luma_w + x0,
-                            luma_w,
-                        );
-                    }
-
-                    for x in 0usize..8 {
-                        let y0 = mby * 8;
-                        let x0 = mbx * 8 + x;
-
-                        loop_filter::macroblock_filter_vertical(
-                            hev_threshold,
-                            interior_limit,
-                            mbedge_limit,
-                            &mut self.frame.ubuf[..],
-                            y0 * chroma_w + x0,
-                            chroma_w,
-                        );
-                        loop_filter::macroblock_filter_vertical(
-                            hev_threshold,
-                            interior_limit,
-                            mbedge_limit,
-                            &mut self.frame.vbuf[..],
-                            y0 * chroma_w + x0,
-                            chroma_w,
-                        );
-                    }
+            } else {
+                //filter across left of macroblock
+                if mbx > 0 {
+                    filter_across_columns(ybuf, y0, luma_w, mb_filter);
+                    filter_chroma_across_columns(ubuf, vbuf, uv0, chroma_w, mb_filter);
                 }
-            }
 
-            //filter across horizontal subblock edges within the macroblock
-            if do_subblock_filtering {
-                if self.frame.filter_type {
-                    for y in (4usize..16 - 1).step_by(4) {
-                        for x in 0..16 {
-                            let y0 = mby * 16 + y;
-                            let x0 = mbx * 16 + x;
-
-                            loop_filter::simple_segment_vertical(
-                                sub_bedge_limit,
-                                &mut self.frame.ybuf[..],
-                                y0 * luma_w + x0,
-                                luma_w,
-                            );
-                        }
+                //filter across vertical subblocks in macroblock
+                if do_subblock_filtering {
+                    for x in [4, 8, 12] {
+                        filter_across_columns(ybuf, y0 + x, luma_w, sub_filter);
                     }
-                } else {
-                    for y in (4usize..16 - 3).step_by(4) {
-                        for x in 0..16 {
-                            let y0 = mby * 16 + y;
-                            let x0 = mbx * 16 + x;
+                    filter_chroma_across_columns(ubuf, vbuf, uv0 + 4, chroma_w, sub_filter);
+                }
 
-                            loop_filter::subblock_filter_vertical(
-                                hev_threshold,
-                                interior_limit,
-                                sub_bedge_limit,
-                                &mut self.frame.ybuf[..],
-                                y0 * luma_w + x0,
-                                luma_w,
-                            );
-                        }
+                //filter across top of macroblock
+                if mby > 0 {
+                    filter_across_rows(ybuf, y0, luma_w, mb_filter);
+                    filter_chroma_across_rows(ubuf, vbuf, uv0, chroma_w, mb_filter);
+                }
+
+                //filter across horizontal subblock edges within the macroblock
+                if do_subblock_filtering {
+                    for y in [4, 8, 12] {
+                        filter_across_rows(ybuf, y0 + y * luma_w, luma_w, sub_filter);
                     }
-
-                    for x in 0..8 {
-                        let y0 = mby * 8 + 4;
-                        let x0 = mbx * 8 + x;
-
-                        loop_filter::subblock_filter_vertical(
-                            hev_threshold,
-                            interior_limit,
-                            sub_bedge_limit,
-                            &mut self.frame.ubuf[..],
-                            y0 * chroma_w + x0,
-                            chroma_w,
-                        );
-
-                        loop_filter::subblock_filter_vertical(
-                            hev_threshold,
-                            interior_limit,
-                            sub_bedge_limit,
-                            &mut self.frame.vbuf[..],
-                            y0 * chroma_w + x0,
-                            chroma_w,
-                        );
-                    }
+                    filter_chroma_across_rows(ubuf, vbuf, uv0 + 4 * chroma_w, chroma_w, sub_filter);
                 }
             }
         }
