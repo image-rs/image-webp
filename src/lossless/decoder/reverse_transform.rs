@@ -574,6 +574,49 @@ fn apply_color_indexing_transform_small_table<const W_BITS: u8, const EXP_ENTRY_
     }
 }
 
+/// Undoes the color indexing transform on a plane holding only the green channel
+pub(crate) fn apply_color_indexing_transform_green(
+    plane: &mut [u8],
+    width: u16,
+    height: u16,
+    table_size: u16,
+    table_data: &[u8],
+) {
+    // WebP spec: out-of-bounds indices are [0,0,0,0]
+    let mut table = [0; 256];
+    for (entry, color) in table.iter_mut().zip(table_data.chunks_exact(4)) {
+        *entry = color[1];
+    }
+
+    let bits_per_index = match table_size {
+        ..=2 => 1,
+        3..=4 => 2,
+        5..=16 => 4,
+        _ => 8,
+    };
+
+    if bits_per_index == 8 {
+        for pixel in plane {
+            *pixel = table[usize::from(*pixel)];
+        }
+        return;
+    }
+
+    let width = usize::from(width);
+    let indices_per_byte = 8 / bits_per_index;
+    let packed_width = width.div_ceil(indices_per_byte);
+    let mask = (1 << bits_per_index) - 1;
+
+    // Rows only grow, so going backwards never overwrites an index still to be read.
+    for y in (0..usize::from(height)).rev() {
+        for x in (0..width).rev() {
+            let packed = plane[y * packed_width + x / indices_per_byte];
+            let index = (packed >> ((x % indices_per_byte) * bits_per_index)) & mask;
+            plane[y * width + x] = table[usize::from(index)];
+        }
+    }
+}
+
 //predictor functions
 
 /// Get average of 2 bytes
@@ -606,6 +649,45 @@ fn clamp_add_subtract_half(a: i16, b: i16) -> u8 {
 /// Does color transform on 2 numbers
 fn color_transform_delta(t: i8, c: i8) -> u32 {
     (i32::from(t) * i32::from(c)) as u32 >> 5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn color_indexing_transform_green_matches_rgba() {
+        const WIDTH: u16 = 13;
+        const HEIGHT: u16 = 5;
+        let bits = |table_size| match table_size {
+            1..=2 => 3,
+            3..=4 => 2,
+            5..=16 => 1,
+            _ => 0,
+        };
+
+        for table_size in 1..=256u16 {
+            let table: Vec<u8> = (0..table_size)
+                .flat_map(|i| [7, (i * 3 + 100) as u8, 9, 255])
+                .collect();
+            let packed_width = subsample_size(WIDTH, bits(table_size));
+            let pixels = usize::from(packed_width) * usize::from(HEIGHT);
+            let indices: Vec<u8> = (0..pixels).map(|i| (i * 89 + 31) as u8).collect();
+
+            let mut rgba = vec![0; usize::from(WIDTH) * usize::from(HEIGHT) * 4];
+            for (pixel, &index) in rgba.chunks_exact_mut(4).zip(&indices) {
+                pixel[1] = index;
+            }
+            apply_color_indexing_transform(&mut rgba, WIDTH, HEIGHT, table_size, &table);
+
+            let mut plane = vec![0; usize::from(WIDTH) * usize::from(HEIGHT)];
+            plane[..pixels].copy_from_slice(&indices);
+            apply_color_indexing_transform_green(&mut plane, WIDTH, HEIGHT, table_size, &table);
+
+            let green: Vec<u8> = rgba.chunks_exact(4).map(|pixel| pixel[1]).collect();
+            assert_eq!(plane, green, "table size {table_size}");
+        }
+    }
 }
 
 #[cfg(all(test, feature = "_benchmarks"))]
