@@ -180,7 +180,7 @@ fn build_huffman_tree(
         // assign new lengths
         let mut len = length_limit;
         let mut indexes = frequencies.iter().copied().enumerate().collect::<Vec<_>>();
-        indexes.sort_unstable_by_key(|&(index, frequency)| (frequency, index));
+        indexes.sort_by_key(|&(_, frequency)| frequency);
         for &(i, frequency) in &indexes {
             if frequency > 0 {
                 while counts[len as usize] == 0 {
