@@ -21,12 +21,30 @@ impl ArithmeticEncoder {
         }
     }
 
-    // we need to go back and add one to existing values
+    // A carry out of the current byte (`bottom`'s bit 31 set before the
+    // shift) has to ripple backwards through every already-written byte that
+    // is already saturated at 0xFF, turning each of them into 0x00, until it
+    // reaches one that isn't and can absorb the +1 (standard arithmetic-coder
+    // carry propagation - the same rule as decimal "999 + 1 = 1000").
+    //
+    // The previous version of this loop popped 0xFF bytes and, since they're
+    // not `< 255`, simply discarded them instead of writing back 0x00 and
+    // continuing the carry - i.e. it deleted bytes from the output instead of
+    // zeroing them. That shortens the encoded stream by however many 0xFF
+    // bytes were in the carry chain, desyncing every read the decoder does
+    // from that point on. It stayed latent because it only fires when a
+    // carry actually has to cross one or more 0xFF bytes, which needs a
+    // long-enough run of near-maximal `bottom` values; this crate's encoder
+    // wrote so little through this path before RD mode decision + skip
+    // signalling (a single fixed DC/DC mode, and `mb_no_skip_coeff` always
+    // disabled) that the condition was essentially never exercised.
     fn add_one_to_output(&mut self) {
-        while let Some(value) = self.writer.pop() {
-            if value < 255 {
-                self.writer.push(value + 1);
-                break;
+        for value in self.writer.iter_mut().rev() {
+            if *value == 255 {
+                *value = 0;
+            } else {
+                *value += 1;
+                return;
             }
         }
     }
@@ -237,5 +255,42 @@ mod tests {
         encoder.write_with_tree(&KEYFRAME_YMODE_TREE, &KEYFRAME_YMODE_PROBS, TM_PRED);
         let write_buffer = encoder.flush_and_get_buffer();
         assert_eq!(&[233, 64, 0, 0], &*write_buffer);
+    }
+
+    // Regression test for a carry-propagation bug in `add_one_to_output`:
+    // when a carry from `write_bool` needs to ripple back through one or
+    // more already-written 0xFF bytes, each of them must become 0x00 and the
+    // carry keeps propagating until it reaches a byte it can increment
+    // in-place - the same rule as decimal "1099 + 1 = 1100". The buggy
+    // version instead treated "can't add 1 without overflowing" as "discard
+    // this byte", which silently shortened the encoded stream by however
+    // many 0xFF bytes were in the chain: every read the decoder did from
+    // that point on landed on the wrong bits. This is exactly the mechanism
+    // behind a known bitstream corruption this crate had for
+    // `examples/kodim02.png` at `lossy_quality = 85` (see the encoder's
+    // commit history / rd_eval notes) - it just needed a long enough run of
+    // near-saturated `bottom` values to fire, which a real image only
+    // produces occasionally.
+    #[test]
+    fn test_carry_propagates_through_saturated_bytes() {
+        let mut encoder = ArithmeticEncoder::new();
+        encoder.writer = vec![0, 10, 255, 255, 255];
+        encoder.add_one_to_output();
+        assert_eq!(encoder.writer, vec![0, 11, 0, 0, 0]);
+
+        // No chain to cross: the last byte simply absorbs the carry.
+        let mut encoder = ArithmeticEncoder::new();
+        encoder.writer = vec![0x10];
+        encoder.add_one_to_output();
+        assert_eq!(encoder.writer, vec![0x11]);
+
+        // Every byte saturated, so the carry falls off the front. The VP8
+        // encoder's own invariants make this unreachable in practice, but the
+        // buffer must still keep its length rather than being emptied - which
+        // is the failure mode this whole function is about.
+        let mut encoder = ArithmeticEncoder::new();
+        encoder.writer = vec![255, 255];
+        encoder.add_one_to_output();
+        assert_eq!(encoder.writer, vec![0, 0]);
     }
 }
