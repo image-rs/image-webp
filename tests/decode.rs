@@ -202,6 +202,22 @@ reftest!(
     lossless_indexed_4bit_palette
 );
 
+// 32768x32768 animated canvas: width * height * 4 = 2^32 overflows u32.
+#[test]
+#[ignore = "allocates ~7 GiB (3 GiB output buffer + 4 GiB canvas)"]
+fn animation_canvas_size_does_not_overflow_u32() {
+    let bytes = include_bytes!("images/regression/animation_canvas_overflow.webp");
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes)).unwrap();
+    assert_eq!(decoder.dimensions(), (32768, 32768));
+    assert!(decoder.is_animated());
+
+    let mut pixels = vec![0; decoder.output_buffer_size().unwrap()];
+    decoder.read_frame(&mut pixels).unwrap();
+    // First frame is 16x16 opaque grey at the origin; the rest stays clear.
+    assert_eq!(pixels[..16 * 3], [128; 16 * 3]);
+    assert_eq!(pixels[16 * 3..32 * 3], [0; 16 * 3]);
+}
+
 // Builds a minimal RIFF WebP containing only a VP8L header (no image data).
 // This is enough to test dimension parsing without needing valid pixel data.
 fn vp8l_dimensions_only_webp(width_minus_one: u32, height_minus_one: u32) -> Vec<u8> {
