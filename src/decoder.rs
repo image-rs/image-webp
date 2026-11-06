@@ -871,7 +871,14 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
         // fill starting canvas with clear color
         if self.animation.canvas.is_none() {
             self.animation.canvas = {
-                let mut canvas = vec![0; (self.width * self.height * 4) as usize];
+                // Checked arithmetic in case canvas size overflows.
+                // Previous checks may succeed, but *4 may overflow.
+                let canvas_size = (self.width as usize)
+                    .checked_mul(self.height as usize)
+                    .ok_or(DecodingError::ImageTooLarge)?
+                    .checked_mul(4)
+                    .ok_or(DecodingError::ImageTooLarge)?;
+                let mut canvas = vec![0; canvas_size];
                 if let Some(color) = info.background_color.as_ref() {
                     canvas
                         .chunks_exact_mut(4)
