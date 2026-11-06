@@ -202,6 +202,14 @@ reftest!(
     lossless_indexed_4bit_palette
 );
 
+#[test]
+fn animated_alpha_vp8_size_mismatch_is_an_error() {
+    let bytes = include_bytes!("images/regression/animated_alpha_vp8_size.webp");
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes)).unwrap();
+    let mut pixels = vec![0; decoder.output_buffer_size().unwrap()];
+    assert!(decoder.read_frame(&mut pixels).is_err());
+}
+
 // Builds a minimal RIFF WebP containing only a VP8L header (no image data).
 // This is enough to test dimension parsing without needing valid pixel data.
 fn vp8l_dimensions_only_webp(width_minus_one: u32, height_minus_one: u32) -> Vec<u8> {
