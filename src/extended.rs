@@ -237,7 +237,6 @@ pub(crate) fn read_3_bytes<R: Read>(reader: &mut R) -> Result<u32, DecodingError
 
 #[derive(Debug)]
 pub(crate) struct AlphaChunk {
-    _preprocessing: bool,
     pub(crate) filtering_method: FilteringMethod,
     pub(crate) data: Vec<u8>,
 }
@@ -257,15 +256,8 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
 ) -> Result<AlphaChunk, DecodingError> {
     let info_byte = reader.read_u8()?;
 
-    let preprocessing = (info_byte & 0b00110000) >> 4;
     let filtering = (info_byte & 0b00001100) >> 2;
     let compression = info_byte & 0b00000011;
-
-    let preprocessing = match preprocessing {
-        0 => false,
-        1 => true,
-        _ => return Err(DecodingError::InvalidAlphaPreprocessing),
-    };
 
     let filtering_method = match filtering {
         0 => FilteringMethod::None,
@@ -299,7 +291,6 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
     };
 
     let chunk = AlphaChunk {
-        _preprocessing: preprocessing,
         filtering_method,
         data,
     };
@@ -310,6 +301,15 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alpha_reserved_and_preprocessing_bits_are_ignored() {
+        for info_byte in [0x20, 0x30, 0xc0, 0xf0] {
+            let data = [info_byte, 42];
+            let alpha = read_alpha_chunk(&mut &data[..], 1, 1).unwrap();
+            assert_eq!(alpha.data, [42]);
+        }
+    }
 
     /// Regression test: clearing the canvas for a non-alpha frame used 3-byte
     /// stride on the always-RGBA canvas, corrupting pixel alignment.
