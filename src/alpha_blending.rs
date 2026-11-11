@@ -28,7 +28,9 @@ fn blend_channel_nonpremult(
 fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
     let src_a = ((src >> channel_shift(3)) & 0xff) as u8;
 
-    if src_a == 0 {
+    if src_a == 255 {
+        src
+    } else if src_a == 0 {
         dst
     } else {
         let dst_a = ((dst >> channel_shift(3)) & 0xff) as u8;
