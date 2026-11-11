@@ -28,7 +28,9 @@ fn blend_channel_nonpremult(
 fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
     let src_a = ((src >> channel_shift(3)) & 0xff) as u8;
 
-    if src_a == 0 {
+    if src_a == 255 {
+        src
+    } else if src_a == 0 {
         dst
     } else {
         let dst_a = ((dst >> channel_shift(3)) & 0xff) as u8;
@@ -38,7 +40,7 @@ fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
         // however, we've found that we can use a more precise approximation without losing performance:
         let dst_factor_a = div_by_255(u32::from(dst_a) * (255 - u32::from(src_a)));
         let blend_a = u32::from(src_a) + dst_factor_a;
-        let scale = (1u32 << 24) / blend_a;
+        let scale = (1u32 << 24) / blend_a + 1;
 
         let blend_r =
             blend_channel_nonpremult(src, src_a, dst, dst_factor_a as u8, scale, channel_shift(0));
@@ -125,6 +127,20 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn opaque_source_is_preserved() {
+        for c in 0..=255 {
+            assert_eq!(
+                do_alpha_blending([c, c, c, 255], [0, 0, 0, 0]),
+                [c, c, c, 255]
+            );
+            assert_eq!(
+                do_alpha_blending([c, c, c, 255], [1, 2, 3, 255]),
+                [c, c, c, 255]
+            );
         }
     }
 }
