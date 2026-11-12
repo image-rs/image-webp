@@ -10,6 +10,7 @@ use std::mem;
 
 use super::{CODE_LENGTH_CODES, CODE_LENGTH_CODE_ORDER, DISTANCE_MAP};
 use crate::decoder::DecodingError;
+use crate::memory_budget::{MemoryAccount, MemoryBudget};
 use huffman::HuffmanTree;
 use reverse_transform::{
     apply_color_indexing_transform, apply_color_transform, apply_predictor_transform,
@@ -23,6 +24,25 @@ const ALPHA: usize = 3;
 const DIST: usize = 4;
 
 const HUFFMAN_CODES_PER_META_CODE: usize = 5;
+const COLOR_BYTE_VALUES: usize = u8::MAX as usize + 1;
+const ENTROPY_IMAGE_BUFFERS: usize = 2;
+const TWO_SYMBOL_TABLE_SIZE: usize = 2;
+const TWO_COLOR_PACKING_BITS: u8 = 3;
+const FOUR_COLOR_PACKING_BITS: u8 = 2;
+const SIXTEEN_COLOR_PACKING_BITS: u8 = 1;
+
+// The result is log2 of the number of palette indices packed into one byte.
+fn color_index_bits(table_size: u16) -> u8 {
+    if table_size <= 2 {
+        TWO_COLOR_PACKING_BITS
+    } else if table_size <= 4 {
+        FOUR_COLOR_PACKING_BITS
+    } else if table_size <= 16 {
+        SIXTEEN_COLOR_PACKING_BITS
+    } else {
+        0
+    }
+}
 
 type HuffmanCodeGroup = [HuffmanTree; HUFFMAN_CODES_PER_META_CODE];
 
@@ -45,18 +65,24 @@ pub(crate) struct LosslessDecoder<R> {
     transform_order: Vec<u8>,
     width: u16,
     height: u16,
+    memory_used: MemoryAccount,
 }
 
 impl<R: BufRead> LosslessDecoder<R> {
     /// Create a new decoder
-    pub(crate) const fn new(r: R) -> Self {
+    pub(crate) fn new(r: R, memory_budget: MemoryBudget) -> Self {
         Self {
             bit_reader: BitReader::new(r),
             transforms: [None, None, None, None],
             transform_order: Vec::new(),
             width: 0,
             height: 0,
+            memory_used: MemoryAccount::new(memory_budget),
         }
+    }
+
+    fn allocate(&mut self, bytes: usize) -> Result<(), DecodingError> {
+        self.memory_used.allocate(bytes)
     }
 
     /// Decodes a frame.
@@ -104,8 +130,27 @@ impl<R: BufRead> LosslessDecoder<R> {
 
         let mut image_size = transformed_size;
         let mut width = transformed_width;
-        for &trans_index in self.transform_order.iter().rev() {
-            let transform = self.transforms[usize::from(trans_index)].as_ref().unwrap();
+        for order_index in (0..self.transform_order.len()).rev() {
+            let trans_index = self.transform_order[order_index];
+            let scratch_size = match self.transforms[usize::from(trans_index)]
+                .as_ref()
+                .ok_or(DecodingError::TransformError)?
+            {
+                TransformType::ColorIndexingTransform { table_size, .. } => {
+                    let bits = color_index_bits(*table_size);
+                    let lookup_size = COLOR_BYTE_VALUES * mem::size_of::<[u8; 4]>() * (1 << bits);
+                    if bits == 0 {
+                        lookup_size
+                    } else {
+                        lookup_size + usize::from(subsample_size(self.width, bits))
+                    }
+                }
+                _ => 0,
+            };
+            self.allocate(scratch_size)?;
+            let transform = self.transforms[usize::from(trans_index)]
+                .as_ref()
+                .ok_or(DecodingError::TransformError)?;
             match transform {
                 TransformType::PredictorTransform {
                     size_bits,
@@ -146,6 +191,7 @@ impl<R: BufRead> LosslessDecoder<R> {
                     );
                 }
             }
+            self.memory_used.release(scratch_size);
         }
 
         Ok(())
@@ -163,14 +209,21 @@ impl<R: BufRead> LosslessDecoder<R> {
         is_argb_img: bool,
         data: &mut [u8],
     ) -> Result<(), DecodingError> {
+        let initial_memory = self.memory_used.used();
         let color_cache_bits = self.read_color_cache()?;
+        if let Some(bits) = color_cache_bits {
+            self.allocate((1usize << bits) * mem::size_of::<[u8; 4]>())?;
+        }
         let color_cache = color_cache_bits.map(|bits| ColorCache {
             color_cache_bits: bits,
             color_cache: vec![[0; 4]; 1 << bits],
         });
 
         let huffman_info = self.read_huffman_codes(is_argb_img, xsize, ysize, color_cache)?;
-        self.decode_image_data(xsize, ysize, huffman_info, data)
+        let result = self.decode_image_data(xsize, ysize, huffman_info, data);
+        self.memory_used
+            .release(self.memory_used.used() - initial_memory);
+        result
     }
 
     /// Reads transforms and their data from the bitstream
@@ -185,6 +238,10 @@ impl<R: BufRead> LosslessDecoder<R> {
                 return Err(DecodingError::TransformError);
             }
 
+            if self.transform_order.is_empty() {
+                self.allocate(NUM_TRANSFORM_TYPES)?;
+                self.transform_order = Vec::with_capacity(NUM_TRANSFORM_TYPES);
+            }
             self.transform_order.push(transform_type_val);
 
             let transform_type = match transform_type_val {
@@ -196,8 +253,12 @@ impl<R: BufRead> LosslessDecoder<R> {
                     let block_xsize = subsample_size(xsize, size_bits);
                     let block_ysize = subsample_size(self.height, size_bits);
 
-                    let mut predictor_data =
-                        vec![0; usize::from(block_xsize) * usize::from(block_ysize) * 4];
+                    let size = usize::from(block_xsize)
+                        .checked_mul(usize::from(block_ysize))
+                        .and_then(|pixels| pixels.checked_mul(mem::size_of::<[u8; 4]>()))
+                        .ok_or(DecodingError::MemoryLimitExceeded)?;
+                    self.allocate(size)?;
+                    let mut predictor_data = vec![0; size];
                     self.decode_image_stream(block_xsize, block_ysize, false, &mut predictor_data)?;
 
                     TransformType::PredictorTransform {
@@ -213,8 +274,12 @@ impl<R: BufRead> LosslessDecoder<R> {
                     let block_xsize = subsample_size(xsize, size_bits);
                     let block_ysize = subsample_size(self.height, size_bits);
 
-                    let mut transform_data =
-                        vec![0; usize::from(block_xsize) * usize::from(block_ysize) * 4];
+                    let size = usize::from(block_xsize)
+                        .checked_mul(usize::from(block_ysize))
+                        .and_then(|pixels| pixels.checked_mul(mem::size_of::<[u8; 4]>()))
+                        .ok_or(DecodingError::MemoryLimitExceeded)?;
+                    self.allocate(size)?;
+                    let mut transform_data = vec![0; size];
                     self.decode_image_stream(block_xsize, block_ysize, false, &mut transform_data)?;
 
                     TransformType::ColorTransform {
@@ -230,18 +295,12 @@ impl<R: BufRead> LosslessDecoder<R> {
                 3 => {
                     let color_table_size = self.bit_reader.read_bits::<u16>(8)? + 1;
 
-                    let mut color_map = vec![0; usize::from(color_table_size) * 4];
+                    self.allocate(usize::from(color_table_size) * mem::size_of::<[u8; 4]>())?;
+                    let mut color_map =
+                        vec![0; usize::from(color_table_size) * mem::size_of::<[u8; 4]>()];
                     self.decode_image_stream(color_table_size, 1, false, &mut color_map)?;
 
-                    let bits = if color_table_size <= 2 {
-                        3
-                    } else if color_table_size <= 4 {
-                        2
-                    } else if color_table_size <= 16 {
-                        1
-                    } else {
-                        0
-                    };
+                    let bits = color_index_bits(color_table_size);
                     xsize = subsample_size(xsize, bits);
 
                     Self::adjust_color_map(&mut color_map);
@@ -277,36 +336,60 @@ impl<R: BufRead> LosslessDecoder<R> {
         color_cache: Option<ColorCache>,
     ) -> Result<HuffmanInfo, DecodingError> {
         let mut num_huff_groups = 1u32;
-
         let mut huffman_bits = 0;
         let mut huffman_xsize = 1;
         let mut huffman_ysize = 1;
         let mut entropy_image = Vec::new();
+        let mut used_groups;
 
         if read_meta && self.bit_reader.read_bits::<u8>(1)? == 1 {
-            //meta huffman codes
             huffman_bits = self.bit_reader.read_bits::<u8>(3)? + 2;
             huffman_xsize = subsample_size(xsize, huffman_bits);
             huffman_ysize = subsample_size(ysize, huffman_bits);
-
-            let mut data = vec![0; usize::from(huffman_xsize) * usize::from(huffman_ysize) * 4];
+            let count = usize::from(huffman_xsize)
+                .checked_mul(usize::from(huffman_ysize))
+                .ok_or(DecodingError::MemoryLimitExceeded)?;
+            let data_bytes = count
+                .checked_mul(mem::size_of::<[u8; 4]>())
+                .ok_or(DecodingError::MemoryLimitExceeded)?;
+            self.allocate(data_bytes)?;
+            let mut data = vec![0; data_bytes];
             self.decode_image_stream(huffman_xsize, huffman_ysize, false, &mut data)?;
-
-            entropy_image = data
-                .chunks_exact(4)
-                .map(|pixel| {
-                    let meta_huff_code = (u16::from(pixel[0]) << 8) | u16::from(pixel[1]);
-                    if u32::from(meta_huff_code) >= num_huff_groups {
-                        num_huff_groups = u32::from(meta_huff_code) + 1;
-                    }
-                    meta_huff_code
-                })
-                .collect::<Vec<u16>>();
+            let entropy_bytes = count
+                .checked_mul(ENTROPY_IMAGE_BUFFERS * mem::size_of::<u16>())
+                .ok_or(DecodingError::MemoryLimitExceeded)?;
+            self.allocate(entropy_bytes)?;
+            entropy_image = Vec::with_capacity(count);
+            used_groups = Vec::with_capacity(count);
+            for pixel in data.chunks_exact(4) {
+                let id = (u16::from(pixel[0]) << 8) | u16::from(pixel[1]);
+                entropy_image.push(id);
+                used_groups.push(id);
+                num_huff_groups = num_huff_groups.max(u32::from(id) + 1);
+            }
+            drop(data);
+            self.memory_used.release(data_bytes);
+            used_groups.sort_unstable();
+            used_groups.dedup();
+            for id in &mut entropy_image {
+                *id = used_groups
+                    .binary_search(id)
+                    .map_err(|_| DecodingError::HuffmanError)? as u16;
+            }
+        } else {
+            self.allocate(mem::size_of::<u16>())?;
+            used_groups = vec![0];
         }
 
-        let mut hufftree_groups = Vec::new();
-
-        for _i in 0..num_huff_groups {
+        let group_bytes = used_groups
+            .len()
+            .checked_mul(mem::size_of::<HuffmanCodeGroup>())
+            .ok_or(DecodingError::MemoryLimitExceeded)?;
+        self.allocate(group_bytes)?;
+        let mut hufftree_groups = Vec::with_capacity(used_groups.len());
+        let mut used_index = 0;
+        for i in 0..num_huff_groups {
+            let retain = used_groups.get(used_index).copied() == Some(i as u16);
             let mut group: HuffmanCodeGroup = Default::default();
             for j in 0..HUFFMAN_CODES_PER_META_CODE {
                 let mut alphabet_size = ALPHABET_SIZE[j];
@@ -315,12 +398,17 @@ impl<R: BufRead> LosslessDecoder<R> {
                         alphabet_size += 1 << color_cache.color_cache_bits;
                     }
                 }
-
-                let tree = self.read_huffman_code(alphabet_size)?;
+                let tree = self.read_huffman_code(alphabet_size, retain)?;
                 group[j] = tree;
             }
-            hufftree_groups.push(group);
+            if retain {
+                hufftree_groups.push(group);
+                used_index += 1;
+            }
         }
+        let used_groups_bytes = used_groups.capacity() * mem::size_of::<u16>();
+        drop(used_groups);
+        self.memory_used.release(used_groups_bytes);
 
         let huffman_mask = if huffman_bits == 0 {
             !0
@@ -341,11 +429,15 @@ impl<R: BufRead> LosslessDecoder<R> {
         Ok(info)
     }
 
-    /// Decodes and returns a single huffman tree
-    fn read_huffman_code(&mut self, alphabet_size: u16) -> Result<HuffmanTree, DecodingError> {
+    /// Decodes and returns a single Huffman tree.
+    fn read_huffman_code(
+        &mut self,
+        alphabet_size: u16,
+        retain: bool,
+    ) -> Result<HuffmanTree, DecodingError> {
         let simple = self.bit_reader.read_bits::<u8>(1)? == 1;
 
-        if simple {
+        let tree = if simple {
             let num_symbols = self.bit_reader.read_bits::<u8>(1)? + 1;
 
             let is_first_8bits = self.bit_reader.read_bits::<u8>(1)?;
@@ -356,15 +448,21 @@ impl<R: BufRead> LosslessDecoder<R> {
             }
 
             if num_symbols == 1 {
-                Ok(HuffmanTree::build_single_node(zero_symbol))
+                HuffmanTree::build_single_node(zero_symbol)
             } else {
                 let one_symbol = self.bit_reader.read_bits::<u16>(8)?;
                 if one_symbol >= alphabet_size {
                     return Err(DecodingError::BitStreamError);
                 }
-                Ok(HuffmanTree::build_two_node(zero_symbol, one_symbol))
+                if retain {
+                    self.allocate(TWO_SYMBOL_TABLE_SIZE * mem::size_of::<u16>())?;
+                    HuffmanTree::build_two_node(zero_symbol, one_symbol)
+                } else {
+                    HuffmanTree::default()
+                }
             }
         } else {
+            self.allocate(CODE_LENGTH_CODES * mem::size_of::<u16>())?;
             let mut code_length_code_lengths = vec![0; CODE_LENGTH_CODES];
 
             let num_code_lengths = 4 + self.bit_reader.read_bits::<usize>(4)?;
@@ -376,8 +474,10 @@ impl<R: BufRead> LosslessDecoder<R> {
             let new_code_lengths =
                 self.read_huffman_code_lengths(code_length_code_lengths, alphabet_size)?;
 
-            HuffmanTree::build_implicit(new_code_lengths)
-        }
+            HuffmanTree::build_implicit(new_code_lengths, &mut self.memory_used, retain)?
+        };
+
+        Ok(tree)
     }
 
     /// Reads huffman code lengths
@@ -386,7 +486,8 @@ impl<R: BufRead> LosslessDecoder<R> {
         code_length_code_lengths: Vec<u16>,
         num_symbols: u16,
     ) -> Result<Vec<u16>, DecodingError> {
-        let table = HuffmanTree::build_implicit(code_length_code_lengths)?;
+        let table =
+            HuffmanTree::build_implicit(code_length_code_lengths, &mut self.memory_used, true)?;
 
         let mut max_symbol = if self.bit_reader.read_bits::<u8>(1)? == 1 {
             let length_nbits = 2 + 2 * self.bit_reader.read_bits::<u8>(3)?;
@@ -399,6 +500,7 @@ impl<R: BufRead> LosslessDecoder<R> {
             num_symbols
         };
 
+        self.allocate(usize::from(num_symbols) * mem::size_of::<u16>())?;
         let mut code_lengths = vec![0; usize::from(num_symbols)];
         let mut prev_code_len = 8; //default code length
 
@@ -448,6 +550,9 @@ impl<R: BufRead> LosslessDecoder<R> {
             }
         }
 
+        let table_bytes = table.allocated_bytes();
+        drop(table);
+        self.memory_used.release(table_bytes);
         Ok(code_lengths)
     }
 
@@ -779,6 +884,190 @@ mod test {
     use std::io::Cursor;
 
     use super::BitReader;
+
+    struct Bits(Vec<u8>, usize);
+
+    impl Bits {
+        fn write(&mut self, value: u32, count: usize) {
+            for bit in 0..count {
+                if self.1 % 8 == 0 {
+                    self.0.push(0);
+                }
+                self.0[self.1 / 8] |= (((value >> bit) & 1) as u8) << (self.1 % 8);
+                self.1 += 1;
+            }
+        }
+        fn single(&mut self, symbol: u8) {
+            self.write(1, 1);
+            self.write(0, 1);
+            self.write(u32::from(symbol > 1), 1);
+            self.write(u32::from(symbol), if symbol > 1 { 8 } else { 1 });
+        }
+    }
+
+    fn sparse_groups(invalid: bool) -> Vec<u8> {
+        let mut bits = Bits(Vec::new(), 0);
+        bits.write(1, 1);
+        bits.write(0, 3);
+        bits.write(0, 1);
+        for symbol in [255, 255, 0, 0, 0] {
+            bits.single(symbol);
+        }
+        for group in 0..=u16::MAX {
+            for tree in 0..5 {
+                bits.single(if invalid && group == 0 && tree == 4 {
+                    255
+                } else {
+                    0
+                });
+            }
+        }
+        bits.0
+    }
+
+    #[test]
+    fn nonadjacent_groups_decode_their_own_colors() {
+        let mut bits = Bits(Vec::new(), 0);
+        bits.write(1, 1); // entropy image present
+        bits.write(0, 3); // blocks are four pixels wide
+        bits.write(0, 1); // entropy image has no color cache
+        bits.write(1, 1); // simple green tree
+        bits.write(1, 1); // two symbols
+        bits.write(0, 1); // first symbol uses one bit
+        bits.write(1, 1);
+        bits.write(3, 8);
+        for symbol in [0, 0, 0, 0] {
+            bits.single(symbol);
+        }
+        bits.write(1, 1); // entropy group 3
+        bits.write(0, 1); // entropy group 1
+        bits.write(1, 1); // entropy group 3
+        for group in 0..4 {
+            for symbol in [
+                0,
+                if group == 1 {
+                    10
+                } else if group == 3 {
+                    20
+                } else {
+                    0
+                },
+                0,
+                255,
+                0,
+            ] {
+                bits.single(symbol);
+            }
+        }
+        bits.write(0, 16); // padding for the bit reader
+        let mut decoder = super::LosslessDecoder::new(
+            Cursor::new(bits.0),
+            crate::memory_budget::MemoryBudget::new(usize::MAX),
+        );
+        let info = decoder.read_huffman_codes(true, 12, 1, None).unwrap();
+        assert_eq!(info.image, [1, 0, 1]);
+        assert_eq!(info.huffman_code_groups.len(), 2);
+        let mut pixels = [0; 48];
+        decoder.decode_image_data(12, 1, info, &mut pixels).unwrap();
+        assert_eq!(&pixels[..16], [20, 0, 0, 255].repeat(4));
+        assert_eq!(&pixels[16..32], [10, 0, 0, 255].repeat(4));
+        assert_eq!(&pixels[32..], [20, 0, 0, 255].repeat(4));
+    }
+
+    #[test]
+    fn sparse_group_ids_are_dense_and_do_not_retain_unused_groups() {
+        let mut decoder = super::LosslessDecoder::new(
+            Cursor::new(sparse_groups(false)),
+            crate::memory_budget::MemoryBudget::new(4096),
+        );
+        let info = decoder.read_huffman_codes(true, 1, 1, None).unwrap();
+        assert_eq!(info.image, [0]);
+        assert_eq!(info.huffman_code_groups.len(), 1);
+        let mut pixel = [1; 4];
+        decoder.decode_image_data(1, 1, info, &mut pixel).unwrap();
+        assert_eq!(pixel, [0; 4]);
+    }
+
+    #[test]
+    fn skipped_groups_are_validated() {
+        let mut decoder = super::LosslessDecoder::new(
+            Cursor::new(sparse_groups(true)),
+            crate::memory_budget::MemoryBudget::new(usize::MAX),
+        );
+        assert!(decoder.read_huffman_codes(true, 1, 1, None).is_err());
+        let mut truncated = sparse_groups(false);
+        truncated.truncate(truncated.len() / 2);
+        let mut decoder = super::LosslessDecoder::new(
+            Cursor::new(truncated),
+            crate::memory_budget::MemoryBudget::new(usize::MAX),
+        );
+        assert!(decoder.read_huffman_codes(true, 1, 1, None).is_err());
+    }
+
+    #[test]
+    fn skipped_group_rejects_invalid_code_lengths() {
+        let mut bits = Bits(Vec::new(), 0);
+        bits.write(1, 1);
+        bits.write(0, 3);
+        bits.write(0, 1);
+        for symbol in [255, 255, 0, 0, 0] {
+            bits.single(symbol);
+        }
+        bits.write(0, 1); // complex tree
+        bits.write(0, 4); // four code-length code lengths
+        for length in [0, 0, 1, 1] {
+            bits.write(length, 3);
+        }
+        bits.write(1, 1); // only two symbols described
+        bits.write(0, 3);
+        bits.write(0, 2);
+        bits.write(0, 2); // both code lengths are zero
+        let mut decoder = super::LosslessDecoder::new(
+            Cursor::new(bits.0),
+            crate::memory_budget::MemoryBudget::new(usize::MAX),
+        );
+        assert!(matches!(
+            decoder.read_huffman_codes(true, 1, 1, None),
+            Err(crate::decoder::DecodingError::HuffmanError)
+        ));
+    }
+
+    fn limit_for_huffman_test(lengths: &[u16]) -> usize {
+        let primary_table_size = 1usize << super::huffman::MAX_TABLE_BITS;
+        (lengths.len() * 2 + primary_table_size) * std::mem::size_of::<u16>()
+    }
+
+    #[test]
+    fn secondary_huffman_table_respects_memory_limit() {
+        let mut lengths: Vec<u16> = (1..=10).collect();
+        lengths.extend([11, 11]);
+        let budget = crate::memory_budget::MemoryBudget::new(limit_for_huffman_test(&lengths));
+        let mut used = crate::memory_budget::MemoryAccount::new(budget);
+        used.allocate(lengths.len() * std::mem::size_of::<u16>())
+            .expect("initial lengths fit");
+        assert!(matches!(
+            super::HuffmanTree::build_implicit(lengths, &mut used, true),
+            Err(crate::decoder::DecodingError::MemoryLimitExceeded)
+        ));
+    }
+
+    #[test]
+    fn huffman_table_respects_memory_limit() {
+        let mut bits = Bits(Vec::new(), 0);
+        bits.write(1, 1);
+        bits.write(1, 1);
+        bits.write(0, 1);
+        bits.write(0, 1);
+        bits.write(1, 8);
+        let mut decoder = super::LosslessDecoder::new(
+            Cursor::new(bits.0),
+            crate::memory_budget::MemoryBudget::new(3),
+        );
+        assert!(matches!(
+            decoder.read_huffman_code(256, true),
+            Err(crate::decoder::DecodingError::MemoryLimitExceeded)
+        ));
+    }
 
     #[test]
     fn bit_read_test() {

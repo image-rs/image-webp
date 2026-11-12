@@ -37,7 +37,7 @@ impl<T: Default> BitResult<T> {
 
 #[cfg_attr(test, derive(Debug))]
 pub(crate) struct ArithmeticDecoder {
-    chunks: Box<[[u8; 4]]>,
+    chunks: Vec<[u8; 4]>,
     state: State,
     final_bytes: [u8; 3],
     final_bytes_remaining: i8,
@@ -68,7 +68,7 @@ impl ArithmeticDecoder {
             bit_count: -8,
         };
         ArithmeticDecoder {
-            chunks: Box::new([]),
+            chunks: Vec::new(),
             state,
             final_bytes: [0; 3],
             final_bytes_remaining: Self::FINAL_BYTES_REMAINING_EOF,
@@ -94,7 +94,7 @@ impl ArithmeticDecoder {
             num_bytes_popped as i8
         };
 
-        let chunks = buf.into_boxed_slice();
+        let chunks = buf;
         let state = State {
             chunk_index: 0,
             value: 0,

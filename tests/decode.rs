@@ -248,3 +248,137 @@ fn test_vp8l_max_width_and_height_dimensions() {
     let decoder = image_webp::WebPDecoder::new(Cursor::new(data)).unwrap();
     assert_eq!(decoder.dimensions(), (16384, 16384));
 }
+
+#[test]
+fn lossless_huffman_respects_memory_limit() {
+    let bytes = std::fs::read("tests/images/gallery2/1_webp_ll.webp").unwrap();
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes)).unwrap();
+    let mut output = vec![0; decoder.output_buffer_size().unwrap()];
+    decoder.set_memory_limit(0);
+    assert!(matches!(
+        decoder.read_image(&mut output),
+        Err(image_webp::DecodingError::MemoryLimitExceeded)
+    ));
+}
+
+#[test]
+fn lossless_indexed_transform_respects_memory_limit() {
+    let bytes =
+        std::fs::read("tests/images/regression/lossless_indexed_1bit_palette.webp").unwrap();
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(&bytes)).unwrap();
+    let mut output = vec![0; decoder.output_buffer_size().unwrap()];
+    // Fixture-specific budget that reaches the indexed transform but cannot fit its scratch space.
+    const LIMIT_BELOW_INDEXED_SCRATCH: usize = 121_222;
+    decoder.set_memory_limit(LIMIT_BELOW_INDEXED_SCRATCH);
+    assert!(matches!(
+        decoder.read_image(&mut output),
+        Err(image_webp::DecodingError::MemoryLimitExceeded)
+    ));
+
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(&bytes)).unwrap();
+    // Fixture-specific budget verified to fit all temporary allocations.
+    const LIMIT_FOR_INDEXED_IMAGE: usize = 200_000;
+    decoder.set_memory_limit(LIMIT_FOR_INDEXED_IMAGE);
+    decoder.read_image(&mut output).unwrap();
+}
+
+#[test]
+fn compressed_alpha_respects_memory_limit() {
+    let bytes = std::fs::read("tests/images/gallery2/1_webp_a.webp").unwrap();
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(&bytes)).unwrap();
+    let mut output = vec![0; decoder.output_buffer_size().unwrap()];
+    decoder.set_memory_limit(0);
+    assert!(matches!(
+        decoder.read_image(&mut output),
+        Err(image_webp::DecodingError::MemoryLimitExceeded)
+    ));
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(&bytes)).unwrap();
+    decoder.read_image(&mut output).unwrap();
+}
+
+#[test]
+fn animated_lossless_frame_respects_memory_limit() {
+    let bytes = std::fs::read("tests/images/animated/random_lossless.webp").unwrap();
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(&bytes)).unwrap();
+    let mut output = vec![0; decoder.output_buffer_size().unwrap()];
+    decoder.set_memory_limit(0);
+    assert!(matches!(
+        decoder.read_frame(&mut output),
+        Err(image_webp::DecodingError::MemoryLimitExceeded)
+    ));
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(&bytes)).unwrap();
+    decoder.read_frame(&mut output).unwrap();
+}
+
+#[test]
+fn animated_lossy_frame_respects_memory_limit() {
+    let bytes = std::fs::read("tests/images/animated/random_lossy.webp")
+        .expect("animated lossy fixture exists");
+    let mut decoder =
+        image_webp::WebPDecoder::new(Cursor::new(bytes)).expect("animated lossy fixture is valid");
+    let mut output = vec![0; decoder.output_buffer_size().expect("output size fits")];
+    decoder.set_memory_limit(0);
+    assert!(matches!(
+        decoder.read_frame(&mut output),
+        Err(image_webp::DecodingError::MemoryLimitExceeded)
+    ));
+}
+
+#[test]
+fn alpha_animation_shares_budget_and_reuses_canvas() {
+    const RIFF_HEADER_SIZE: usize = 12;
+    const VP8X_CHUNK_SIZE: usize = 18;
+    const VP8X_FLAGS_OFFSET: usize = RIFF_HEADER_SIZE + 8;
+    const VP8X_DIMENSIONS_OFFSET: usize = RIFF_HEADER_SIZE + 12;
+    const ANIMATION_FLAG: u8 = 2;
+    const FRAME_HEADER_SIZE: usize = 16;
+    const FRAME_OFFSET_SIZE: usize = 6;
+    const FRAME_DIMENSIONS_SIZE: usize = 6;
+    const FRAME_DURATION_OFFSET: usize = FRAME_OFFSET_SIZE + FRAME_DIMENSIONS_SIZE;
+    const FRAME_COUNT: usize = 2;
+    const FIXTURE_MEMORY_LIMIT: usize = 4 * 1024 * 1024;
+
+    let still = std::fs::read("tests/images/gallery2/1_webp_a.webp").expect("alpha fixture exists");
+    let mut webp = still[..RIFF_HEADER_SIZE + VP8X_CHUNK_SIZE].to_vec();
+    webp[VP8X_FLAGS_OFFSET] |= ANIMATION_FLAG;
+    webp.extend_from_slice(b"ANIM\x06\0\0\0\0\0\0\0\0\0");
+    let chunks = &still[RIFF_HEADER_SIZE + VP8X_CHUNK_SIZE..];
+    let frame_size =
+        u32::try_from(FRAME_HEADER_SIZE + chunks.len()).expect("fixture frame size fits u32");
+    for _ in 0..FRAME_COUNT {
+        webp.extend_from_slice(b"ANMF");
+        webp.extend_from_slice(&frame_size.to_le_bytes());
+        let mut frame_header = [0; FRAME_HEADER_SIZE];
+        frame_header[FRAME_OFFSET_SIZE..FRAME_OFFSET_SIZE + FRAME_DIMENSIONS_SIZE].copy_from_slice(
+            &still[VP8X_DIMENSIONS_OFFSET..VP8X_DIMENSIONS_OFFSET + FRAME_DIMENSIONS_SIZE],
+        );
+        frame_header[FRAME_DURATION_OFFSET] = 1;
+        webp.extend_from_slice(&frame_header);
+        webp.extend_from_slice(chunks);
+    }
+    let riff_size = u32::try_from(webp.len() - 8).expect("fixture RIFF size fits u32");
+    webp[4..8].copy_from_slice(&riff_size.to_le_bytes());
+
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(webp))
+        .expect("constructed alpha animation is valid");
+    let mut output = vec![0; decoder.output_buffer_size().expect("output size fits")];
+    let frame_and_canvas_limit = output.len() * 2 - 1;
+    decoder.set_memory_limit(frame_and_canvas_limit);
+    assert!(matches!(
+        decoder.read_frame(&mut output),
+        Err(image_webp::DecodingError::MemoryLimitExceeded)
+    ));
+    decoder.set_memory_limit(FIXTURE_MEMORY_LIMIT);
+    decoder
+        .read_frame(&mut output)
+        .expect("first frame decodes");
+    decoder.set_memory_limit(0);
+    assert!(matches!(
+        decoder.read_frame(&mut output),
+        Err(image_webp::DecodingError::MemoryLimitExceeded)
+    ));
+    decoder.set_memory_limit(FIXTURE_MEMORY_LIMIT);
+    decoder
+        .read_frame(&mut output)
+        .expect("retry decodes second frame");
+}
