@@ -1,8 +1,9 @@
 use byteorder_lite::{LittleEndian, ReadBytesExt};
 use std::default::Default;
-use std::io::Read;
+use std::io::{self, Read};
 
 use crate::decoder::{DecodingError, UpsamplingMethod};
+use crate::memory_budget::{self, MemoryBudget, Reservation};
 use common::*;
 use prediction::*;
 
@@ -290,16 +291,50 @@ pub struct Vp8Decoder<R> {
 
     top_border_v: Vec<u8>,
     left_border_v: Vec<u8>,
+
+    budget: Option<MemoryBudget>,
+    reservations: Vp8Reservations,
+}
+
+#[derive(Default)]
+struct Vp8Reservations {
+    frame: [Option<Reservation>; 3],
+    partitions: [Option<Reservation>; 8],
+    first_partition: Option<Reservation>,
+    _token_probs: Option<Reservation>,
+    macroblocks: Option<Reservation>,
+    top: Option<Reservation>,
+    top_border_y: Option<Reservation>,
+    left_border_y: Option<Reservation>,
+    top_border_u: Option<Reservation>,
+    left_border_u: Option<Reservation>,
+    top_border_v: Option<Reservation>,
+    left_border_v: Option<Reservation>,
+}
+
+pub(crate) struct BudgetedFrame {
+    frame: Frame,
+    _reservations: [Option<Reservation>; 3],
+}
+
+impl BudgetedFrame {
+    pub(crate) fn frame(&self) -> &Frame {
+        &self.frame
+    }
 }
 
 impl<R: Read> Vp8Decoder<R> {
     /// Create a new decoder.
     /// The reader must present a raw vp8 bitstream to the decoder
-    fn new(r: R) -> Self {
+    fn new(r: R, budget: Option<MemoryBudget>) -> Result<Self, DecodingError> {
         let f = Frame::default();
         let s = Segment::default();
+        let token_probs = budget
+            .as_ref()
+            .map(|budget| budget.reserve(std::mem::size_of::<TokenProbTreeNodes>()))
+            .transpose()?;
 
-        Self {
+        Ok(Self {
             r,
             b: ArithmeticDecoder::new(),
 
@@ -346,7 +381,19 @@ impl<R: Read> Vp8Decoder<R> {
 
             top_border_v: Vec::new(),
             left_border_v: Vec::new(),
-        }
+            budget,
+            reservations: Vp8Reservations {
+                _token_probs: token_probs,
+                ..Vp8Reservations::default()
+            },
+        })
+    }
+
+    fn reserve<T>(&self, capacity: usize) -> Result<Option<Reservation>, DecodingError> {
+        self.budget
+            .as_ref()
+            .map(|budget| budget.reserve_array::<T>(capacity))
+            .transpose()
     }
 
     fn update_token_probabilities(&mut self) -> Result<(), DecodingError> {
@@ -368,6 +415,7 @@ impl<R: Read> Vp8Decoder<R> {
 
     fn init_partitions(&mut self, n: usize) -> Result<(), DecodingError> {
         if n > 1 {
+            let _sizes_reservation = self.reserve::<u8>(3 * n - 3)?;
             let mut sizes = vec![0; 3 * n - 3];
             self.r.read_exact(sizes.as_mut_slice())?;
 
@@ -377,19 +425,48 @@ impl<R: Read> Vp8Decoder<R> {
                     .expect("Reading from &[u8] can't fail and the chunk is complete");
 
                 let size = size as usize;
+                let reservation = self.reserve::<[u8; 4]>(size.div_ceil(4))?;
                 let mut buf = vec![[0; 4]; size.div_ceil(4)];
                 let bytes: &mut [u8] = buf.as_mut_slice().as_flattened_mut();
                 self.r.read_exact(&mut bytes[..size])?;
                 self.partitions[i].init(buf, size)?;
+                self.reservations.partitions[i] = reservation;
             }
         }
 
+        let mut bytes_reservation = None;
         let mut buf = Vec::new();
-        self.r.read_to_end(&mut buf)?;
+        if let Some(budget) = &self.budget {
+            const READ_BUFFER_SIZE: usize = 4096;
+            let mut read_buffer = [0; READ_BUFFER_SIZE];
+            loop {
+                let read = match self.r.read(&mut read_buffer) {
+                    Ok(0) => break,
+                    Ok(read) => read,
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                let needed = buf
+                    .len()
+                    .checked_add(read)
+                    .ok_or(DecodingError::MemoryLimitExceeded)?;
+                if needed > buf.capacity() {
+                    let capacity = needed
+                        .checked_next_power_of_two()
+                        .ok_or(DecodingError::MemoryLimitExceeded)?;
+                    memory_budget::grow(&mut buf, capacity, budget, &mut bytes_reservation)?;
+                }
+                buf.extend_from_slice(&read_buffer[..read]);
+            }
+        } else {
+            self.r.read_to_end(&mut buf)?;
+        }
         let size = buf.len();
+        let reservation = self.reserve::<[u8; 4]>(size.div_ceil(4))?;
         let mut chunks = vec![[0; 4]; size.div_ceil(4)];
         chunks.as_mut_slice().as_flattened_mut()[..size].copy_from_slice(&buf);
         self.partitions[n - 1].init(chunks, size)?;
+        self.reservations.partitions[n - 1] = reservation;
 
         Ok(())
     }
@@ -476,8 +553,8 @@ impl<R: Read> Vp8Decoder<R> {
         if update_segment_feature_data {
             let segment_feature_mode = self.b.read_flag().or_accumulate(&mut res);
 
-            for i in 0usize..MAX_SEGMENTS {
-                self.segment[i].delta_values = !segment_feature_mode;
+            for segment in &mut self.segment {
+                segment.delta_values = !segment_feature_mode;
             }
 
             for i in 0usize..MAX_SEGMENTS {
@@ -540,31 +617,66 @@ impl<R: Read> Vp8Decoder<R> {
         self.mbheight = self.frame.height.div_ceil(16);
 
         // defaults are intra mode DC and complexity 0
-        self.top = vec![PreviousMacroBlock::default(); self.mbwidth.into()];
+        let top_count = usize::from(self.mbwidth);
+        let reservation = self.reserve::<PreviousMacroBlock>(top_count)?;
+        self.top = vec![PreviousMacroBlock::default(); top_count];
+        self.reservations.top = reservation;
         self.left = PreviousMacroBlock::default();
 
-        self.frame.ybuf =
-            vec![0u8; usize::from(self.mbwidth) * 16 * usize::from(self.mbheight) * 16];
-        self.frame.ubuf = vec![0u8; usize::from(self.mbwidth) * 8 * usize::from(self.mbheight) * 8];
-        self.frame.vbuf = vec![0u8; usize::from(self.mbwidth) * 8 * usize::from(self.mbheight) * 8];
+        const LUMA_PLANE: usize = 0;
+        const BLUE_PLANE: usize = 1;
+        const RED_PLANE: usize = 2;
+        const LUMA_BLOCK_SIDE: usize = 16;
+        const CHROMA_BLOCK_SIDE: usize = 8;
+        let blocks = usize::from(self.mbwidth)
+            .checked_mul(usize::from(self.mbheight))
+            .ok_or(DecodingError::MemoryLimitExceeded)?;
+        let reservation = self.reserve::<MacroBlock>(blocks)?;
+        self.macroblocks = Vec::with_capacity(blocks);
+        self.reservations.macroblocks = reservation;
+        let luma_size = blocks
+            .checked_mul(LUMA_BLOCK_SIDE * LUMA_BLOCK_SIDE)
+            .ok_or(DecodingError::MemoryLimitExceeded)?;
+        let chroma_size = blocks
+            .checked_mul(CHROMA_BLOCK_SIDE * CHROMA_BLOCK_SIDE)
+            .ok_or(DecodingError::MemoryLimitExceeded)?;
+        let reservation = self.reserve::<u8>(luma_size)?;
+        self.frame.ybuf = vec![0u8; luma_size];
+        self.reservations.frame[LUMA_PLANE] = reservation;
+        let reservation = self.reserve::<u8>(chroma_size)?;
+        self.frame.ubuf = vec![0u8; chroma_size];
+        self.reservations.frame[BLUE_PLANE] = reservation;
+        let reservation = self.reserve::<u8>(chroma_size)?;
+        self.frame.vbuf = vec![0u8; chroma_size];
+        self.reservations.frame[RED_PLANE] = reservation;
 
-        self.top_border_y = vec![127u8; self.frame.width as usize + 4 + 16];
-        self.left_border_y = vec![129u8; 1 + 16];
+        macro_rules! border {
+            ($field:ident, $value:expr, $size:expr) => {{
+                let size = $size;
+                let reservation = self.reserve::<u8>(size)?;
+                self.$field = vec![$value; size];
+                self.reservations.$field = reservation;
+            }};
+        }
+        border!(top_border_y, 127u8, usize::from(self.frame.width) + 4 + 16);
+        border!(left_border_y, 129u8, 1 + 16);
 
         // 8 pixels per macroblock
-        self.top_border_u = vec![127u8; 8 * self.mbwidth as usize];
-        self.left_border_u = vec![129u8; 1 + 8];
+        border!(top_border_u, 127u8, 8 * usize::from(self.mbwidth));
+        border!(left_border_u, 129u8, 1 + 8);
 
-        self.top_border_v = vec![127u8; 8 * self.mbwidth as usize];
-        self.left_border_v = vec![129u8; 1 + 8];
+        border!(top_border_v, 127u8, 8 * usize::from(self.mbwidth));
+        border!(left_border_v, 129u8, 1 + 8);
 
         let size = first_partition_size as usize;
+        let reservation = self.reserve::<[u8; 4]>(size.div_ceil(4))?;
         let mut buf = vec![[0; 4]; size.div_ceil(4)];
         let bytes: &mut [u8] = buf.as_mut_slice().as_flattened_mut();
         self.r.read_exact(&mut bytes[..size])?;
 
         // initialise binary decoder
         self.b.init(buf, size)?;
+        self.reservations.first_partition = reservation;
 
         let mut res = self.b.start_accumulated_result();
         let color_space = self.b.read_literal(1).or_accumulate(&mut res);
@@ -1245,11 +1357,19 @@ impl<R: Read> Vp8Decoder<R> {
 
     /// Decodes the current frame
     pub fn decode_frame(r: R) -> Result<Frame, DecodingError> {
-        let decoder = Self::new(r);
+        let decoder = Self::new(r, None)?;
+        Ok(decoder.decode_frame_()?.frame)
+    }
+
+    pub(crate) fn decode_frame_budgeted(
+        r: R,
+        budget: MemoryBudget,
+    ) -> Result<BudgetedFrame, DecodingError> {
+        let decoder = Self::new(r, Some(budget))?;
         decoder.decode_frame_()
     }
 
-    fn decode_frame_(mut self) -> Result<Frame, DecodingError> {
+    fn decode_frame_(mut self) -> Result<BudgetedFrame, DecodingError> {
         self.read_frame_header()?;
 
         for mby in 0..self.mbheight as usize {
@@ -1280,9 +1400,9 @@ impl<R: Read> Vp8Decoder<R> {
                 self.macroblocks.push(mb);
             }
 
-            self.left_border_y = vec![129u8; 1 + 16];
-            self.left_border_u = vec![129u8; 1 + 8];
-            self.left_border_v = vec![129u8; 1 + 8];
+            self.left_border_y.fill(129);
+            self.left_border_u.fill(129);
+            self.left_border_v.fill(129);
         }
 
         //do loop filtering
@@ -1293,7 +1413,10 @@ impl<R: Read> Vp8Decoder<R> {
             }
         }
 
-        Ok(self.frame)
+        Ok(BudgetedFrame {
+            frame: self.frame,
+            _reservations: std::mem::take(&mut self.reservations.frame),
+        })
     }
 }
 
@@ -1318,5 +1441,130 @@ fn set_chroma_border(
         .zip(&chroma_block[8 * stride + 1..][..8])
     {
         *top = w;
+    }
+}
+
+#[cfg(test)]
+mod memory_budget_tests {
+    use super::Vp8Decoder;
+    use crate::memory_budget::MemoryBudget;
+    use std::io::{self, Read};
+
+    const WEBP_HEADER_SIZE: usize = 20;
+    const TRUNCATED_VP8_SIZE: usize = 12;
+    const WEBP_IMAGE: &[u8] = include_bytes!("../../tests/images/gallery1/1.webp");
+
+    struct InterruptedReader<R> {
+        inner: R,
+        interrupt: bool,
+    }
+
+    impl<R: Read> Read for InterruptedReader<R> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.interrupt = !self.interrupt;
+            if self.interrupt {
+                return Err(io::Error::from(io::ErrorKind::Interrupted));
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    struct ShortReader<'a> {
+        remaining: &'a [u8],
+        max_read: usize,
+        fail_after: Option<usize>,
+    }
+
+    impl Read for ShortReader<'_> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.fail_after == Some(0) {
+                return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+            }
+            let len = buf.len().min(self.max_read).min(self.remaining.len());
+            let len = self.fail_after.map_or(len, |remaining| len.min(remaining));
+            buf[..len].copy_from_slice(&self.remaining[..len]);
+            self.remaining = &self.remaining[len..];
+            if let Some(remaining) = &mut self.fail_after {
+                *remaining -= len;
+            }
+            Ok(len)
+        }
+    }
+
+    #[test]
+    fn frame_reservations_survive_decoder_and_release_with_frame() {
+        let budget = MemoryBudget::new(usize::MAX);
+        let frame =
+            Vp8Decoder::decode_frame_budgeted(&WEBP_IMAGE[WEBP_HEADER_SIZE..], budget.clone())
+                .expect("fixture contains a VP8 frame");
+        assert!(!frame.frame().ybuf.is_empty());
+        budget.set_limit(0);
+        assert!(budget.reserve(0).is_err());
+        drop(frame);
+        assert!(budget.reserve(0).is_ok());
+    }
+
+    #[test]
+    fn failed_decode_releases_reservations() {
+        let budget = MemoryBudget::new(usize::MAX);
+        let truncated = &WEBP_IMAGE[WEBP_HEADER_SIZE..WEBP_HEADER_SIZE + TRUNCATED_VP8_SIZE];
+        assert!(Vp8Decoder::decode_frame_budgeted(truncated, budget.clone()).is_err());
+        assert!(budget.reserve(usize::MAX).is_ok());
+    }
+
+    #[test]
+    fn budgeted_reader_retries_interrupted_reads() {
+        let bytes = &WEBP_IMAGE[WEBP_HEADER_SIZE..];
+        let expected = Vp8Decoder::decode_frame(bytes).expect("fixture decodes");
+        let reader = InterruptedReader {
+            inner: bytes,
+            interrupt: false,
+        };
+        let actual = Vp8Decoder::decode_frame_budgeted(reader, MemoryBudget::new(usize::MAX))
+            .expect("interrupted reads are retried");
+        assert_eq!(actual.frame().ybuf, expected.ybuf);
+        assert_eq!(actual.frame().ubuf, expected.ubuf);
+        assert_eq!(actual.frame().vbuf, expected.vbuf);
+    }
+
+    #[test]
+    fn budgeted_reader_handles_short_reads() {
+        const MAX_READ: usize = 7;
+        let bytes = &WEBP_IMAGE[WEBP_HEADER_SIZE..];
+        let expected = Vp8Decoder::decode_frame(bytes).expect("fixture decodes");
+        let reader = ShortReader {
+            remaining: bytes,
+            max_read: MAX_READ,
+            fail_after: None,
+        };
+        let actual = Vp8Decoder::decode_frame_budgeted(reader, MemoryBudget::new(usize::MAX))
+            .expect("short reads are accepted");
+        assert_eq!(actual.frame().ybuf, expected.ybuf);
+        assert_eq!(actual.frame().ubuf, expected.ubuf);
+        assert_eq!(actual.frame().vbuf, expected.vbuf);
+    }
+
+    #[test]
+    fn budgeted_reader_propagates_partial_read_error_and_releases_memory() {
+        const PARTIAL_PARTITION_BYTES: usize = 16;
+        const MAX_READ: usize = 7;
+        let bytes = &WEBP_IMAGE[WEBP_HEADER_SIZE..];
+        let reader = ShortReader {
+            remaining: bytes,
+            max_read: MAX_READ,
+            fail_after: Some(PARTIAL_PARTITION_BYTES),
+        };
+        let budget = MemoryBudget::new(usize::MAX);
+        let mut decoder = Vp8Decoder::new(reader, Some(budget.clone()))
+            .expect("probability table fits the budget");
+        let result = decoder.init_partitions(1);
+        assert!(
+            matches!(result, Err(crate::decoder::DecodingError::IoError(error)) if error.kind() == io::ErrorKind::PermissionDenied)
+        );
+        assert!(budget
+            .reserve(usize::MAX - std::mem::size_of::<super::TokenProbTreeNodes>())
+            .is_ok());
+        drop(decoder);
+        assert!(budget.reserve(usize::MAX).is_ok());
     }
 }

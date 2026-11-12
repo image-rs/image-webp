@@ -240,6 +240,7 @@ pub(crate) struct AlphaChunk {
     _preprocessing: bool,
     pub(crate) filtering_method: FilteringMethod,
     pub(crate) data: Vec<u8>,
+    _reservation: crate::memory_budget::Reservation,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -254,6 +255,7 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
     reader: &mut R,
     width: u16,
     height: u16,
+    memory_budget: &crate::memory_budget::MemoryBudget,
 ) -> Result<AlphaChunk, DecodingError> {
     let info_byte = reader.read_u8()?;
 
@@ -281,27 +283,37 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
         _ => return Err(DecodingError::InvalidCompressionMethod),
     };
 
-    let data = if lossless_compression {
-        let mut decoder = LosslessDecoder::new(reader);
-
-        let mut data = vec![0; usize::from(width) * usize::from(height) * 4];
-        decoder.decode_frame(u32::from(width), u32::from(height), true, &mut data)?;
-
-        let mut green = vec![0; usize::from(width) * usize::from(height)];
+    let pixels = usize::from(width)
+        .checked_mul(usize::from(height))
+        .ok_or(DecodingError::MemoryLimitExceeded)?;
+    let (reservation, data) = if lossless_compression {
+        let size = pixels
+            .checked_mul(std::mem::size_of::<[u8; 4]>())
+            .ok_or(DecodingError::MemoryLimitExceeded)?;
+        let _rgba_reservation = memory_budget.reserve_array::<u8>(size)?;
+        let mut data = vec![0; size];
+        {
+            let mut decoder = LosslessDecoder::new(reader, memory_budget.clone());
+            decoder.decode_frame(u32::from(width), u32::from(height), true, &mut data)?;
+        }
+        let reservation = memory_budget.reserve_array::<u8>(pixels)?;
+        let mut green = vec![0; pixels];
         for (rgba_val, green_val) in data.chunks_exact(4).zip(green.iter_mut()) {
             *green_val = rgba_val[1];
         }
-        green
+        (reservation, green)
     } else {
-        let mut framedata = vec![0; width as usize * height as usize];
+        let reservation = memory_budget.reserve_array::<u8>(pixels)?;
+        let mut framedata = vec![0; pixels];
         reader.read_exact(&mut framedata)?;
-        framedata
+        (reservation, framedata)
     };
 
     let chunk = AlphaChunk {
         _preprocessing: preprocessing,
         filtering_method,
         data,
+        _reservation: reservation,
     };
 
     Ok(chunk)
@@ -310,6 +322,52 @@ pub(crate) fn read_alpha_chunk<R: BufRead>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn uncompressed_alpha_reservation_lives_with_returned_data() {
+        let budget = crate::memory_budget::MemoryBudget::new(1);
+        let mut reader = std::io::Cursor::new([0, 123]);
+        let alpha =
+            read_alpha_chunk(&mut reader, 1, 1, &budget).expect("one alpha pixel fits the budget");
+        assert_eq!(alpha.data, [123]);
+        assert!(budget.reserve(1).is_err());
+        drop(alpha);
+        assert!(budget.reserve(1).is_ok());
+    }
+
+    #[test]
+    fn compressed_alpha_green_buffer_respects_remaining_limit() {
+        let bytes = include_bytes!("../tests/images/gallery2/1_webp_a.webp");
+        let image = crate::WebPDecoder::new(std::io::Cursor::new(bytes)).unwrap();
+        let (width, height) = image.dimensions();
+        let alpha_start = bytes.windows(4).position(|w| w == b"ALPH").unwrap() + 8;
+        let pixels = width as usize * height as usize;
+        let rgba_size = pixels * std::mem::size_of::<[u8; 4]>();
+        let limit = rgba_size + pixels - 1;
+
+        let mut decoder = LosslessDecoder::new(
+            std::io::Cursor::new(&bytes[alpha_start + 1..]),
+            crate::memory_budget::MemoryBudget::new(limit - rgba_size),
+        );
+        decoder
+            .decode_frame(width, height, true, &mut vec![0; rgba_size])
+            .unwrap();
+
+        let result = read_alpha_chunk(
+            &mut std::io::Cursor::new(&bytes[alpha_start..]),
+            width as u16,
+            height as u16,
+            &crate::memory_budget::MemoryBudget::new(limit),
+        );
+        assert!(matches!(result, Err(DecodingError::MemoryLimitExceeded)));
+        assert!(read_alpha_chunk(
+            &mut std::io::Cursor::new(&bytes[alpha_start..]),
+            width as u16,
+            height as u16,
+            &crate::memory_budget::MemoryBudget::new(rgba_size + pixels)
+        )
+        .is_ok());
+    }
 
     /// Regression test: clearing the canvas for a non-alpha frame used 3-byte
     /// stride on the always-RGBA canvas, corrupting pixel alignment.
