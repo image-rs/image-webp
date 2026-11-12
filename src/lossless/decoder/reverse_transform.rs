@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use crate::decoder::DecodingError;
 
-use super::subsample_size;
+use super::{color_index_bits, subsample_size, FOUR_COLOR_PACKING_BITS, TWO_COLOR_PACKING_BITS};
 
 #[derive(Debug, Clone)]
 pub(crate) enum TransformType {
@@ -405,18 +405,17 @@ pub(crate) fn apply_color_indexing_transform(
     table_data: &[u8],
 ) {
     assert!(table_size > 0);
-    if table_size > 16 {
+    let bits = color_index_bits(table_size);
+    if bits == 0 {
         // convert the table of colors into a Vec of color values that can be directly indexed
-        let mut table: Vec<[u8; 4]> = table_data
-            .chunks_exact(4)
-            // convince the compiler that each chunk is 4 bytes long, important for optimizations in the loop below
-            .map(|c| TryInto::<[u8; 4]>::try_into(c).unwrap())
-            .collect();
-        // pad the table to 256 values if it's smaller than that so we could index into it by u8 without bounds checks
-        // also required for correctness: WebP spec requires out-of-bounds indices to be treated as [0,0,0,0]
-        table.resize(256, [0; 4]);
-        // convince the compiler that the length of the table is 256 to avoid bounds checks in the loop below
-        let table: &[[u8; 4]; 256] = table.as_slice().try_into().unwrap();
+        let mut table = vec![[0; 4]; usize::from(u8::MAX) + 1];
+        for (entry, color) in table
+            .iter_mut()
+            .zip(table_data.chunks_exact(std::mem::size_of::<[u8; 4]>()))
+        {
+            entry.copy_from_slice(color);
+        }
+        // Out-of-bounds indices remain [0, 0, 0, 0] as required by the WebP spec.
 
         for pixel in image_data.chunks_exact_mut(4) {
             // Index is in G channel.
@@ -430,17 +429,17 @@ pub(crate) fn apply_color_indexing_transform(
         // Dispatch to specialized implementation for each table size band for performance.
         // Otherwise the compiler doesn't know the size of our copies
         // and ends up calling out to memmove for every pixel even though a single load is sufficient.
-        if table_size <= 2 {
+        if bits == TWO_COLOR_PACKING_BITS {
             // Max 2 colors, 1 bit per pixel index -> W_BITS = 3
-            const W_BITS_VAL: u8 = 3;
+            const W_BITS_VAL: u8 = TWO_COLOR_PACKING_BITS;
             // EXP_ENTRY_SIZE is 4 bytes/pixel * (1 << W_BITS_VAL) pixels/entry
             const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 8 = 32
             apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
                 image_data, width, height, table_size, table_data,
             );
-        } else if table_size <= 4 {
+        } else if bits == FOUR_COLOR_PACKING_BITS {
             // Max 4 colors, 2 bits per pixel index -> W_BITS = 2
-            const W_BITS_VAL: u8 = 2;
+            const W_BITS_VAL: u8 = FOUR_COLOR_PACKING_BITS;
             const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 4 = 16
             apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
                 image_data, width, height, table_size, table_data,
@@ -448,7 +447,7 @@ pub(crate) fn apply_color_indexing_transform(
         } else {
             // Max 16 colors (5 to 16), 4 bits per pixel index -> W_BITS = 1
             // table_size_u16 must be <= 16 here
-            const W_BITS_VAL: u8 = 1;
+            const W_BITS_VAL: u8 = super::SIXTEEN_COLOR_PACKING_BITS;
             const EXP_ENTRY_SIZE_VAL: usize = 4 * (1 << W_BITS_VAL); // 4 * 2 = 8
             apply_color_indexing_transform_small_table::<W_BITS_VAL, EXP_ENTRY_SIZE_VAL>(
                 image_data, width, height, table_size, table_data,

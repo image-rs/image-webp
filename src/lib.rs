@@ -19,6 +19,7 @@ mod encoder;
 mod extended;
 mod lossless;
 mod lossy;
+mod memory_budget;
 
 /// An implementation of the VP8 Video Codec
 ///

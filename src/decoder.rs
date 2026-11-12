@@ -7,6 +7,7 @@ use std::num::NonZeroU16;
 use std::ops::Range;
 
 use crate::extended::{self, get_alpha_predictor, read_alpha_chunk, WebPExtendedInfo};
+use crate::memory_budget::{MemoryBudget, Reservation};
 
 use super::lossless::LosslessDecoder;
 use super::lossy::Vp8Decoder;
@@ -246,6 +247,7 @@ struct AnimationState {
     previous_frame_x_offset: u32,
     previous_frame_y_offset: u32,
     canvas: Option<Vec<u8>>,
+    canvas_reservation: Option<Reservation>,
 }
 impl Default for AnimationState {
     fn default() -> Self {
@@ -258,6 +260,7 @@ impl Default for AnimationState {
             previous_frame_x_offset: 0,
             previous_frame_y_offset: 0,
             canvas: None,
+            canvas_reservation: None,
         }
     }
 }
@@ -312,6 +315,7 @@ pub enum UpsamplingMethod {
 pub struct WebPDecoder<R> {
     r: R,
     memory_limit: usize,
+    memory_budget: MemoryBudget,
 
     width: u32,
     height: u32,
@@ -352,6 +356,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             chunks: HashMap::new(),
             animation: Default::default(),
             memory_limit: usize::MAX,
+            memory_budget: MemoryBudget::new(usize::MAX),
             is_lossy: false,
             has_alpha: false,
             loop_count: LoopCount::Times(NonZeroU16::new(1).unwrap()),
@@ -550,9 +555,12 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
 
     /// Sets the maximum amount of memory that the decoder is allowed to allocate at once.
     ///
-    /// TODO: Some allocations currently ignore this limit.
+    /// The limit applies to the requested payload of internal decoding buffers,
+    /// including the animation canvas. Input, caller-provided output, and allocator
+    /// overhead are excluded.
     pub fn set_memory_limit(&mut self, limit: usize) {
         self.memory_limit = limit;
+        self.memory_budget.set_limit(limit);
     }
 
     /// Get the background color specified in the image file if the image is extended and animated webp.
@@ -679,12 +687,20 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             self.animation = saved;
             result?;
         } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
-            let mut decoder = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
+            let mut decoder = LosslessDecoder::new(
+                range_reader(&mut self.r, range.clone())?,
+                self.memory_budget.clone(),
+            );
 
             if self.has_alpha {
                 decoder.decode_frame(self.width, self.height, false, buf)?;
             } else {
-                let mut data = vec![0; self.width as usize * self.height as usize * 4];
+                let size = (self.width as usize)
+                    .checked_mul(self.height as usize)
+                    .and_then(|pixels| pixels.checked_mul(std::mem::size_of::<[u8; 4]>()))
+                    .ok_or(DecodingError::MemoryLimitExceeded)?;
+                let _reservation = self.memory_budget.reserve_array::<u8>(size)?;
+                let mut data = vec![0; size];
                 decoder.decode_frame(self.width, self.height, false, &mut data)?;
                 for (rgba_val, chunk) in data.chunks_exact(4).zip(buf.chunks_exact_mut(3)) {
                     chunk.copy_from_slice(&rgba_val[..3]);
@@ -696,7 +712,9 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 .get(&WebPRiffChunk::VP8)
                 .ok_or(DecodingError::ChunkMissing)?;
             let reader = range_reader(&mut self.r, range.start..range.end)?;
-            let frame = Vp8Decoder::decode_frame(reader)?;
+            let guarded_frame =
+                Vp8Decoder::decode_frame_budgeted(reader, self.memory_budget.clone())?;
+            let frame = guarded_frame.frame();
             if u32::from(frame.width) != self.width || u32::from(frame.height) != self.height {
                 return Err(DecodingError::InconsistentImageSizes);
             }
@@ -713,6 +731,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     &mut range_reader(&mut self.r, range)?,
                     self.width as u16,
                     self.height as u16,
+                    &self.memory_budget,
                 )?;
 
                 for y in 0..frame.height {
@@ -791,25 +810,38 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc()));
         }
 
-        let (frame, frame_has_alpha): (Vec<u8>, bool) = match chunk {
+        let (_frame_reservation, frame, frame_has_alpha): (Reservation, Vec<u8>, bool) = match chunk
+        {
             WebPRiffChunk::VP8 => {
                 let reader = (&mut self.r).take(chunk_size);
-                let raw_frame = Vp8Decoder::decode_frame(reader)?;
+                let guarded_frame =
+                    Vp8Decoder::decode_frame_budgeted(reader, self.memory_budget.clone())?;
+                let raw_frame = guarded_frame.frame();
                 if u32::from(raw_frame.width) != frame_width
                     || u32::from(raw_frame.height) != frame_height
                 {
                     return Err(DecodingError::InconsistentImageSizes);
                 }
-                let mut rgb_frame = vec![0; frame_width as usize * frame_height as usize * 3];
+                let size = (frame_width as usize)
+                    .checked_mul(frame_height as usize)
+                    .and_then(|pixels| pixels.checked_mul(std::mem::size_of::<[u8; 3]>()))
+                    .ok_or(DecodingError::MemoryLimitExceeded)?;
+                let reservation = self.memory_budget.reserve_array::<u8>(size)?;
+                let mut rgb_frame = vec![0; size];
                 raw_frame.fill_rgb(&mut rgb_frame, self.webp_decode_options.lossy_upsampling);
-                (rgb_frame, false)
+                (reservation, rgb_frame, false)
             }
             WebPRiffChunk::VP8L => {
                 let reader = (&mut self.r).take(chunk_size);
-                let mut lossless_decoder = LosslessDecoder::new(reader);
-                let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                let mut lossless_decoder = LosslessDecoder::new(reader, self.memory_budget.clone());
+                let size = (frame_width as usize)
+                    .checked_mul(frame_height as usize)
+                    .and_then(|pixels| pixels.checked_mul(std::mem::size_of::<[u8; 4]>()))
+                    .ok_or(DecodingError::MemoryLimitExceeded)?;
+                let reservation = self.memory_budget.reserve_array::<u8>(size)?;
+                let mut rgba_frame = vec![0; size];
                 lossless_decoder.decode_frame(frame_width, frame_height, false, &mut rgba_frame)?;
-                (rgba_frame, true)
+                (reservation, rgba_frame, true)
             }
             WebPRiffChunk::ALPH => {
                 if chunk_size_rounded + 32 > anmf_size {
@@ -819,8 +851,12 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 // read alpha
                 let next_chunk_start = self.r.stream_position()? + chunk_size_rounded;
                 let mut reader = (&mut self.r).take(chunk_size);
-                let alpha_chunk =
-                    read_alpha_chunk(&mut reader, frame_width as u16, frame_height as u16)?;
+                let alpha_chunk = read_alpha_chunk(
+                    &mut reader,
+                    frame_width as u16,
+                    frame_height as u16,
+                    &self.memory_budget,
+                )?;
 
                 // read opaque
                 self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
@@ -829,9 +865,18 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     return Err(DecodingError::ChunkHeaderInvalid(next_chunk.to_fourcc()));
                 }
 
-                let frame = Vp8Decoder::decode_frame((&mut self.r).take(next_chunk_size))?;
+                let guarded_frame = Vp8Decoder::decode_frame_budgeted(
+                    (&mut self.r).take(next_chunk_size),
+                    self.memory_budget.clone(),
+                )?;
+                let frame = guarded_frame.frame();
 
-                let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
+                let size = (frame_width as usize)
+                    .checked_mul(frame_height as usize)
+                    .and_then(|pixels| pixels.checked_mul(std::mem::size_of::<[u8; 4]>()))
+                    .ok_or(DecodingError::MemoryLimitExceeded)?;
+                let reservation = self.memory_budget.reserve_array::<u8>(size)?;
+                let mut rgba_frame = vec![0; size];
                 frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
 
                 for y in 0..frame.height {
@@ -853,7 +898,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     }
                 }
 
-                (rgba_frame, true)
+                (reservation, rgba_frame, true)
             }
             _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc())),
         };
@@ -870,15 +915,21 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
 
         // fill starting canvas with clear color
         if self.animation.canvas.is_none() {
+            let size = (self.width as usize)
+                .checked_mul(self.height as usize)
+                .and_then(|pixels| pixels.checked_mul(std::mem::size_of::<[u8; 4]>()))
+                .ok_or(DecodingError::MemoryLimitExceeded)?;
+            let reservation = self.memory_budget.reserve_array::<u8>(size)?;
             self.animation.canvas = {
-                let mut canvas = vec![0; (self.width * self.height * 4) as usize];
+                let mut canvas = vec![0; size];
                 if let Some(color) = info.background_color.as_ref() {
                     canvas
                         .chunks_exact_mut(4)
                         .for_each(|c| c.copy_from_slice(color))
                 }
                 Some(canvas)
-            }
+            };
+            self.animation.canvas_reservation = Some(reservation);
         }
         extended::composite_frame(
             self.animation.canvas.as_mut().unwrap(),
