@@ -32,5 +32,11 @@ mod lossy;
 /// * [rfc-6386](http://tools.ietf.org/html/rfc6386) - The VP8 Data Format and Decoding Guide
 /// * [VP8.pdf](http://static.googleusercontent.com/media/research.google.com/en//pubs/archive/37073.pdf) - An overview of of the VP8 format
 pub mod vp8 {
-    pub use crate::lossy::{Frame, Vp8Decoder};
+    /// Representation of a decoded video frame
+    #[deprecated = "This is planned for removal; please open an issue if you are relying on it"]
+    pub type Frame = crate::lossy::Frame;
+
+    /// VP8 Decoder that only decodes keyframes
+    #[deprecated = "This is planned for removal; please open an issue if you are relying on it"]
+    pub type Vp8Decoder<R> = crate::lossy::Vp8Decoder<R>;
 }
