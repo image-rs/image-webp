@@ -476,17 +476,17 @@ impl<R: Read> Vp8Decoder<R> {
         if update_segment_feature_data {
             let segment_feature_mode = self.b.read_flag().or_accumulate(&mut res);
 
-            for i in 0usize..MAX_SEGMENTS {
-                self.segment[i].delta_values = !segment_feature_mode;
+            for segment in self.segment.iter_mut().take(MAX_SEGMENTS) {
+                segment.delta_values = !segment_feature_mode;
             }
 
-            for i in 0usize..MAX_SEGMENTS {
-                self.segment[i].quantizer_level =
+            for segment in self.segment.iter_mut().take(MAX_SEGMENTS) {
+                segment.quantizer_level =
                     self.b.read_optional_signed_value(7).or_accumulate(&mut res) as i8;
             }
 
-            for i in 0usize..MAX_SEGMENTS {
-                self.segment[i].loopfilter_level =
+            for segment in self.segment.iter_mut().take(MAX_SEGMENTS) {
+                segment.loopfilter_level =
                     self.b.read_optional_signed_value(6).or_accumulate(&mut res) as i8;
             }
         }
