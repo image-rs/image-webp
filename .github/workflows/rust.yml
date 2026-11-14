@@ -52,9 +52,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install or use cached cross-rs/cross
-        uses: baptiste0928/cargo-install@v1
-        with:
-          crate: cross
+      # cross maintainers have not published releases in 3+ years
+      # and recommend installing directly from git in the README.md
+      # The rust-cache job below will cache the binary where applicable,
+      # so no additional caching layers are needed.
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Cache Cargo Dependencies
         uses: Swatinem/rust-cache@v2
