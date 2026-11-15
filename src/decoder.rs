@@ -550,6 +550,8 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
 
     /// Sets the maximum amount of memory that the decoder is allowed to allocate at once.
     ///
+    /// The Huffman trees of a lossless image count against it.
+    ///
     /// TODO: Some allocations currently ignore this limit.
     pub fn set_memory_limit(&mut self, limit: usize) {
         self.memory_limit = limit;
@@ -679,7 +681,8 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             self.animation = saved;
             result?;
         } else if let Some(range) = self.chunks.get(&WebPRiffChunk::VP8L) {
-            let mut decoder = LosslessDecoder::new(range_reader(&mut self.r, range.clone())?);
+            let mut decoder =
+                LosslessDecoder::new(range_reader(&mut self.r, range.clone())?, self.memory_limit);
 
             if self.has_alpha {
                 decoder.decode_frame(self.width, self.height, false, buf)?;
@@ -713,6 +716,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                     &mut range_reader(&mut self.r, range)?,
                     self.width as u16,
                     self.height as u16,
+                    self.memory_limit,
                 )?;
 
                 for y in 0..frame.height {
@@ -806,7 +810,7 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             }
             WebPRiffChunk::VP8L => {
                 let reader = (&mut self.r).take(chunk_size);
-                let mut lossless_decoder = LosslessDecoder::new(reader);
+                let mut lossless_decoder = LosslessDecoder::new(reader, self.memory_limit);
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
                 lossless_decoder.decode_frame(frame_width, frame_height, false, &mut rgba_frame)?;
                 (rgba_frame, true)
@@ -819,8 +823,12 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 // read alpha
                 let next_chunk_start = self.r.stream_position()? + chunk_size_rounded;
                 let mut reader = (&mut self.r).take(chunk_size);
-                let alpha_chunk =
-                    read_alpha_chunk(&mut reader, frame_width as u16, frame_height as u16)?;
+                let alpha_chunk = read_alpha_chunk(
+                    &mut reader,
+                    frame_width as u16,
+                    frame_height as u16,
+                    self.memory_limit,
+                )?;
 
                 // read opaque
                 self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
@@ -1030,5 +1038,130 @@ mod tests {
         // All pixels are the same value
         let first_pixel = &data[..RGB_BPP];
         assert!(data.chunks_exact(3).all(|ch| ch.iter().eq(first_pixel)));
+    }
+
+    /// Writes bits least significant first, as the VP8L bitstream reads them.
+    #[derive(Default)]
+    struct BitWriter {
+        bytes: Vec<u8>,
+        len: usize,
+    }
+
+    impl BitWriter {
+        fn push(&mut self, value: u32, count: u32) {
+            for bit in 0..count {
+                if self.len % 8 == 0 {
+                    self.bytes.push(0);
+                }
+                if (value >> bit) & 1 == 1 {
+                    *self.bytes.last_mut().unwrap() |= 1 << (self.len % 8);
+                }
+                self.len += 1;
+            }
+        }
+
+        /// Writes a Huffman code, most significant bit first.
+        fn push_code(&mut self, code: u32, length: u32) {
+            for bit in (0..length).rev() {
+                self.push((code >> bit) & 1, 1);
+            }
+        }
+    }
+
+    /// A 1x1 lossless image whose entropy image names group `groups - 1`, so the decoder reads
+    /// `groups` groups of five Huffman codes. Each code has the lengths 1 to 10 and 10 again: about
+    /// 12 bytes in the file and a 1024-entry table in memory.
+    fn lossless_image_with_huffman_groups(groups: u32) -> Vec<u8> {
+        let mut bits = BitWriter::default();
+        bits.push(0x2F, 8); // signature
+        bits.push(0, 14); // width - 1
+        bits.push(0, 14); // height - 1
+        bits.push(0, 1); // alpha_is_used
+        bits.push(0, 3); // version
+        bits.push(0, 1); // no transform
+        bits.push(0, 1); // no color cache
+        bits.push(1, 1); // meta Huffman codes
+        bits.push(0, 3); // 4x4 blocks
+                         // The entropy image, one pixel: no color cache, then single-symbol simple codes for green
+                         // and red (the group index) and for blue, alpha and distance.
+        bits.push(0, 1);
+        for symbol in [(groups - 1) & 0xFF, (groups - 1) >> 8] {
+            bits.push(1, 1); // simple
+            bits.push(0, 1); // one symbol
+            bits.push(1, 1); // 8 bits
+            bits.push(symbol, 8);
+        }
+        for _ in 0..3 {
+            bits.push(0b0001, 4); // simple, one symbol, 1-bit symbol 0
+        }
+        // The code length code: lengths 1 to 6 coded in 3 bits, 7 to 10 in 4 (a complete code),
+        // given in `CODE_LENGTH_CODE_ORDER` up to symbol 10.
+        let order = [17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10];
+        let code_length = |symbol: u32| match symbol {
+            1..=6 => 3,
+            7..=10 => 4,
+            _ => 0,
+        };
+        // Canonical codes: lengths 1 to 6 are 0b000 to 0b101, 7 to 10 are 0b1100 to 0b1111.
+        let code = |length: u32| {
+            if length <= 6 {
+                (length - 1, 3)
+            } else {
+                (0b1100 + length - 7, 4)
+            }
+        };
+        let lengths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10];
+        for _ in 0..groups * 5 {
+            bits.push(0, 1); // normal code
+            bits.push(order.len() as u32 - 4, 4);
+            for symbol in order {
+                bits.push(code_length(symbol), 3);
+            }
+            bits.push(1, 1); // max_symbol follows
+            bits.push(1, 3); // in 4 bits
+            bits.push(lengths.len() as u32 - 2, 4);
+            for length in lengths {
+                let (value, length) = code(length);
+                bits.push_code(value, length);
+            }
+        }
+        bits.push(0, 8); // the pixel: symbol 0 in each code
+
+        let vp8l = bits.bytes;
+        let mut bytes = b"RIFF".to_vec();
+        let riff_size = 4 + 8 + vp8l.len() + vp8l.len() % 2;
+        bytes.extend((riff_size as u32).to_le_bytes());
+        bytes.extend(b"WEBPVP8L");
+        bytes.extend((vp8l.len() as u32).to_le_bytes());
+        bytes.extend(&vp8l);
+        if vp8l.len() % 2 == 1 {
+            bytes.push(0);
+        }
+        bytes
+    }
+
+    #[test]
+    fn lossless_huffman_groups_count_against_the_memory_limit() {
+        // 65536 groups from 3.8 MB build about 670 MB of Huffman tables without a limit.
+        let bytes = lossless_image_with_huffman_groups(65536);
+        let mut decoder = WebPDecoder::new(std::io::Cursor::new(bytes)).unwrap();
+        decoder.set_memory_limit(64 << 20);
+        let mut data = [0; 3];
+        assert!(matches!(
+            decoder.read_image(&mut data),
+            Err(DecodingError::MemoryLimitExceeded)
+        ));
+    }
+
+    #[test]
+    fn lossless_huffman_groups_within_the_memory_limit_decode() {
+        let bytes = lossless_image_with_huffman_groups(16);
+        for limit in [usize::MAX, 64 << 20] {
+            let mut decoder = WebPDecoder::new(std::io::Cursor::new(&bytes)).unwrap();
+            decoder.set_memory_limit(limit);
+            let mut data = [0xAA; 3];
+            decoder.read_image(&mut data).unwrap();
+            assert_eq!(data, [0, 0, 0]);
+        }
     }
 }

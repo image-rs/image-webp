@@ -1,4 +1,5 @@
 use std::io::BufRead;
+use std::mem;
 
 use super::BitReader;
 use crate::decoder::DecodingError;
@@ -26,6 +27,14 @@ impl Default for HuffmanTree {
     }
 }
 
+/// Takes `bytes` from `memory_budget`, or fails with `MemoryLimitExceeded` when they do not fit.
+pub(crate) fn charge(memory_budget: &mut usize, bytes: usize) -> Result<(), DecodingError> {
+    *memory_budget = memory_budget
+        .checked_sub(bytes)
+        .ok_or(DecodingError::MemoryLimitExceeded)?;
+    Ok(())
+}
+
 impl HuffmanTree {
     /// Return the next code, or if the codeword is already all ones (which is the final code), return
     /// the same code again.
@@ -42,8 +51,14 @@ impl HuffmanTree {
     }
 
     /// Builds a tree implicitly, just from code lengths
+    ///
+    /// The bytes the tree holds are taken from `memory_budget`: the primary table's before it is
+    /// allocated, the secondary table's (at most 4096 entries) once it is built.
     #[allow(clippy::needless_range_loop)]
-    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<Self, DecodingError> {
+    pub(crate) fn build_implicit(
+        code_lengths: Vec<u16>,
+        memory_budget: &mut usize,
+    ) -> Result<Self, DecodingError> {
         // Count symbols and build histogram
         let mut num_symbols = 0;
         let mut histogram = [0; MAX_ALLOWED_CODE_LENGTH + 1];
@@ -88,6 +103,7 @@ impl HuffmanTree {
         let table_bits = (max_length as u16).min(u16::from(MAX_TABLE_BITS));
         let table_size = (1 << table_bits) as usize;
         let table_mask = table_size as u16 - 1;
+        charge(memory_budget, table_size * mem::size_of::<u16>())?;
         let mut primary_table = vec![0; table_size];
 
         // Sort the symbols by code length.
@@ -164,6 +180,10 @@ impl HuffmanTree {
 
         // Ensure indexes into the secondary table fit in 12 bits.
         assert!(secondary_table.len() <= 4096);
+        charge(
+            memory_budget,
+            secondary_table.capacity() * mem::size_of::<u16>(),
+        )?;
 
         Ok(Self(HuffmanTreeInner::Tree {
             table_mask,
@@ -176,12 +196,18 @@ impl HuffmanTree {
         Self(HuffmanTreeInner::Single(symbol))
     }
 
-    pub(crate) fn build_two_node(zero: u16, one: u16) -> Self {
-        Self(HuffmanTreeInner::Tree {
+    /// The bytes the tree holds are taken from `memory_budget` before they are allocated.
+    pub(crate) fn build_two_node(
+        zero: u16,
+        one: u16,
+        memory_budget: &mut usize,
+    ) -> Result<Self, DecodingError> {
+        charge(memory_budget, 2 * mem::size_of::<u16>())?;
+        Ok(Self(HuffmanTreeInner::Tree {
             primary_table: vec![(1 << 12) | zero, (1 << 12) | one],
             table_mask: 0x1,
             secondary_table: Vec::new(),
-        })
+        }))
     }
 
     pub(crate) const fn is_single_node(&self) -> bool {

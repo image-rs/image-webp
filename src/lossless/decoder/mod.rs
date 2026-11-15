@@ -10,7 +10,7 @@ use std::mem;
 
 use super::{CODE_LENGTH_CODES, CODE_LENGTH_CODE_ORDER, DISTANCE_MAP};
 use crate::decoder::DecodingError;
-use huffman::HuffmanTree;
+use huffman::{charge, HuffmanTree};
 use reverse_transform::{
     apply_color_indexing_transform, apply_color_transform, apply_predictor_transform,
     apply_subtract_green_transform, TransformType,
@@ -45,17 +45,21 @@ pub(crate) struct LosslessDecoder<R> {
     transform_order: Vec<u8>,
     width: u16,
     height: u16,
+    memory_limit: usize,
 }
 
 impl<R: BufRead> LosslessDecoder<R> {
     /// Create a new decoder
-    pub(crate) const fn new(r: R) -> Self {
+    ///
+    /// `memory_limit` bounds the bytes of the Huffman trees one image stream holds at once.
+    pub(crate) const fn new(r: R, memory_limit: usize) -> Self {
         Self {
             bit_reader: BitReader::new(r),
             transforms: [None, None, None, None],
             transform_order: Vec::new(),
             width: 0,
             height: 0,
+            memory_limit,
         }
     }
 
@@ -304,7 +308,15 @@ impl<R: BufRead> LosslessDecoder<R> {
                 .collect::<Vec<u16>>();
         }
 
-        let mut hufftree_groups = Vec::new();
+        // A stream can name up to 65536 groups, used by the image or not, and their trees are all
+        // held until the image is decoded, so each is charged before it is allocated.
+        let mut memory_budget = self.memory_limit;
+        let num_huff_groups = num_huff_groups as usize;
+        charge(
+            &mut memory_budget,
+            num_huff_groups.saturating_mul(mem::size_of::<HuffmanCodeGroup>()),
+        )?;
+        let mut hufftree_groups = Vec::with_capacity(num_huff_groups);
 
         for _i in 0..num_huff_groups {
             let mut group: HuffmanCodeGroup = Default::default();
@@ -316,7 +328,7 @@ impl<R: BufRead> LosslessDecoder<R> {
                     }
                 }
 
-                let tree = self.read_huffman_code(alphabet_size)?;
+                let tree = self.read_huffman_code(alphabet_size, &mut memory_budget)?;
                 group[j] = tree;
             }
             hufftree_groups.push(group);
@@ -342,7 +354,11 @@ impl<R: BufRead> LosslessDecoder<R> {
     }
 
     /// Decodes and returns a single huffman tree
-    fn read_huffman_code(&mut self, alphabet_size: u16) -> Result<HuffmanTree, DecodingError> {
+    fn read_huffman_code(
+        &mut self,
+        alphabet_size: u16,
+        memory_budget: &mut usize,
+    ) -> Result<HuffmanTree, DecodingError> {
         let simple = self.bit_reader.read_bits::<u8>(1)? == 1;
 
         if simple {
@@ -362,7 +378,7 @@ impl<R: BufRead> LosslessDecoder<R> {
                 if one_symbol >= alphabet_size {
                     return Err(DecodingError::BitStreamError);
                 }
-                Ok(HuffmanTree::build_two_node(zero_symbol, one_symbol))
+                HuffmanTree::build_two_node(zero_symbol, one_symbol, memory_budget)
             }
         } else {
             let mut code_length_code_lengths = vec![0; CODE_LENGTH_CODES];
@@ -376,7 +392,7 @@ impl<R: BufRead> LosslessDecoder<R> {
             let new_code_lengths =
                 self.read_huffman_code_lengths(code_length_code_lengths, alphabet_size)?;
 
-            HuffmanTree::build_implicit(new_code_lengths)
+            HuffmanTree::build_implicit(new_code_lengths, memory_budget)
         }
     }
 
@@ -386,7 +402,9 @@ impl<R: BufRead> LosslessDecoder<R> {
         code_length_code_lengths: Vec<u16>,
         num_symbols: u16,
     ) -> Result<Vec<u16>, DecodingError> {
-        let table = HuffmanTree::build_implicit(code_length_code_lengths)?;
+        // At most 19 symbols of up to 7 bits, and dropped when this returns: not charged.
+        let mut unlimited = usize::MAX;
+        let table = HuffmanTree::build_implicit(code_length_code_lengths, &mut unlimited)?;
 
         let mut max_symbol = if self.bit_reader.read_bits::<u8>(1)? == 1 {
             let length_nbits = 2 + 2 * self.bit_reader.read_bits::<u8>(3)?;
