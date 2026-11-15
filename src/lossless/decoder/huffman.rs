@@ -2,9 +2,10 @@ use std::io::BufRead;
 
 use super::BitReader;
 use crate::decoder::DecodingError;
+use crate::memory_budget::MemoryAccount;
 
 const MAX_ALLOWED_CODE_LENGTH: usize = 15;
-const MAX_TABLE_BITS: u8 = 10;
+pub(super) const MAX_TABLE_BITS: u8 = 10;
 
 #[derive(Clone, Debug)]
 enum HuffmanTreeInner {
@@ -43,7 +44,11 @@ impl HuffmanTree {
 
     /// Builds a tree implicitly, just from code lengths
     #[allow(clippy::needless_range_loop)]
-    pub(crate) fn build_implicit(code_lengths: Vec<u16>) -> Result<Self, DecodingError> {
+    pub(crate) fn build_implicit(
+        code_lengths: Vec<u16>,
+        memory_used: &mut MemoryAccount,
+        retain: bool,
+    ) -> Result<Self, DecodingError> {
         // Count symbols and build histogram
         let mut num_symbols = 0;
         let mut histogram = [0; MAX_ALLOWED_CODE_LENGTH + 1];
@@ -58,7 +63,13 @@ impl HuffmanTree {
         if num_symbols == 0 {
             return Err(DecodingError::HuffmanError);
         } else if num_symbols == 1 {
-            let root_symbol = code_lengths.iter().position(|&x| x != 0).unwrap() as u16;
+            let root_symbol = code_lengths
+                .iter()
+                .position(|&x| x != 0)
+                .ok_or(DecodingError::HuffmanError)? as u16;
+            let bytes = code_lengths.len() * std::mem::size_of::<u16>();
+            drop(code_lengths);
+            memory_used.release(bytes);
             return Ok(Self::build_single_node(root_symbol));
         };
 
@@ -84,14 +95,23 @@ impl HuffmanTree {
             return Err(DecodingError::HuffmanError);
         }
 
+        if !retain {
+            let bytes = code_lengths.len() * std::mem::size_of::<u16>();
+            drop(code_lengths);
+            memory_used.release(bytes);
+            return Ok(Self::default());
+        }
+
         // Calculate table/tree parameters
         let table_bits = (max_length as u16).min(u16::from(MAX_TABLE_BITS));
         let table_size = (1 << table_bits) as usize;
         let table_mask = table_size as u16 - 1;
+        memory_used.allocate(table_size * std::mem::size_of::<u16>())?;
         let mut primary_table = vec![0; table_size];
 
         // Sort the symbols by code length.
         let mut next_index = offsets;
+        memory_used.allocate(code_lengths.len() * std::mem::size_of::<u16>())?;
         let mut sorted_symbols = vec![0u16; code_lengths.len()];
         for symbol in 0..code_lengths.len() {
             let length = code_lengths[symbol];
@@ -140,7 +160,11 @@ impl HuffmanTree {
                         subtable_start = secondary_table.len();
                         primary_table[subtable_prefix as usize] =
                             ((length as u16) << 12) | subtable_start as u16;
-                        secondary_table.resize(subtable_start + subtable_size, 0);
+                        Self::grow_secondary(
+                            &mut secondary_table,
+                            subtable_start + subtable_size,
+                            memory_used,
+                        )?;
                     }
 
                     // Lookup the symbol.
@@ -155,7 +179,13 @@ impl HuffmanTree {
 
                 // If there are more codes with the same subtable prefix, extend the subtable.
                 if length < max_length && codeword & primary_table_mask == subtable_prefix {
-                    secondary_table.extend_from_within(subtable_start..);
+                    let old_len = secondary_table.len();
+                    Self::grow_secondary(
+                        &mut secondary_table,
+                        old_len + old_len - subtable_start,
+                        memory_used,
+                    )?;
+                    secondary_table.copy_within(subtable_start..old_len, old_len);
                     primary_table[subtable_prefix as usize] =
                         (((length + 1) as u16) << 12) | subtable_start as u16;
                 }
@@ -165,11 +195,46 @@ impl HuffmanTree {
         // Ensure indexes into the secondary table fit in 12 bits.
         assert!(secondary_table.len() <= 4096);
 
+        let temporary_bytes =
+            (code_lengths.len() + sorted_symbols.len()) * std::mem::size_of::<u16>();
+        drop(code_lengths);
+        drop(sorted_symbols);
+        memory_used.release(temporary_bytes);
         Ok(Self(HuffmanTreeInner::Tree {
             table_mask,
             primary_table,
             secondary_table,
         }))
+    }
+
+    fn grow_secondary(
+        table: &mut Vec<u16>,
+        len: usize,
+        used: &mut MemoryAccount,
+    ) -> Result<(), DecodingError> {
+        if len > table.capacity() {
+            used.allocate(len * std::mem::size_of::<u16>())?;
+            let mut new_table = Vec::with_capacity(len);
+            new_table.extend_from_slice(table);
+            let old_bytes = table.capacity() * std::mem::size_of::<u16>();
+            *table = new_table;
+            used.release(old_bytes);
+        }
+        table.resize(len, 0);
+        Ok(())
+    }
+
+    pub(crate) fn allocated_bytes(&self) -> usize {
+        match &self.0 {
+            HuffmanTreeInner::Single(_) => 0,
+            HuffmanTreeInner::Tree {
+                primary_table,
+                secondary_table,
+                ..
+            } => {
+                (primary_table.capacity() + secondary_table.capacity()) * std::mem::size_of::<u16>()
+            }
+        }
     }
 
     pub(crate) const fn build_single_node(symbol: u16) -> Self {
