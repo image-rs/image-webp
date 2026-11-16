@@ -830,6 +830,10 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 }
 
                 let frame = Vp8Decoder::decode_frame((&mut self.r).take(next_chunk_size))?;
+                if u32::from(frame.width) != frame_width || u32::from(frame.height) != frame_height
+                {
+                    return Err(DecodingError::InconsistentImageSizes);
+                }
 
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
                 frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
@@ -1007,6 +1011,34 @@ mod tests {
         // All pixels are the same value
         let first_pixel = &data[..RGB_BPP];
         assert!(data.chunks_exact(3).all(|ch| ch.iter().eq(first_pixel)));
+    }
+
+    #[test]
+    fn read_frame_alph_vp8_dimension_mismatch() {
+        // Regression test: an animated extended WebP whose ANMF frame carries an
+        // ALPH sub-chunk followed by a VP8 sub-chunk whose decoded dimensions do
+        // not match the ANMF-declared frame size must be rejected with
+        // InconsistentImageSizes rather than panicking with an out-of-bounds slice
+        // in fill_rgba. The ANMF declares a 1x1 frame but the VP8 keyframe decodes
+        // to 2x2.
+
+        let bytes = [
+            82, 73, 70, 70, 126, 0, 0, 0, 87, 69, 66, 80, 86, 80, 56, 88, 10, 0, 0, 0, 2, 0, 0, 0,
+            1, 0, 0, 1, 0, 0, 65, 78, 73, 77, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65, 78, 77, 70, 82, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 65, 76, 80, 72, 2, 0, 0, 0, 0, 0,
+            86, 80, 56, 32, 48, 0, 0, 0, 208, 1, 0, 157, 1, 42, 2, 0, 2, 0, 2, 0, 52, 37, 160, 2,
+            116, 186, 1, 248, 0, 3, 176, 0, 254, 240, 196, 11, 255, 32, 185, 97, 117, 200, 215,
+            255, 32, 63, 228, 7, 252, 128, 255, 248, 242, 0, 0, 0,
+        ];
+
+        let mut decoder = WebPDecoder::new(std::io::Cursor::new(bytes)).unwrap();
+        assert!(decoder.is_animated());
+        let buf_size = decoder.output_buffer_size().unwrap();
+        let mut buf = vec![0u8; buf_size];
+        assert!(matches!(
+            decoder.read_frame(&mut buf),
+            Err(DecodingError::InconsistentImageSizes)
+        ));
     }
 
     #[test]
