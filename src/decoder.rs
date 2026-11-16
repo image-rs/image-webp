@@ -824,12 +824,19 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
 
                 // read opaque
                 self.r.seek(io::SeekFrom::Start(next_chunk_start))?;
-                let (next_chunk, next_chunk_size, _) = read_chunk_header(&mut self.r)?;
-                if chunk_size + next_chunk_size + 32 > anmf_size {
+                let (next_chunk, next_chunk_size, next_chunk_size_rounded) =
+                    read_chunk_header(&mut self.r)?;
+                if next_chunk != WebPRiffChunk::VP8
+                    || chunk_size_rounded + next_chunk_size_rounded + 32 > anmf_size
+                {
                     return Err(DecodingError::ChunkHeaderInvalid(next_chunk.to_fourcc()));
                 }
 
                 let frame = Vp8Decoder::decode_frame((&mut self.r).take(next_chunk_size))?;
+                if u32::from(frame.width) != frame_width || u32::from(frame.height) != frame_height
+                {
+                    return Err(DecodingError::InconsistentImageSizes);
+                }
 
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
                 frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
