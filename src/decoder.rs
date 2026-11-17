@@ -858,12 +858,10 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
             _ => return Err(DecodingError::ChunkHeaderInvalid(chunk.to_fourcc())),
         };
 
+        // The previous frame's disposal clears its area, whatever this frame holds.
+        // The canvas is always RGBA, so transparent black is used without a background color.
         let clear_color = if self.animation.dispose_next_frame {
-            match (info.background_color, frame_has_alpha) {
-                (color @ Some(_), _) => color,
-                (_, true) => Some([0, 0, 0, 0]),
-                _ => None,
-            }
+            Some(info.background_color.unwrap_or([0, 0, 0, 0]))
         } else {
             None
         };
