@@ -26,6 +26,18 @@ random2.webp:
 convert -delay 15 -size 99x87 xc: xc: xc: xc: +noise Random -define webp:lossless=false random_lossy.webp
 ```
 
+dispose_background.webp: an opaque rectangle moving over a transparent canvas, written by
+Pillow (libwebp's animation encoder). Frames after the first are opaque lossy sub-frames, and
+each previous frame is disposed to the background:
+```python
+frames = []
+for i in range(6):
+    im = Image.new("RGBA", (200, 150), (0, 0, 0, 0))
+    ImageDraw.Draw(im).rectangle([i * 20, i * 10, i * 20 + 60, i * 10 + 40], fill=(255, i * 40, 0, 255))
+    frames.append(im)
+frames[0].save("dispose_background.webp", save_all=True, append_images=frames[1:], duration=100, loop=0)
+```
+
 ## images/regression
 
 color_index.webp: Manually constructed to reproduce decoding error.
@@ -56,6 +68,15 @@ random-lossy-N.png:
 
 ```
 for i in {1..4}; do webpmux -get frame ${i} ../../images/animated/random_lossy.webp -o random_lossy-${i}.png && dwebp random_lossy-${i}.png -o random_lossy-${i}.png; done
+```
+
+dispose_background-N.png: the composited frames as decoded by Pillow (libwebp's animation decoder):
+
+```python
+im = Image.open("../../images/animated/dispose_background.webp")
+for i in range(im.n_frames):
+    im.seek(i)
+    im.convert("RGBA").save(f"dispose_background-{i + 1}.png")
 ```
 
 ## reference/regression
