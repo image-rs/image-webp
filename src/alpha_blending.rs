@@ -28,7 +28,11 @@ fn blend_channel_nonpremult(
 fn blend_pixel_nonpremult(src: u32, dst: u32) -> u32 {
     let src_a = ((src >> channel_shift(3)) & 0xff) as u8;
 
-    if src_a == 0 {
+    if src_a == 255 {
+        // The general path below rounds down, which would turn every channel into `src - 1`.
+        // libwebp also copies opaque pixels instead of blending them.
+        src
+    } else if src_a == 0 {
         dst
     } else {
         let dst_a = ((dst >> channel_shift(3)) & 0xff) as u8;
@@ -104,6 +108,24 @@ mod tests {
         };
 
         [blend_rgb[0], blend_rgb[1], blend_rgb[2], blend_alpha]
+    }
+
+    #[test]
+    fn opaque_source_replaces_canvas_exactly() {
+        for src in 0..=u8::MAX {
+            for dst in [0, 1, 127, 254, 255] {
+                for dst_a in [0, 1, 127, 254, 255] {
+                    let buffer = [src, src, src, 255];
+                    assert_eq!(do_alpha_blending(buffer, [dst, dst, dst, dst_a]), buffer);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn transparent_source_keeps_canvas_exactly() {
+        let canvas = [12, 34, 56, 78];
+        assert_eq!(do_alpha_blending([200, 100, 50, 0], canvas), canvas);
     }
 
     #[test]
