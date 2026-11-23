@@ -830,6 +830,10 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 }
 
                 let frame = Vp8Decoder::decode_frame((&mut self.r).take(next_chunk_size))?;
+                if u32::from(frame.width) != frame_width || u32::from(frame.height) != frame_height
+                {
+                    return Err(DecodingError::InconsistentImageSizes);
+                }
 
                 let mut rgba_frame = vec![0; frame_width as usize * frame_height as usize * 4];
                 frame.fill_rgba(&mut rgba_frame, self.webp_decode_options.lossy_upsampling);
