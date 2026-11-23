@@ -26,6 +26,13 @@ random2.webp:
 convert -delay 15 -size 99x87 xc: xc: xc: xc: +noise Random -define webp:lossless=false random_lossy.webp
 ```
 
+reset_animation.webp: three solid 2x2 frames on a 6x2 canvas, all disposed to none and not
+blended, so all three remain visible on the final canvas. Made from three 2x2 PNGs encoded
+with `cwebp -lossless -exact`:
+```
+webpmux -frame red.webp +100+0+0+0-b -frame green.webp +100+2+0+0-b -frame blue.webp +100+4+0+0-b -loop 0 -bgcolor 0,0,0,0 -o reset_animation.webp
+```
+
 ## images/regression
 
 color_index.webp: Manually constructed to reproduce decoding error.
