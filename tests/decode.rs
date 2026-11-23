@@ -248,3 +248,34 @@ fn test_vp8l_max_width_and_height_dimensions() {
     let decoder = image_webp::WebPDecoder::new(Cursor::new(data)).unwrap();
     assert_eq!(decoder.dimensions(), (16384, 16384));
 }
+
+/// Regression test: `reset_animation` must restore the canvas to its initial
+/// state. Frame 1 must not be composited on top of whatever the last decoded
+/// frame left behind.
+///
+/// All three frames in the test image are disposed to none and not blended, so
+/// the final canvas holds red, green and blue. After resetting, decoding frame 1
+/// again must yield only red; previously the green pixels from frame 2 survived.
+#[test]
+fn reset_animation_restores_initial_canvas() {
+    let contents = std::fs::read("tests/images/animated/reset_animation.webp").unwrap();
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(contents)).unwrap();
+
+    let (width, height) = decoder.dimensions();
+    let bytes_per_pixel = if decoder.has_alpha() { 4 } else { 3 };
+    let mut frame = vec![0; (width * height) as usize * bytes_per_pixel];
+
+    decoder.read_frame(&mut frame).unwrap();
+    let first_frame = frame.clone();
+    for _ in 1..decoder.num_frames() {
+        decoder.read_frame(&mut frame).unwrap();
+    }
+
+    decoder.reset_animation();
+    decoder.read_frame(&mut frame).unwrap();
+
+    assert_eq!(
+        frame, first_frame,
+        "frame 1 after reset_animation differs from the first decode"
+    );
+}
