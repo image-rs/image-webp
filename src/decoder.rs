@@ -426,6 +426,9 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
                 self.has_alpha = (header >> 28) & 1 != 0;
             }
             WebPRiffChunk::VP8X => {
+                if chunk_size < 10 {
+                    return Err(DecodingError::InvalidChunkSize);
+                }
                 let mut info = extended::read_extended_header(&mut self.r)?;
                 self.width = info.canvas_width;
                 self.height = info.canvas_height;
@@ -967,6 +970,18 @@ pub(crate) fn read_chunk_header<R: BufRead>(
 mod tests {
     use super::*;
     const RGB_BPP: usize = 3;
+
+    #[test]
+    fn short_vp8x_chunk_is_rejected_before_reading_next_chunk() {
+        let mut bytes = b"RIFF\0\0\0\0WEBPVP8X\x08\0\0\0\x10\0\0\0\x01\0\0\0".to_vec();
+        bytes.extend_from_slice(b"VP8L\xff\xff\xff\x7f");
+        let riff_size = bytes.len() as u32 - 8;
+        bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
+        assert!(matches!(
+            WebPDecoder::new(Cursor::new(bytes)),
+            Err(DecodingError::InvalidChunkSize)
+        ));
+    }
 
     #[test]
     fn add_with_overflow_size() {
