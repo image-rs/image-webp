@@ -929,9 +929,12 @@ impl<R: BufRead + Seek> WebPDecoder<R> {
     pub fn reset_animation(&mut self) {
         assert!(self.is_animated());
 
-        self.animation.next_frame = 0;
-        self.animation.next_frame_start = self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8;
-        self.animation.dispose_next_frame = true;
+        // Discard the composited canvas and the previous frame's rectangle so that
+        // the first frame is decoded onto a freshly initialized canvas again.
+        self.animation = AnimationState {
+            next_frame_start: self.chunks.get(&WebPRiffChunk::ANMF).unwrap().start - 8,
+            ..Default::default()
+        };
     }
 
     /// Sets the upsampling method that is used in lossy decoding
